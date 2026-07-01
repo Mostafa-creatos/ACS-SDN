@@ -1,0 +1,100 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Sora:wght@400;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-sans bg-surface-light text-slate-800 antialiased min-h-screen selection:bg-atlas-primary/20;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display text-atlas-ink;
+  }
+  
+  /* Focus rings for keyboard accessibility */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-atlas-violet ring-offset-2;
+  }
+}
+
+@layer components {
+  /* Reusable Card */
+  .atlas-card {
+    @apply bg-surface-card rounded-lg border border-atlas-lavender/30 shadow-sm p-5 transition-all duration-300;
+  }
+  
+  .atlas-card-hover {
+    @apply hover:shadow-md hover:border-atlas-lavender/50;
+  }
+
+  /* Status Pill Component */
+  .status-pill {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wider border;
+  }
+
+  .status-pill-compliant {
+    @apply bg-atlas-teal/10 text-atlas-teal border-atlas-teal/30;
+  }
+
+  .status-pill-drifted {
+    @apply bg-atlas-coral/10 text-atlas-coral border-atlas-coral/30;
+  }
+
+  .status-pill-discovered {
+    @apply bg-slate-100 text-slate-500 border-slate-300;
+  }
+
+  .status-pill-auditing {
+    @apply bg-atlas-violet/10 text-atlas-violet border-atlas-violet/30;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-atlas-primary text-white hover:bg-atlas-primary/95 hover:shadow-sm active:transform active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply btn bg-white text-atlas-primary border border-atlas-primary/30 hover:bg-atlas-primary/5 active:transform active:scale-[0.98];
+  }
+
+  .btn-danger {
+    @apply btn bg-atlas-coral text-white hover:bg-atlas-coral/95 hover:shadow-sm active:transform active:scale-[0.98];
+  }
+
+  /* Diff blocks */
+  .diff-added {
+    @apply bg-atlas-teal/15 text-emerald-700 font-mono text-xs p-0.5 rounded;
+  }
+
+  .diff-removed {
+    @apply bg-atlas-coral/15 text-rose-700 font-mono text-xs p-0.5 rounded;
+  }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-atlas-lavender/50 rounded-full hover:bg-atlas-lavender;
+  }
+}
+
+/* Custom Cytoscape Graph Canvas classes */
+.cytoscape-canvas {
+  width: 100%;
+  height: 550px;
+  background-color: #14132B;
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+}

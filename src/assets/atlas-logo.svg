@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" width="100%" height="100%">
+  <!-- Definition for drop shadow on dots to make them slightly luminous -->
+  <defs>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.5" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <g id="logo-mark">
+    <!-- Cloud outline path container -->
+    <path d="M 12 25 
+             A 6 6 0 0 1 12 15 
+             A 8 8 0 0 1 24 10 
+             A 9 9 0 0 1 35 15 
+             A 6 6 0 0 1 35 25 
+             A 4 4 0 0 1 31 29 
+             L 15 29 
+             A 4 4 0 0 1 12 25 Z" 
+          fill="none" 
+          stroke="#BAC0D8" 
+          stroke-width="1.2" 
+          stroke-linecap="round" 
+          stroke-linejoin="round"
+          opacity="0.45" />
+
+    <!-- Connector lines (Lavender #BAC0D8) -->
+    <line x1="16" y1="16" x2="27" y2="13" stroke="#BAC0D8" stroke-width="1.5" stroke-linecap="round" />
+    <line x1="16" y1="16" x2="15" y2="24" stroke="#BAC0D8" stroke-width="1.5" stroke-linecap="round" />
+    <line x1="27" y1="13" x2="29" y2="22" stroke="#BAC0D8" stroke-width="1.5" stroke-linecap="round" />
+    <line x1="15" y1="24" x2="29" y2="22" stroke="#BAC0D8" stroke-width="1.5" stroke-linecap="round" />
+    <line x1="16" y1="16" x2="29" y2="22" stroke="#BAC0D8" stroke-width="1.2" stroke-linecap="round" opacity="0.7" />
+
+    <!-- Nodes/Dots -->
+    <!-- Indigo dot -->
+    <circle cx="16" cy="16" r="3" fill="#3B3081" filter="url(#glow)" />
+    <!-- Teal dot -->
+    <circle cx="27" cy="13" r="3" fill="#42CCB2" filter="url(#glow)" />
+    <!-- Coral dot -->
+    <circle cx="15" cy="24" r="3" fill="#E26C48" filter="url(#glow)" />
+    <!-- Violet dot -->
+    <circle cx="29" cy="22" r="3" fill="#564EBD" filter="url(#glow)" />
+  </g>
+
+  <!-- Wordmark "Atlas Cloud" -->
+  <g id="wordmark">
+    <text x="44" y="25" font-family="'Sora', 'Manrope', sans-serif" font-size="16" font-weight="800" fill="#3B3081" letter-spacing="-0.3">Atlas</text>
+    <text x="86" y="25" font-family="'Sora', 'Manrope', sans-serif" font-size="16" font-weight="400" fill="#51509D" letter-spacing="-0.2">Cloud</text>
+  </g>
+</svg>
