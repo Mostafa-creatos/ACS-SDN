@@ -1,0 +1,141 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sdn_postgres_dev
+    environment:
+      POSTGRES_DB: sdn_controller
+      POSTGRES_USER: sdn_admin
+      POSTGRES_PASSWORD: sdn_secure_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis-master:
+    image: redis:7-alpine
+    container_name: sdn_redis_master
+    command: redis-server --protected-mode no
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  redis-replica:
+    image: redis:7-alpine
+    container_name: sdn_redis_replica
+    command: redis-server --replicaof redis-master 6379 --protected-mode no
+    depends_on:
+      - redis-master
+    restart: unless-stopped
+
+  redis-sentinel-1:
+    image: redis:7-alpine
+    container_name: sdn_redis_sentinel_1
+    entrypoint: >
+      sh -c "until ping -c 1 redis-master >/dev/null 2>&1; do echo 'Waiting for redis-master...'; sleep 1; done &&
+             MASTER_IP=$$(ping -c 1 redis-master | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1) &&
+             echo 'Resolved redis-master to' $$MASTER_IP &&
+             echo 'port 26379' > /tmp/sentinel.conf &&
+             echo \"sentinel monitor mymaster $$MASTER_IP 6379 2\" >> /tmp/sentinel.conf &&
+             echo 'sentinel down-after-milliseconds mymaster 5000' >> /tmp/sentinel.conf &&
+             echo 'sentinel failover-timeout mymaster 15000' >> /tmp/sentinel.conf &&
+             echo 'sentinel parallel-syncs mymaster 1' >> /tmp/sentinel.conf &&
+             redis-server /tmp/sentinel.conf --sentinel"
+    ports:
+      - "26379:26379"
+    depends_on:
+      - redis-master
+    restart: unless-stopped
+
+  redis-sentinel-2:
+    image: redis:7-alpine
+    container_name: sdn_redis_sentinel_2
+    entrypoint: >
+      sh -c "until ping -c 1 redis-master >/dev/null 2>&1; do echo 'Waiting for redis-master...'; sleep 1; done &&
+             MASTER_IP=$$(ping -c 1 redis-master | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1) &&
+             echo 'Resolved redis-master to' $$MASTER_IP &&
+             echo 'port 26379' > /tmp/sentinel.conf &&
+             echo \"sentinel monitor mymaster $$MASTER_IP 6379 2\" >> /tmp/sentinel.conf &&
+             echo 'sentinel down-after-milliseconds mymaster 5000' >> /tmp/sentinel.conf &&
+             echo 'sentinel failover-timeout mymaster 15000' >> /tmp/sentinel.conf &&
+             echo 'sentinel parallel-syncs mymaster 1' >> /tmp/sentinel.conf &&
+             redis-server /tmp/sentinel.conf --sentinel"
+    ports:
+      - "26380:26379"
+    depends_on:
+      - redis-master
+    restart: unless-stopped
+
+  redis-sentinel-3:
+    image: redis:7-alpine
+    container_name: sdn_redis_sentinel_3
+    entrypoint: >
+      sh -c "until ping -c 1 redis-master >/dev/null 2>&1; do echo 'Waiting for redis-master...'; sleep 1; done &&
+             MASTER_IP=$$(ping -c 1 redis-master | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1) &&
+             echo 'Resolved redis-master to' $$MASTER_IP &&
+             echo 'port 26379' > /tmp/sentinel.conf &&
+             echo \"sentinel monitor mymaster $$MASTER_IP 6379 2\" >> /tmp/sentinel.conf &&
+             echo 'sentinel down-after-milliseconds mymaster 5000' >> /tmp/sentinel.conf &&
+             echo 'sentinel failover-timeout mymaster 15000' >> /tmp/sentinel.conf &&
+             echo 'sentinel parallel-syncs mymaster 1' >> /tmp/sentinel.conf &&
+             redis-server /tmp/sentinel.conf --sentinel"
+    ports:
+      - "26381:26379"
+    depends_on:
+      - redis-master
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sdn_controller_app
+    environment:
+      - DATABASE_URL=postgresql://sdn_admin:sdn_secure_password@db:5432/sdn_controller
+      - REDIS_URL=redis://redis-master:6379/0
+      - REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379;redis-sentinel-2:26379;redis-sentinel-3:26379
+      - REDIS_SENTINEL_MASTER=mymaster
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis-master
+      - redis-sentinel-1
+      - redis-sentinel-2
+      - redis-sentinel-3
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sdn_celery_worker
+    command: celery -A app.workers.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://sdn_admin:sdn_secure_password@db:5432/sdn_controller
+      - REDIS_URL=redis://redis-master:6379/0
+      - REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379;redis-sentinel-2:26379;redis-sentinel-3:26379
+      - REDIS_SENTINEL_MASTER=mymaster
+    depends_on:
+      - db
+      - redis-master
+      - redis-sentinel-1
+      - redis-sentinel-2
+      - redis-sentinel-3
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sdn_frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  pgdata:

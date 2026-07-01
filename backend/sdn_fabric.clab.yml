@@ -1,0 +1,74 @@
+name: sdn-fabric
+
+topology:
+  kinds:
+    nokia_srlinux:
+      image: ghcr.io/nokia/srlinux:latest
+
+  nodes:
+    # ==========================================
+    # 1. Physical Leaf-Spine Switch Fabric Nodes
+    # ==========================================
+    spine-01:
+      kind: nokia_srlinux
+      mgmt-ipv4: 172.20.20.10
+    
+    leaf-01:
+      kind: nokia_srlinux
+      mgmt-ipv4: 172.20.20.11
+    
+    leaf-02:
+      kind: dell_ftosv
+      image: vrnetlab/dell_ftos10v:10.5.4.3
+      mgmt-ipv4: 172.20.20.12
+
+
+
+    # ==========================================
+    # 2. Netdisco Topology Discovery Services
+    # ==========================================
+    netdisco-db:
+      kind: linux
+      image: postgres:16-alpine
+      env:
+        POSTGRES_DB: netdisco
+        POSTGRES_USER: netdisco
+        POSTGRES_PASSWORD: netdisco_db_pass
+      mgmt-ipv4: 172.20.20.20
+
+    netdisco-backend:
+      kind: linux
+      image: netdisco/netdisco:latest-backend
+      binds:
+        - /home/mostafafaouzi89/netdisco-config:/home/netdisco/environments
+      env:
+        NETDISCO_HOME: /home/netdisco
+        NETDISCO_DB_HOST: netdisco-db
+        NETDISCO_DB_NAME: netdisco
+        NETDISCO_DB_USER: netdisco
+        NETDISCO_DB_PASS: netdisco_db_pass
+      mgmt-ipv4: 172.20.20.21
+
+    netdisco-web:
+      kind: linux
+      image: netdisco/netdisco:latest-web
+      ports:
+        - "5000:5000"
+      binds:
+        - /home/mostafafaouzi89/netdisco-config:/home/netdisco/environments
+      env:
+        NETDISCO_HOME: /home/netdisco
+        NETDISCO_DB_HOST: netdisco-db
+        NETDISCO_DB_NAME: netdisco
+        NETDISCO_DB_USER: netdisco
+        NETDISCO_DB_PASS: netdisco_db_pass
+      mgmt-ipv4: 172.20.20.22
+
+
+  # ==========================================
+  # 3. Network Link Mappings
+  # ==========================================
+  links:
+    - endpoints: ["leaf-01:ethernet-1/1", "spine-01:ethernet-1/1"]
+    - endpoints: ["leaf-02:eth1", "spine-01:ethernet-1/2"]
+

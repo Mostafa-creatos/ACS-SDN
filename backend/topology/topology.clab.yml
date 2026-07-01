@@ -1,0 +1,87 @@
+name: sdn-fabric
+topology:
+  kinds:
+    nokia_srlinux:
+      image: ghcr.io/nokia/srlinux:latest
+    dell_ftosv:
+      image: vrnetlab/dell_ftos10v:10.5.4.3
+    arista_ceos:
+      image: ceos-lab:latest
+
+  nodes:
+    # ==========================================
+    # 1. Spines (Dell OS10)
+    # ==========================================
+    spine-01:
+      kind: dell_ftosv
+      mgmt-ipv4: 172.20.20.10
+    
+    spine-02:
+      kind: dell_ftosv
+      mgmt-ipv4: 172.20.20.13
+
+    # ==========================================
+    # 2. Leafs (Nokia SR Linux)
+    # ==========================================
+    leaf-01:
+      kind: nokia_srlinux
+      mgmt-ipv4: 172.20.20.11
+    
+    leaf-02:
+      kind: nokia_srlinux
+      mgmt-ipv4: 172.20.20.12
+
+    leaf-03:
+      kind: nokia_srlinux
+      mgmt-ipv4: 172.20.20.14
+
+    leaf-04:
+      kind: nokia_srlinux
+      mgmt-ipv4: 172.20.20.15
+
+    leaf-05:
+      kind: nokia_srlinux
+      mgmt-ipv4: 172.20.20.16
+
+    leaf-06:
+      kind: nokia_srlinux
+      mgmt-ipv4: 172.20.20.17
+
+    # ==========================================
+    # 3. Border/Edge (Arista cEOS)
+    # ==========================================
+    border-01:
+      kind: arista_ceos
+      mgmt-ipv4: 172.20.20.18
+
+  # ==========================================
+  # 4. Network Link Mappings
+  # ==========================================
+  links:
+    # leaf-01 links to Spines
+    - endpoints: ["leaf-01:ethernet-1/1", "spine-01:eth1"]
+    - endpoints: ["leaf-01:ethernet-1/2", "spine-02:eth1"]
+
+    # leaf-02 links to Spines
+    - endpoints: ["leaf-02:ethernet-1/1", "spine-01:eth2"]
+    - endpoints: ["leaf-02:ethernet-1/2", "spine-02:eth2"]
+
+    # leaf-03 links to Spines
+    - endpoints: ["leaf-03:ethernet-1/1", "spine-01:eth3"]
+    - endpoints: ["leaf-03:ethernet-1/2", "spine-02:eth3"]
+
+    # leaf-04 links to Spines
+    - endpoints: ["leaf-04:ethernet-1/1", "spine-01:eth4"]
+    - endpoints: ["leaf-04:ethernet-1/2", "spine-02:eth4"]
+
+    # leaf-05 links to Spines
+    - endpoints: ["leaf-05:ethernet-1/1", "spine-01:eth5"]
+    - endpoints: ["leaf-05:ethernet-1/2", "spine-02:eth5"]
+
+    # leaf-06 links to Spines
+    - endpoints: ["leaf-06:ethernet-1/1", "spine-01:eth6"]
+    - endpoints: ["leaf-06:ethernet-1/2", "spine-02:eth6"]
+
+    # border-01 links to Spines
+    - endpoints: ["border-01:ethernet1", "spine-01:eth7"]
+    - endpoints: ["border-01:ethernet2", "spine-02:eth7"]

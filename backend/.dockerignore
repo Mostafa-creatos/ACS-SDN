@@ -1,0 +1,11 @@
+clab-*/
+clab_*/
+sdn_fabric*/
+venv/
+.git/
+__pycache__/
+*.db
+*.zip
+*.docx
+*.html
+*.md

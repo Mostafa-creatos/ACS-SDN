@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Enterprise SDN Controller Presentation</title>
+    <!-- Premium Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <!-- Marked.js for markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- Mermaid.js for diagram rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --text-color: #f1f5f9;
+            --accent-color: #3b82f6;
+            --border-color: #334155;
+            --card-bg: rgba(30, 41, 59, 0.7);
+        }
+        
+        body {
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            margin: 0;
+            padding: 40px 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        
+        h1, h2, h3, h4, h5, h6 {
+            color: #fff;
+            margin-top: 1.5em;
+            margin-bottom: 0.5em;
+            font-weight: 600;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 10px;
+            margin-top: 0;
+            font-weight: 800;
+            background: linear-gradient(to right, #60a5fa, #3b82f6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        h2 {
+            font-size: 1.8rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+        
+        p, li {
+            color: #cbd5e1;
+            font-size: 1.05rem;
+        }
+        
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            background-color: #1e293b;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            color: #f472b6;
+        }
+        
+        pre {
+            background-color: #1e293b;
+            padding: 16px;
+            border-radius: 8px;
+            overflow-x: auto;
+            border: 1px solid var(--border-color);
+        }
+        
+        pre code {
+            background-color: transparent;
+            padding: 0;
+            color: #e2e8f0;
+        }
+        
+        a {
+            color: var(--accent-color);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        
+        a:hover {
+            color: #60a5fa;
+            text-decoration: underline;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        th, td {
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            text-align: left;
+        }
+        
+        th {
+            background-color: #1e293b;
+            color: #fff;
+        }
+        
+        tr:nth-child(even) {
+            background-color: rgba(30, 41, 59, 0.4);
+        }
+        
+        .mermaid {
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            margin: 20px 0;
+            display: flex;
+            justify-content: center;
+        }
+        
+        blockquote {
+            border-left: 4px solid var(--accent-color);
+            margin: 0;
+            padding-left: 20px;
+            color: #94a3b8;
+            font-style: italic;
+        }
+        
+        /* Print Styles */
+        @media print {
+            body {
+                background-color: #fff;
+                color: #000;
+                padding: 0;
+            }
+            .container {
+                max-width: 100%;
+                border: none;
+                box-shadow: none;
+                background: transparent;
+                padding: 0;
+            }
+            h1 {
+                background: none;
+                -webkit-text-fill-color: initial;
+                color: #000;
+                border-bottom: 2px solid #000;
+            }
+            h2, h3 {
+                color: #000;
+                border-bottom: 1px solid #ccc;
+            }
+            p, li {
+                color: #333;
+            }
+            code {
+                background-color: #f1f5f9;
+                color: #000;
+            }
+            pre {
+                background-color: #f1f5f9;
+                border: 1px solid #ccc;
+            }
+            pre code {
+                color: #000;
+            }
+            .mermaid {
+                page-break-inside: avoid;
+            }
+            tr:nth-child(even) {
+                background-color: #f8fafc;
+            }
+            th {
+                background-color: #e2e8f0;
+                color: #000;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="content">Loading...</div>
+    
+    <script>
+        // Set up marked parser
+        marked.setOptions({
+            gfm: true,
+            breaks: true,
+            headerIds: true
+        });
+
+        // Embedded Markdown Content
+        const markdownText = `# Enterprise SDN Controller: Architecture & Solution Presentation
+## A Unified Platform for Network Orchestration, Telemetry, and Configuration Lifecycle
+
+This document provides a detailed technical presentation and architectural breakdown of the **Enterprise SDN Controller**. The solution is designed as a native, secure, and multi-tenant platform that consolidates network orchestration, real-time topology discovery, telemetry collection, and configuration lifecycle management into a single unified plane.
+
+---
+
+## 1. Executive Summary & Value Proposition
+
+The **Enterprise SDN Controller** is a next-generation network management and automation system. It establishes a **Visibility, Telemetry & Config Lifecycle Plane** directly integrated into the core SDN orchestration layer.
+
+### Key Value Pillars
+*   **Real-Time Operations**: Uses active gNMI push streaming rather than traditional polling, ensuring the network topology and metrics database are updated in sub-second intervals.
+*   **Unified Security and RBAC**: Features strict tenant-boundary isolation and a custom JWT-based authorization model that spans provisioning, configuration restore, and read-only auditing actions.
+*   **End-to-End Configuration Immutability**: All configuration events, snap-shots, and rollbacks are cryptographically hashed and stored in an append-only registry for bulletproof compliance.
+*   **Multi-Vendor Integration**: Employs a driver abstraction model supporting Arista EOS, Dell OS10, and Nokia SR Linux platforms seamlessly.
+
+---
+
+## 2. Core System Architecture
+
+The SDN Controller is structured into four logic planes to ensure scalability, statelessness, and strict separation of concerns.
+
+\`\`\`mermaid
+graph TB
+    %% Definitions
+    Client[React Admin UI / OpenAPI Client]
+    
+    subgraph CP["Consumption Plane"]
+        API[FastAPI Core Gateway]
+        Auth[JWT / Tenant Boundary Scoping]
+    end
+    
+    subgraph PMP["Policy & Management Plane"]
+        PolicyPipeline[4-Stage Policy Validation Pipeline]
+        TopologyBuilder[Topology Edge/Node Builder]
+        CeleryWorker[Celery Worker Pool]
+    end
+
+    subgraph TVP["Telemetry & Visibility Plane"]
+        gNMICollector[gNMI Telemetry & Discovery Loop]
+        ConfigLifecycle[Config Snapshot, Compliance & Rollback Runner]
+        TelemetryStore[SQLAlchemy Database Store]
+    end
+
+    subgraph RS["HA Broker & Event Bus (Redis Sentinel)"]
+        Sentinels[Redis Sentinels]
+        RedisMaster[Redis Master]
+        RedisReplica[Redis Replicas]
+        Sentinels -.->|Monitor & Failover| RedisMaster
+        RedisMaster -.->|Async Replication| RedisReplica
+    end
+
+    subgraph SDP["Southbound & Data Plane"]
+        NokiaDriver[Nokia SR Linux Driver]
+        DellDriver[Dell OS10 Driver]
+        AristaDriver[Arista EOS Driver]
+    end
+
+    subgraph NSF["Network Switch Fabric"]
+        Switch1[Nokia Spine 1]
+        Switch2[Nokia Leaf 1/2]
+        Switch3[Dell OS10 Leaf]
+    end
+
+    %% Relationships
+    Client -->|REST / WebSockets| API
+    API --> Auth
+    API -->|Intent Submission| PolicyPipeline
+    PolicyPipeline -->|Validation Passed| TelemetryStore
+    PolicyPipeline -->|Async Dispatch| CeleryWorker
+    
+    %% Redis Sentinel Flow
+    CeleryWorker -->|1. Query Master IP| Sentinels
+    CeleryWorker -->|2. Push/Pull Jobs| RedisMaster
+    gNMICollector -->|Publish Events| RedisMaster
+    TopologyBuilder -->|Consume Events| RedisMaster
+    
+    ConfigLifecycle -->|NETCONF / eAPI Actions| NokiaDriver
+    ConfigLifecycle -->|NETCONF / eAPI Actions| DellDriver
+    ConfigLifecycle -->|NETCONF / eAPI Actions| AristaDriver
+    
+    gNMICollector -->|gNMI Subscription / Get| Switch1
+    gNMICollector -->|gNMI Subscription / Get| Switch2
+    gNMICollector -. "gNMI (Production Only)" .-> Switch3
+    
+    NokiaDriver -->|NETCONF / gNMI| Switch2
+    DellDriver -->|SSH / NETCONF| Switch3
+    AristaDriver -->|eAPI| Switch1
+    
+    TopologyBuilder -->|Consumes Neighbors| TelemetryStore
+    gNMICollector -->|Discovers LLDP Edges & Endpoints| TopologyBuilder
+
+    classDef plane fill:#f5f7fa,stroke:#d3d6db,stroke-width:2px;
+    class CP,PMP,TVP,SDP,RS plane;
+\`\`\`
+
+### Component Details
+1.  **FastAPI Core Gateway** ([main.py](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/main.py)): Serves as the central API gateway, routing administration, policy enforcement, telemetry, and configuration management requests.
+2.  **4-Stage Policy Validation Pipeline** ([main.py:L272-456](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/main.py#L272-L456)): Intercepts all configuration modification intents, running pre-flight syntax checks, tenant isolation validation, topology collisions, and dry-run code generation before committing changes.
+3.  **gNMI Telemetry & Discovery Engine** ([gnmi_discovery.py](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/telemetry/gnmi_discovery.py)): Periodic loop querying LLDP topology tree (\`/system/lldp\`) via gNMI. In production, this targets Nokia, Arista, and Dell OS10 devices natively; in the local Containerlab sandbox, Dell gNMI telemetry is bypassed/simulated due to virtual switch image limitations.
+4.  **Config & Compliance Manager** ([config_lifecycle.py](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/workers/config_lifecycle.py)): Manages switch configuration backups, audits against golden configuration parameters, and triggers rollbacks.
+5.  **Southbound Drivers** ([drivers/](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/drivers/)): Vendor-specific payload generators for Nokia SR Linux ([nokia_srlinux.py](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/drivers/nokia_srlinux.py)), Dell OS10 ([dell_os10.py](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/drivers/dell_os10.py)), and Arista EOS ([arista_eos.py](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/drivers/arista_eos.py)).
+6.  **HA Broker & Event Bus (Redis Sentinel)**: A high-availability cluster monitored by Sentinel nodes. Sentinels perform automatic failover and master promotion. Core services (FastAPI and Celery) dynamically query Sentinels to obtain the active Redis Master IP for message queuing and real-time event streaming (via Redis Streams).
+
+---
+
+## 3. Core Features & Functional Walkthroughs
+
+### 3.1. Zero-Touch Provisioning (ZTP) Onboarding
+When a newly unboxed switch boots for the first time, it requests an IP address via DHCP and triggers a phone-home ingestion signal to the controller.
+
+\`\`\`mermaid
+sequenceDiagram
+    autonumber
+    participant Switch as Bare-Metal Switch
+    participant DHCP as DHCP Server
+    participant Controller as SDN Controller API
+    participant DB as SQLite/Postgres DB
+
+    Switch->>DHCP: 1. DHCP Discover (ZTP Option)
+    DHCP-->>Switch: 2. Offer IP & Option 67 (ZTP Boot Script URL)
+    Switch->>Switch: 3. Execute Boot Script
+    Switch->>Controller: 4. POST /api/v5/discovery/on-boarding-ingestion (MAC, Serial, OS, Vendor)
+    Note over Controller: Ingests switch specs from payload & IP from connection headers
+    Controller->>DB: 5. Create or Update ztp_discovery_pool Record
+    Controller-->>Switch: 6. Return 202 Accepted
+\`\`\`
+
+*   **Ingestion Endpoint**: \`POST /api/v5/discovery/on-boarding-ingestion\`
+*   **Database Table**: \`ztp_discovery_pool\` ([models.py:L44-59](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/models.py#L44-L59))
+
+---
+
+### 3.2. Multi-Tenant Policy Engine (4-Stage Pipeline)
+To ensure that tenants cannot interfere with each other's logical networks (VLAN/VRF/Subnet overlapping), any routing change must pass the 4-stage pipeline.
+
+\`\`\`mermaid
+flowchart TD
+    Start([1. Policy Intent Submitted]) --> Stage1{Stage 1: Syntax Validation}
+    Stage1 -- Fail --> Reject[400 Bad Request: Invalid CIDR/Schema]
+    Stage1 -- Pass --> Stage2{Stage 2: Tenant Isolation}
+    
+    Stage2 -- Overlap Detected --> Reject
+    Stage2 -- Unique IP/VRF Scope --> Stage3{Stage 3: Topology & VLAN Collision}
+    
+    Stage3 -- VLAN in Use on Fabric --> Reject
+    Stage3 -- Available --> Stage4{Stage 4: Dry-Run Generate Diff}
+    
+    Stage4 --> DryRunCheck{Is dry_run=True?}
+    DryRunCheck -- Yes --> ReturnDiff[202 Accepted: Return Config Diff Matrix]
+    DryRunCheck -- No --> Commit[Commit IPAM & Dispatch to Southbound Queue]
+\`\`\`
+
+*   **Endpoint**: \`POST /api/v5/orchestrator/policy-enforcement\` ([main.py:L272-456](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/main.py#L272-L456))
+*   **Logic Stages**:
+    1.  **Syntax Verification**: Validates IP address structures (\`ipaddress.ip_network\`) and extracts gateway IPs.
+    2.  **Tenant Boundary Isolation**: Queries \`ipam_subnets\` and \`tenant_vrfs\` to ensure the requested prefix does not overlap with any existing subnet assigned to the tenant's VRF.
+    3.  **Topology Analysis**: Confirms the target switches exist and checks for VLAN collisions (VLAN ID must not map to another VRF on the same fabric).
+    4.  **Dry-Run Engine**: Invokes the southbound driver to output the raw configuration payloads. If \`dry_run\` is requested, execution terminates here and returns the diffs. Otherwise, state is written to the DB and Celery processes sync-tasks.
+
+---
+
+### 3.3. Config Lifecycle & Auditing
+The controller tracks configuration state changes over time using append-only snapshots, verifying system compliance against three mandatory security rules.
+
+\`\`\`mermaid
+stateDiagram-v2
+    [*] --> DiscoveredRaw : Onboarded via ZTP
+    DiscoveredRaw --> CompliantActive : Take Initial Snapshot
+    
+    state CompliantActive {
+        [*] --> RunComplianceAudit
+        RunComplianceAudit --> PassRules : NTP, DNS, and AAA configured
+        RunComplianceAudit --> FailRules : Rule Failure detected
+        FailRules --> SaveFindings : Log in compliance_findings
+    }
+    
+    CompliantActive --> ConfigurationDrifted : Manual Switch Change
+    ConfigurationDrifted --> TriggerRollback : Rollback Request
+    TriggerRollback --> CheckBlastRadius : Evaluate Blast Radius (Max 2 changes)
+    
+    state CheckBlastRadius {
+        [*] --> UnderLimit : Switch is Leaf (Radius=1)
+        [*] --> OverLimit : Switch is Spine (Radius=6)
+        OverLimit --> ForceFourEyes : Require Platform Admin Role
+        ForceFourEyes --> AuthPassed : Valid Admin JWT
+        ForceFourEyes --> AuthFailed : Reject rollback (403 Forbidden)
+    }
+
+    AuthFailed --> ConfigurationDrifted
+    UnderLimit --> ApplyRollback
+    AuthPassed --> ApplyRollback
+    ApplyRollback --> CompliantActive : Snapshot Restored
+\`\`\`
+
+*   **Auditing Rules** ([config_lifecycle.py:L89-189](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/workers/config_lifecycle.py#L89-L189)):
+    1.  **NTP Service Check**: Verifies that a network time protocol NTP server (default: \`192.168.100.1\`) is configured.
+    2.  **DNS Client Check**: Audits the presence of nameservers (default: \`8.8.8.8\`).
+    3.  **AAA Authentication Check**: Critical audit validating that local authentication rules (AAA) are enabled.
+*   **Blast-Radius Protection**:
+    *   Restoring configuration snapshot on a Leaf device impacts a single device (blast radius = 1).
+    *   Restoring configuration snapshot on a Spine device impacts the entire leaf-spine topology (blast radius = 6).
+    *   If blast radius > 2, **Four-Eyes Approval** is enforced. Only users with the role \`Platform Admin\` can commit the rollback; attempts by \`Tenant Operators\` are rejected.
+
+---
+
+### 3.4. Real-Time Telemetry & Discovery
+Discovery of network elements runs inside background asyncio loops:
+*   **LLDP Topology Discovery**: Periodically connects to switches (both Nokia and Dell OS10 in production) via gNMI (\`pygnmi\` client), subscribing to \`/system/lldp\`. It updates the \`topology_edges\` and \`topology_nodes\` tables ([gnmi_discovery.py:L8-134](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/telemetry/gnmi_discovery.py#L8-L134)).
+*   **Endpoint Tracking**: Pulls MAC and ARP forwarding tables from the leaf switches, saving endpoint mappings in \`discovered_endpoints\`.
+*   **Telemetry Gathering**: Polls interface input/output octets, CPU load, and chassis temperature ([metrics_collector.py](file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/Network%20SDN%20Controller/app/telemetry/metrics_collector.py)).
+
+---
+
+## 4. Relational Data Model
+
+The shared PostgreSQL database schema handles ZTP discovery, IPAM boundary allocations, topology tracking, auditing, and user access definitions.
+
+\`\`\`mermaid
+erDiagram
+    tenants ||--o{ tenant_vrfs : "defines"
+    tenant_vrfs ||--o{ ipam_subnets : "allocates"
+    ipam_subnets ||--o{ ipam_ip_allocations : "leases"
+    fabrics ||--o{ switches : "contains"
+    fabrics ||--o{ ipam_subnets : "binds"
+    fabric_blueprints ||--o{ fabrics : "templates"
+    
+    ztp_discovery_pool ||--o| switches : "onboards"
+    
+    switches ||--o{ topology_nodes : "maps"
+    switches ||--o{ config_snapshots : "backups"
+    switches ||--o{ compliance_findings : "violates"
+    switches ||--o{ discovered_endpoints : "hosts"
+    switches ||--o{ telemetry_metrics : "emits"
+    switches ||--o{ telemetry_metadata : "configures"
+    
+    compliance_runs ||--o{ compliance_findings : "contains"
+    
+    users }o--o| tenants : "restricted_to"
+
+    tenants {
+        uuid tenant_id PK
+        string tenant_name
+        datetime created_at
+    }
+
+    tenant_vrfs {
+        uuid vrf_id PK
+        uuid tenant_id FK
+        string vrf_name
+        integer layer3_vni
+        string route_distinguisher
+        string route_target
+    }
+
+    ipam_subnets {
+        uuid subnet_id PK
+        uuid vrf_id FK
+        uuid fabric_id FK
+        integer vlan_id
+        integer layer2_vni
+        string subnet_cidr
+        string anycast_gateway_ip
+    }
+
+    switches {
+        uuid switch_id PK
+        uuid fabric_id FK
+        uuid discovery_id FK
+        string hostname
+        string management_ip
+        string vendor
+        string role
+        integer local_bgp_asn
+        string loopback_0_ip
+        string vtep_ip
+        string lifecycle_status
+        string configuration_checksum
+        datetime last_successful_sync
+    }
+
+    topology_edges {
+        uuid edge_id PK
+        string local_switch
+        string local_port
+        string remote_switch
+        string remote_port
+        string protocol
+        string state
+        datetime last_seen
+    }
+
+    config_snapshots {
+        uuid snapshot_id PK
+        uuid switch_id FK
+        datetime taken_at
+        string raw_config
+        string config_hash
+        string taken_by
+    }
+
+    compliance_findings {
+        uuid finding_id PK
+        uuid compliance_run_id FK
+        uuid switch_id FK
+        string rule_name
+        string severity
+        string detail
+    }
+
+    telemetry_metrics {
+        uuid metric_id PK
+        uuid switch_id FK
+        string metric_name
+        string metric_value
+        datetime timestamp
+    }
+\`\`\`
+
+---
+
+## 5. Northbound REST API Reference
+
+The controller features an authenticated OpenAPI v3 catalog for programmatic interactions.
+
+### Authentication & Mock Tokens
+Write requests require a JWT bearer token passed in the \`Authorization\` header.
+*   **Platform Admin Mock Token**: \`mock-token-admin\` (Gives read/write permission across all tenant layers)
+*   **Tenant Operator Mock Token**: \`mock-token-operator-<tenant_uuid>\` (Permits modification only inside designated tenant)
+*   **Tenant Auditor Mock Token**: \`mock-token-auditor-<tenant_uuid>\` (Permits read-only queries inside designated tenant)
+
+### API Endpoints Summary
+
+| Endpoint Route | HTTP Method | Authentication | Description |
+| :--- | :--- | :--- | :--- |
+| \`/api/v5/auth/login\` | \`POST\` | None | Authenticates username/password and yields JWT. |
+| \`/api/v5/orchestrator/policy-enforcement\` | \`POST\` | JWT Bearer | Submits network segment intent. Supports dry-run. |
+| \`/api/v5/orchestrator/policy-reconciliation\` | \`POST\` | JWT Bearer | Deletes active subnet allocations and outputs rollback payloads. |
+| \`/api/v5/discovery/on-boarding-ingestion\` | \`POST\` | None (ZTP Option) | Ingests hardware beacons from unprovisioned network elements. |
+| \`/api/v5/visibility/snapshots\` | \`POST\` | JWT Bearer | Demands a configuration snapshot on a target switch. |
+| \`/api/v5/visibility/snapshots\` | \`GET\` | JWT Bearer | Retrieves config snapshot history filtered by tenant/switch. |
+| \`/api/v5/visibility/rollback\` | \`POST\` | JWT Bearer | Triggers rollback. Evaluates blast radius & checks authorization. |
+| \`/api/v5/visibility/compliance/run\` | \`POST\` | JWT Bearer | Executes a compliance audit across active devices. |
+| \`/api/v5/visibility/compliance/latest\` | \`GET\` | JWT Bearer | Returns findings from the latest compliance scan. |
+| \`/api/v5/visibility/endpoints\` | \`GET\` | JWT Bearer | Lists learned endpoints (MAC/IP/port mappings) from fabric. |
+| \`/api/v5/visibility/telemetry\` | \`GET\` | JWT Bearer | Queries telemetry series data (octets, temperature, CPU). |
+| \`/api/v5/admin/stats\` | \`GET\` | JWT Bearer | Returns high-level database counts (fabrics, switches, ZTP devices). |
+| \`/api/v5/admin/topology\` | \`GET\` | JWT Bearer | Exposes active link adjacencies for topology graphing. |
+
+---
+
+## 6. Development & Deployment Guide
+
+For local validation and sandbox deployments, see the launcher steps below:
+
+### Setup and Initialization
+1.  **Clone Project & Navigate to Folder**:
+    \`\`\`bash
+    cd ~/sdn-controller
+    \`\`\`
+2.  **Spin up Core Databases (Postgres & Redis)**:
+    \`\`\`bash
+    docker-compose up -d
+    \`\`\`
+3.  **Boot Nokia & Dell Containerlab Switch Fabric**:
+    \`\`\`bash
+    sudo containerlab deploy -t sdn_fabric.clab.yml
+    \`\`\`
+4.  **Activate Virtual Environment & Run App**:
+    \`\`\`bash
+    source venv/bin/activate
+    uvicorn app.main:app --host 0.0.0.0 --port 8000
+    \`\`\`
+    *On initial boot, the app seeds default tenant models, blueprints, active switches, and users if tables are empty.*
+
+### Verification Tools
+*   **SDN Admin Dashboard UI**: Access \`http://<VM_IP>:8000/\` for the integrated HTML glassmorphic dashboard interface containing interactive topology graphs, inventory views, compliance panels, and metric charts.
+*   **OpenAPI Documentation**: Access \`http://<VM_IP>:8000/docs\` to execute and test API routes.
+*   **Discovery Engine Sync**: Trigger a manual network discover loop via \`POST /api/v5/admin/sync-gnmi\` or \`POST /api/v5/admin/trigger-discover\` to force immediate LLDP parsing.
+`;
+
+        // Parse and render
+        document.getElementById('content').innerHTML = marked.parse(markdownText);
+
+        // Initialize Mermaid
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            securityLevel: 'loose'
+        });
+    </script>
+</body>
+</html>
