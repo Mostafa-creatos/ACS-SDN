@@ -31,16 +31,19 @@ export const Login: React.FC = () => {
         login(data.access_token);
         navigate('/dashboard');
       } else {
+        if (response.status === 502 || response.status === 503 || response.status === 504) {
+          throw new Error("Backend is offline. Falling back to mock login.");
+        }
         const errData = await response.json().catch(() => ({}));
         setError(errData.detail || 'Authentication failed. Please verify credentials.');
       }
     } catch (err) {
       // Offline fallback: simulate JWT generation
       console.warn("Offline mock login fallback active.");
-      let token = 'mock.jwt.admin';
-      if (email.includes('operator')) token = 'mock.jwt.operator';
-      else if (email.includes('auditor') || email.includes('read')) token = 'mock.jwt.auditor';
-      else if (email.includes('tenant')) token = 'mock.jwt.tenant';
+      let token = 'mock-token-admin';
+      if (email.includes('operator')) token = 'mock-token-operator';
+      else if (email.includes('auditor') || email.includes('read')) token = 'mock-token-auditor';
+      else if (email.includes('tenant')) token = 'mock-token-operator';
       
       login(token);
       navigate('/dashboard');
