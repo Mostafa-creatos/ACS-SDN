@@ -9,7 +9,7 @@ async def run_topology_discovery_sync(db: Session):
     Triggers the native gNMI topology discovery process.
     """
     try:
-        run_gnmi_discovery(db)
+        await asyncio.to_thread(run_gnmi_discovery, db)
     except Exception as e:
         print(f"[WORKER DISCOVERY] Topology discovery loop failed: {e}")
 
@@ -37,7 +37,7 @@ async def start_periodic_telemetry_loop(interval_sec: int):
     collector = GnmiTelemetryCollector(SessionLocal)
     while True:
         try:
-            await collector.collect_switch_metrics()
+            await asyncio.to_thread(collector.collect_switch_metrics)
         except Exception as e:
             print(f"[WORKER TELEMETRY] Background execution error: {e}")
             

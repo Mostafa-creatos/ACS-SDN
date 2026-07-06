@@ -1,0 +1,759 @@
+"""
+SSH-based collector for Dell SmartFabric OS10 switches.
+
+Connects via SSH, executes CLI show commands, and returns structured
+dictionaries matching the DB models in models.py.
+"""
+import re
+import time
+import socket
+import logging
+from typing import Optional, Dict, Any, List, Tuple
+
+logger = logging.getLogger(__name__)
+
+
+class DellOS10CollectorError(Exception):
+    pass
+
+
+class DellOS10Collector:
+    """Collects live inventory, hardware, VLAN, LAG, VLT and config data
+    from a Dell OS10 switch via SSH (or raw TCP console fallback)."""
+
+    def __init__(
+        self,
+        host: str,
+        username: str = "admin",
+        password: str = "admin",
+        port: int = 22,
+        use_ssh: bool = True,
+        connect_timeout: int = 10,
+        command_timeout: int = 15,
+    ):
+        self.host = host
+        self.username = username
+        self.password = password
+        self.port = port
+        self.use_ssh = use_ssh
+        self.connect_timeout = connect_timeout
+        self.command_timeout = command_timeout
+        self._client = None
+        self._channel = None
+
+    # ------------------------------------------------------------------
+    # Connection
+    # ------------------------------------------------------------------
+    def connect(self) -> None:
+        """Open an SSH (paramiko) or raw-TCP console session."""
+        if self.use_ssh:
+            self._connect_ssh()
+        else:
+            self._connect_console()
+
+    def _connect_ssh(self) -> None:
+        import paramiko
+
+        self._client = paramiko.SSHClient()
+        self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            self._client.connect(
+                self.host,
+                port=self.port,
+                username=self.username,
+                password=self.password,
+                timeout=self.connect_timeout,
+                look_for_keys=False,
+                allow_agent=False,
+            )
+            self._channel = self._client.invoke_shell(width=512, height=999)
+            self._channel.settimeout(self.command_timeout)
+            self._flush_until_prompt(timeout=3)
+            self._send_command("terminal length 0")
+        except Exception as exc:
+            raise DellOS10CollectorError(
+                f"SSH connection failed to {self.host}:{self.port}: {exc}"
+            ) from exc
+
+    def _connect_console(self) -> None:
+        self._client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._client.settimeout(self.connect_timeout)
+        try:
+            self._client.connect((self.host, self.port))
+            self._client.settimeout(self.command_timeout)
+            time.sleep(0.3)
+            self._client.send(b"\x03\r\n")
+            time.sleep(0.5)
+            self._flush_until_prompt()
+            self._send_command("terminal length 0")
+        except Exception as exc:
+            raise DellOS10CollectorError(
+                f"Console connection failed to {self.host}:{self.port}: {exc}"
+            ) from exc
+
+    def _flush_until_prompt(self, timeout: float = 2) -> str:
+        """Read until the channel goes silent (up to *timeout* seconds)."""
+        buf = ""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                chunk = self._recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+            except socket.timeout:
+                break
+            except Exception:
+                break
+        return buf
+
+    def _recv(self, n: int = 8192) -> str:
+        if self.use_ssh:
+            return self._channel.recv(n).decode("utf-8", errors="replace")
+        return self._client.recv(n).decode("utf-8", errors="replace")
+
+    def _send(self, data: bytes) -> None:
+        if self.use_ssh:
+            self._channel.send(data)
+        else:
+            self._client.send(data)
+
+    def _send_command(self, cmd: str, timeout: Optional[float] = None) -> str:
+        """Execute a command and return the full output."""
+        timeout = timeout or self.command_timeout
+        self._send(f"{cmd}\n".encode("utf-8"))
+        time.sleep(0.3)
+        out = ""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                chunk = self._recv(8192)
+                if not chunk:
+                    break
+                out += chunk
+            except socket.timeout:
+                break
+            except Exception:
+                break
+        return out.replace("\r\n", "\n")
+
+    def close(self) -> None:
+        try:
+            if self._channel:
+                self._channel.close()
+        except Exception:
+            pass
+        try:
+            if self._client:
+                self._client.close()
+        except Exception:
+            pass
+        self._client = None
+        self._channel = None
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    # ------------------------------------------------------------------
+    # Collectors – each returns a dict or list ready for DB insertion
+    # ------------------------------------------------------------------
+    def collect_system(self) -> Dict[str, Any]:
+        """Parse `show system` for OS10 system metadata."""
+        raw = self._send_command("show system")
+        result: Dict[str, Any] = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if ":" not in line:
+                continue
+            key, _, val = line.partition(":")
+            key = key.strip().lower().replace(" ", "_")
+            val = val.strip()
+            if not val:
+                continue
+            # Map known keys to our model fields
+            if key == "system_type":
+                result["model"] = val
+            elif key == "service_tag":
+                result["service_tag"] = val
+            elif key == "part_number":
+                result["part_number"] = val
+            elif key == "serial_number":
+                result["serial_number"] = val
+            elif key.startswith("mac"):
+                result["management_mac"] = val
+            elif key == "os_version":
+                result["os_version"] = val
+            elif key == "up_time":
+                result["uptime"] = val
+            elif key == "express_service_code":
+                result["express_service_code"] = val
+            elif key == "system_mode":
+                result["os10_license_status"] = val
+        return result
+
+    def collect_version(self) -> Dict[str, str]:
+        """Parse `show version` for OS version / uptime details (fallback)."""
+        raw = self._send_command("show version")
+        result: Dict[str, str] = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if ":" not in line:
+                continue
+            key, _, val = line.partition(":")
+            key = key.strip().lower().replace(" ", "_")
+            val = val.strip()
+            if not val:
+                continue
+            if key == "os_version":
+                result["os_version"] = val
+            elif key == "up_time":
+                result["uptime"] = val
+        return result
+
+    def collect_inventory(self) -> List[Dict[str, Any]]:
+        """Parse `show inventory` into hardware components list."""
+        raw = self._send_command("show inventory")
+        components: List[Dict[str, Any]] = []
+        current: Optional[Dict[str, Any]] = None
+        inventory_section = False
+
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                if current:
+                    components.append(current)
+                    current = None
+                continue
+
+            # Detect section headers like "Chassis:", "Slot 1:", "Slot 2:", etc.
+            header_match = re.match(
+                r"^(Chassis|Slot\s+\d+|Expansion\s+\S+|Module\s+\S+)\s*:*\s*$",
+                stripped,
+                re.IGNORECASE,
+            )
+            if header_match:
+                if current:
+                    components.append(current)
+                label = header_match.group(1).strip()
+                component_type = "chassis" if "chassis" in label.lower() else "linecard"
+                current = {
+                    "component_type": component_type,
+                    "slot_label": label,
+                    "part_number": "",
+                    "ppid": "",
+                    "service_tag": "",
+                    "status": "ok",
+                    "detail": "",
+                    "numeric_value": None,
+                }
+                continue
+
+            if current is None:
+                continue
+
+            # Parse key: value pairs
+            if ":" in stripped:
+                k, _, v = stripped.partition(":")
+                k = k.strip().lower().replace(" ", "_")
+                v = v.strip()
+                if k == "part_number":
+                    current["part_number"] = v
+                elif k == "ppid":
+                    current["ppid"] = v
+                elif k == "service_tag":
+                    current["service_tag"] = v
+                elif k == "description":
+                    current["detail"] = v
+
+        if current:
+            components.append(current)
+
+        # Fallback: Parse fixed-width tabular format (e.g. S6010-VM / S5248F-ON VM)
+        if not components:
+            for line in raw.splitlines():
+                if len(line) < 30:
+                    continue
+                # Match lines starting with optional * then a number (Unit index)
+                if re.match(r"^\s*\*?\s*\d+\s+", line):
+                    unit_type = line[0:30].strip()
+                    # Strip the unit number (e.g. "* 1 " or "1 ") to get actual device name
+                    device_name = re.sub(r"^\*?\s*\d+\s+", "", unit_type).strip()
+                    
+                    ppid = line[48:74].strip() if len(line) >= 74 else ""
+                    svc_tag = line[74:83].strip() if len(line) >= 83 else ""
+                    
+                    # Determine type
+                    lower_name = device_name.lower()
+                    if "pwr" in lower_name or "power" in lower_name:
+                        comp_type = "psu"
+                    elif "fan" in lower_name:
+                        comp_type = "fan_tray"
+                    else:
+                        comp_type = "chassis"
+                        
+                    components.append({
+                        "component_type": comp_type,
+                        "slot_label": device_name,
+                        "part_number": device_name, # Fallback part number
+                        "ppid": ppid,
+                        "service_tag": svc_tag,
+                        "status": "ok",
+                        "detail": f"{device_name} hardware module",
+                        "numeric_value": None,
+                    })
+
+        return components
+
+    def collect_environment(self) -> Dict[str, Any]:
+        """Parse `show environment` for temperature, fans, PSUs."""
+        raw = self._send_command("show environment")
+        result: Dict[str, Any] = {
+            "temperature_sensors": [],
+            "fans": [],
+            "power_supplies": [],
+        }
+        section: Optional[str] = None
+
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            # Section detection
+            lower_line = stripped.lower()
+            if "temperature" in lower_line and ("sensor" in lower_line or "unit" in lower_line):
+                if "-" not in stripped:
+                    section = "temperature"
+                    continue
+            elif "fan" in lower_line and ("status" in lower_line or "speed" in lower_line):
+                if "-" not in stripped:
+                    section = "fan"
+                    continue
+            elif "power supply" in lower_line or "psu" in lower_line:
+                if "-" not in stripped:
+                    section = "psu"
+                    continue
+
+            # Skip dashed separator lines
+            if re.match(r"^[\s\-]+$", stripped):
+                continue
+            # Skip header lines
+            if any(
+                h in stripped.lower()
+                for h in ["unit", "status", "temperature", "speed", "type", "input", "output"]
+            ):
+                if re.match(r"^[\s\w()/]+$", stripped):
+                    continue
+
+            # Parse data rows
+            parts = stripped.split()
+            if section == "temperature" and len(parts) >= 3 and parts[0].isdigit():
+                try:
+                    val = float(parts[2].replace("C", "").replace("c", ""))
+                except ValueError:
+                    val = 0.0
+                result["temperature_sensors"].append({
+                    "slot_label": f"Temp-{parts[0]}",
+                    "status": parts[1].lower(),
+                    "numeric_value": val,
+                    "detail": f"{val}C" if val else "Normal",
+                })
+            elif section == "fan" and len(parts) >= 3 and parts[0].isdigit():
+                try:
+                    rpm = float(parts[2].replace(",", "").replace("RPM", "").replace("rpm", ""))
+                except ValueError:
+                    rpm = 0.0
+                result["fans"].append({
+                    "slot_label": f"Fan-{parts[0]}",
+                    "status": parts[1].lower(),
+                    "numeric_value": rpm,
+                    "detail": f"{int(rpm)} RPM" if rpm else "N/A",
+                })
+            elif section == "psu" and len(parts) >= 2 and parts[0].isdigit():
+                result["power_supplies"].append({
+                    "slot_label": f"PSU-{parts[0]}",
+                    "status": parts[1].lower(),
+                    "detail": " ".join(parts[2:]),
+                    "numeric_value": None,
+                })
+
+        return result
+
+    def collect_interfaces(self) -> List[Dict[str, Any]]:
+        """Parse `show interface status` into interface list."""
+        raw = self._send_command("show interface status")
+        interfaces: List[Dict[str, Any]] = []
+        header_passed = False
+
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Skip the dashed separator line
+            if re.match(r"^[-]+\s+[-]+\s+[-]+\s+[-]+\s+[-]+\s+[-]+$", stripped):
+                header_passed = True
+                continue
+
+            if not header_passed:
+                continue
+
+            # OS10 format: ethernet1/1/1  desc  up  40G  full  9217
+            # Also handle OS9 format: Eth 1/1/1  ...
+            intf_match = re.match(
+                r"^(?:Eth\s+)?(\S+)\s+(.*?)\s+(up|down)\s+(\S+)\s+(\S+)\s+(\S+)\s*$",
+                stripped,
+            )
+            if intf_match:
+                name = intf_match.group(1).lower()
+                # Normalize OS9 "Eth 1/1/1" -> "ethernet1/1/1"
+                if not name.startswith("ethernet") and not name.startswith("port-channel"):
+                    name = f"ethernet{name}"
+                desc = intf_match.group(2).strip()
+                status = intf_match.group(3)
+                speed = intf_match.group(4)
+                duplex = intf_match.group(5)
+                mtu_str = intf_match.group(6)
+
+                mtu = 9216
+                if mtu_str.isdigit():
+                    mtu = int(mtu_str)
+
+                interfaces.append({
+                    "name": name,
+                    "status": status,
+                    "speed_duplex": f"{speed} / {duplex.capitalize()}",
+                    "vlan": "",
+                    "description": desc,
+                    "switchport_mode": "trunk",
+                    "transceiver_type": None,
+                    "transceiver_serial": None,
+                    "transceiver_qualified": None,
+                    "mtu": mtu,
+                    "neighbor": None,
+                    "errors_in": 0,
+                    "errors_out": 0,
+                    "discards_in": 0,
+                    "discards_out": 0,
+                    "mac_address": None,
+                })
+
+        return interfaces
+
+    def collect_transceivers(self) -> Dict[str, Dict[str, Any]]:
+        """Parse `show interface transceiver` into {port_name: info} dict."""
+        raw = self._send_command("show interface transceiver")
+        transceivers: Dict[str, Dict[str, Any]] = {}
+        header_passed = False
+
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if re.match(r"^[-]+\s+[-]+\s+[-]+\s+[-]+$", stripped):
+                header_passed = True
+                continue
+            if not header_passed:
+                continue
+
+            # Port     Type               Serial         Qualified
+            parts = stripped.split()
+            if len(parts) >= 4:
+                port = parts[0].lower()
+                transceivers[port] = {
+                    "transceiver_type": parts[1],
+                    "transceiver_serial": parts[2],
+                    "transceiver_qualified": parts[3].lower() == "yes",
+                }
+
+        return transceivers
+
+    def collect_vlans(self) -> List[Dict[str, Any]]:
+        """Parse `show vlan` into VLAN list."""
+        raw = self._send_command("show vlan")
+        vlans: List[Dict[str, Any]] = []
+        header_passed = False
+
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Skip codes legend
+            if stripped.startswith("Codes"):
+                continue
+            if re.match(r"^[-]+\s+[-]+\s+[-]+\s+[-]+$", stripped):
+                header_passed = True
+                continue
+            if not header_passed:
+                continue
+
+            # Format: 100   Uplink-Fabric   ethernet1/1/1-4   Static
+            vlan_match = re.match(
+                r"^(\d+)\s+(.*?)\s+(\S+(?:[-,]\S+)*)?\s+(\S+)\s*$",
+                stripped,
+            )
+            if vlan_match:
+                vlan_id = int(vlan_match.group(1))
+                name = vlan_match.group(2).strip()
+                ports_raw = vlan_match.group(3) or ""
+                vlan_type = vlan_match.group(4)
+
+                # Expand port ranges like "ethernet1/1/1-4" and split commas
+                member_ports: List[str] = []
+                if ports_raw:
+                    for part in ports_raw.split(","):
+                        part = part.strip()
+                        range_match = re.match(r"^(.*?)(\d+)-(\d+)$", part)
+                        if range_match:
+                            prefix = range_match.group(1)
+                            start = int(range_match.group(2))
+                            end = int(range_match.group(3))
+                            for i in range(start, end + 1):
+                                member_ports.append(f"{prefix}{i}")
+                        else:
+                            member_ports.append(part)
+
+                status = "active" if vlan_type.lower() != "suspended" else "suspended"
+                vlans.append({
+                    "vlan_id": vlan_id,
+                    "name": name,
+                    "status": status,
+                    "member_ports": member_ports,
+                })
+
+        return vlans
+
+    def collect_lags(self) -> List[Dict[str, Any]]:
+        """Parse `show port-channel summary` into LAG list."""
+        raw = self._send_command("show port-channel summary")
+        lags: List[Dict[str, Any]] = []
+        header_passed = False
+
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if re.match(r"^[-]+\s+[-]+\s+[-]+\s+[-]+$", stripped):
+                header_passed = True
+                continue
+            if not header_passed:
+                continue
+
+            # 128   LACP   ethernet1/1/1(Up),ethernet1/1/2(Up)   LACP
+            lag_match = re.match(
+                r"^(\d+)\s+(\S+)\s+(.*?)\s+(\S+)\s*$",
+                stripped,
+            )
+            if lag_match:
+                lag_num = lag_match.group(1)
+                mode = lag_match.group(2).lower()
+                ports_raw = lag_match.group(3)
+                protocol = lag_match.group(4)
+
+                # Extract port names from "ethernet1/1/1(Up),ethernet1/1/2(Up)" format
+                member_ports: List[str] = []
+                for p in re.findall(r"(\S+?)\([^)]*\)", ports_raw):
+                    member_ports.append(p.strip(","))
+
+                status = "up" if any("(Up)" in p for p in ports_raw.split(",")) else "down"
+                lag_type = "lacp" if mode == "lacp" else "static"
+
+                lags.append({
+                    "lag_name": f"port-channel{lag_num}",
+                    "lag_type": lag_type,
+                    "member_ports": member_ports,
+                    "status": status,
+                    "protocol": protocol.strip(),
+                })
+
+        return lags
+
+    def collect_lldp(self) -> List[Dict[str, Any]]:
+        """Parse `show lldp neighbors` into LLDP link list."""
+        raw = self._send_command("show lldp neighbors")
+        links: List[Dict[str, Any]] = []
+        header_passed = False
+
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if re.match(r"^[-]+\s+[-]+\s+[-]+\s+[-]+$", stripped):
+                header_passed = True
+                continue
+            if not header_passed:
+                continue
+
+            # ethernet1/1/1  Ethernet1/1/1  spine-1  00:11:22:33:44:55
+            lldp_match = re.match(
+                r"^(\S+)\s+(\S+)\s+(\S+?)\s*(\S*)\s*$",
+                stripped,
+            )
+            if lldp_match:
+                local = lldp_match.group(1).lower()
+                remote_port = lldp_match.group(2)
+                remote_host = lldp_match.group(3)
+                remote_chassis = lldp_match.group(4) or ""
+
+                links.append({
+                    "port": local,
+                    "remote_name": remote_host,
+                    "remote_port": remote_port,
+                    "remote_chassis": remote_chassis,
+                })
+
+        return links
+
+    def collect_vlt(self) -> Optional[Dict[str, Any]]:
+        """Parse `show vlt domain-id` into VLT domain dict.
+
+        Returns None if VLT is not configured.
+        """
+        raw = self._send_command("show vlt domain-id 1")
+        # Also try "show vlt" as fallback
+        if "Invalid" in raw or "not found" in raw.lower() or "Error" in raw:
+            raw = self._send_command("show vlt")
+
+        if "Domain ID" not in raw and "VLT Domain" not in raw:
+            return None
+
+        result: Dict[str, Any] = {
+            "domain_id": 0,
+            "peer_switch_hostname": "",
+            "peer_link_status": "down",
+            "icl_state": "down",
+            "role": "backup",
+            "peer_routing_enabled": False,
+            "vrrp_groups": [],
+        }
+
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if ":" not in stripped:
+                continue
+            key, _, val = stripped.partition(":")
+            key_lower = key.strip().lower()
+            val = val.strip()
+
+            if "domain id" in key_lower:
+                try:
+                    result["domain_id"] = int(val)
+                except ValueError:
+                    result["domain_id"] = 0
+            elif "role" in key_lower:
+                result["role"] = val.lower()
+            elif "peer" in key_lower and "status" in key_lower:
+                result["peer_link_status"] = val.lower()
+            elif "icl" in key_lower:
+                result["icl_state"] = val.lower()
+            elif "peer routing" in key_lower:
+                result["peer_routing_enabled"] = "enabl" in val.lower()
+            elif "peer" in key_lower and ("ip" in key_lower or "address" in key_lower):
+                result["peer_switch_hostname"] = val
+
+        return result
+
+    def collect_stp(self) -> Dict[str, Any]:
+        """Parse `show spanning-tree brief` for STP status."""
+        raw = self._send_command("show spanning-tree brief")
+        if "Invalid" in raw or "Error" in raw:
+            raw = self._send_command("show spanning-tree")
+
+        result: Dict[str, Any] = {
+            "enabled": False,
+            "protocol": "RSTP",
+            "root_bridge": False,
+            "blocked_ports": [],
+        }
+
+        if "Spanning tree enabled" in raw or "rstp" in raw.lower():
+            result["enabled"] = True
+        if "this bridge is the root" in raw.lower() or "is root" in raw.lower():
+            result["root_bridge"] = True
+
+        for line in raw.splitlines():
+            if "BLK" in line or "Blocking" in line:
+                parts = line.split()
+                if parts:
+                    result["blocked_ports"].append(parts[0])
+
+        return result
+
+    def collect_running_config(self) -> str:
+        """Return raw `show running-configuration` output."""
+        raw = self._send_command("show running-configuration", timeout=30)
+        return raw
+
+    # ------------------------------------------------------------------
+    # Orchestrator
+    # ------------------------------------------------------------------
+    def collect_all(self) -> Dict[str, Any]:
+        """Run every collector and return a single combined dict."""
+        system = self.collect_system()
+        version = self.collect_version()
+        # Merge version fields that system didn't provide
+        for k, v in version.items():
+            if k not in system or not system.get(k):
+                system[k] = v
+
+        environment = self.collect_environment()
+        inventory = self.collect_inventory()
+        interfaces = self.collect_interfaces()
+        transceivers = self.collect_transceivers()
+        vlans = self.collect_vlans()
+        lags = self.collect_lags()
+        lldp = self.collect_lldp()
+        vlt = self.collect_vlt()
+        stp = self.collect_stp()
+        running_config = self.collect_running_config()
+
+        # Merge transceiver info into interfaces
+        for intf in interfaces:
+            name = intf["name"]
+            if name in transceivers:
+                intf.update(transceivers[name])
+
+        # Merge LLDP neighbor info into interfaces
+        lldp_by_port: Dict[str, Dict] = {}
+        for entry in lldp:
+            lldp_by_port[entry["port"]] = entry
+        for intf in interfaces:
+            if intf["name"] in lldp_by_port:
+                intf["neighbor"] = lldp_by_port[intf["name"]]["remote_name"]
+
+        # Compute aggregate health from environment
+        temperature = "Normal"
+        if environment["temperature_sensors"]:
+            temps = [s["numeric_value"] for s in environment["temperature_sensors"] if s["numeric_value"]]
+            if temps:
+                avg_temp = sum(temps) / len(temps)
+                if avg_temp > 65:
+                    temperature = "Critical"
+                elif avg_temp > 50:
+                    temperature = "Warning"
+                else:
+                    temperature = "Normal"
+
+        chassis_status = "Ready"
+        psu_ok = all(ps["status"] == "ok" for ps in environment["power_supplies"])
+        fan_ok = all(f["status"] == "ok" for f in environment["fans"])
+        if not psu_ok or not fan_ok:
+            chassis_status = "Degraded"
+
+        return {
+            "system": system,
+            "environment": environment,
+            "inventory": inventory,
+            "interfaces": interfaces,
+            "vlans": vlans,
+            "lags": lags,
+            "lldp": lldp,
+            "vlt": vlt,
+            "stp": stp,
+            "running_config": running_config,
+            "temperature": temperature,
+            "chassis_status": chassis_status,
+        }

@@ -62,6 +62,50 @@ def migrate_db_columns(engine):
                 conn.execute(text("ALTER TABLE switches ADD COLUMN running_config TEXT DEFAULT ''"))
             if "startup_config" not in columns:
                 conn.execute(text("ALTER TABLE switches ADD COLUMN startup_config TEXT DEFAULT ''"))
+            # Dell OS10 specific columns
+            if "service_tag" not in columns:
+                conn.execute(text("ALTER TABLE switches ADD COLUMN service_tag VARCHAR(64) DEFAULT ''"))
+            if "part_number" not in columns:
+                conn.execute(text("ALTER TABLE switches ADD COLUMN part_number VARCHAR(64) DEFAULT ''"))
+            if "ppid" not in columns:
+                conn.execute(text("ALTER TABLE switches ADD COLUMN ppid VARCHAR(64) DEFAULT ''"))
+            if "express_service_code" not in columns:
+                conn.execute(text("ALTER TABLE switches ADD COLUMN express_service_code VARCHAR(64) DEFAULT ''"))
+            if "management_mac" not in columns:
+                conn.execute(text("ALTER TABLE switches ADD COLUMN management_mac VARCHAR(17) DEFAULT ''"))
+            if "os10_license_status" not in columns:
+                conn.execute(text("ALTER TABLE switches ADD COLUMN os10_license_status VARCHAR(32) DEFAULT 'Licensed'"))
+            if "temperature" not in columns:
+                conn.execute(text("ALTER TABLE switches ADD COLUMN temperature VARCHAR(16) DEFAULT 'Normal'"))
+            if "cpu_usage" not in columns:
+                conn.execute(text("ALTER TABLE switches ADD COLUMN cpu_usage FLOAT DEFAULT NULL"))
+            if "memory_usage" not in columns:
+                conn.execute(text("ALTER TABLE switches ADD COLUMN memory_usage FLOAT DEFAULT NULL"))
+
+        # Migrate device_interfaces columns
+        if "device_interfaces" in inspector.get_table_names():
+            iface_cols = [c["name"] for c in inspector.get_columns("device_interfaces")]
+            with engine.begin() as conn:
+                if "switchport_mode" not in iface_cols:
+                    conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN switchport_mode VARCHAR(16) DEFAULT 'trunk'"))
+                if "transceiver_type" not in iface_cols:
+                    conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN transceiver_type VARCHAR(32) DEFAULT NULL"))
+                if "transceiver_serial" not in iface_cols:
+                    conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN transceiver_serial VARCHAR(64) DEFAULT NULL"))
+                if "transceiver_qualified" not in iface_cols:
+                    conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN transceiver_qualified BOOLEAN DEFAULT TRUE"))
+                if "mtu" not in iface_cols:
+                    conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN mtu INTEGER DEFAULT 9216"))
+                if "errors_in" not in iface_cols:
+                    conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN errors_in BIGINT DEFAULT 0"))
+                if "errors_out" not in iface_cols:
+                    conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN errors_out BIGINT DEFAULT 0"))
+                if "discards_in" not in iface_cols:
+                    conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN discards_in BIGINT DEFAULT 0"))
+                if "discards_out" not in iface_cols:
+                    conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN discards_out BIGINT DEFAULT 0"))
+                if "last_flapped" not in iface_cols:
+                    conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN last_flapped TIMESTAMP DEFAULT NULL"))
 
 # Ensure database tables exist on application startup (convenient local bootstrapping)
 @app.on_event("startup")
@@ -130,6 +174,13 @@ def startup_db_configure():
                 os_version="10.5.2.0",
                 location="Casablanca, Morocco",
                 serial_number="SN-DELL-SPINE1",
+                service_tag="6KH8XZ2",
+                part_number="S5248F-ON",
+                ppid="TW-0GKK8W-28298-713-0026",
+                express_service_code="909 144 413 2",
+                management_mac="90:B1:1C:F4:A5:8C",
+                os10_license_status="Licensed",
+                temperature="Normal",
                 device_type="Router",
                 os_type="OS10",
                 client_tenant="Acme-Enterprise",
@@ -152,6 +203,13 @@ def startup_db_configure():
                 os_version="10.5.2.0",
                 location="Casablanca, Morocco",
                 serial_number="SN-DELL-SPINE2",
+                service_tag="7PI8Z3K",
+                part_number="S5248F-ON",
+                ppid="TW-0GKK8W-28298-713-0027",
+                express_service_code="909 144 413 3",
+                management_mac="90:B1:1C:F4:A5:8D",
+                os10_license_status="Licensed",
+                temperature="Normal",
                 device_type="Router",
                 os_type="OS10",
                 client_tenant="Acme-Enterprise",

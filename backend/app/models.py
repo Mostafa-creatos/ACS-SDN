@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, Boolean, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, Boolean, Float, BigInteger, UniqueConstraint, Text
+from sqlalchemy.dialects.postgresql import UUID, JSON
 from sqlalchemy.orm import relationship
 from .db import Base
 
@@ -75,14 +75,14 @@ class Switch(Base):
     last_successful_sync = Column(DateTime, nullable=True)
 
     # Device Inventory Extensions
-    model = Column(String(100), default="C9300-48P")
-    os_version = Column(String(100), default="IOS XE 17.9.4")
+    model = Column(String(100), default="S5248F-ON")
+    os_version = Column(String(100), default="SmartFabric OS10 10.5.6.1")
     status = Column(String(32), default="Up")
     uptime = Column(String(100), default="2 weeks 0 days 18 hours")
     serial_number = Column(String(128), default="")
     location = Column(String(255), default="Casablanca, Morocco")
     device_type = Column(String(64), default="Switch")
-    os_type = Column(String(64), default="IOS-XE")
+    os_type = Column(String(64), default="OS10")
     client_tenant = Column(String(128), default="AtlasWave Maroc Demo")
     last_collection_timestamp = Column(DateTime, nullable=True)
     credentials_status = Column(String(64), default="Valid")
@@ -92,10 +92,24 @@ class Switch(Base):
     running_config = Column(String, default="")
     startup_config = Column(String, default="")
 
+    # Dell OS10 Specific Fields
+    service_tag = Column(String(64), default="", index=True)
+    part_number = Column(String(64), default="")
+    ppid = Column(String(64), default="")
+    express_service_code = Column(String(64), default="")
+    management_mac = Column(String(17), default="")
+    os10_license_status = Column(String(32), default="Licensed")
+    temperature = Column(String(16), default="Normal")
+    cpu_usage = Column(Float, nullable=True)
+    memory_usage = Column(Float, nullable=True)
+
     # Relationships
     fabric = relationship("Fabric", back_populates="switches")
     discovery_reference = relationship("ZtpDiscoveryPool", back_populates="switch_reference")
     interfaces = relationship("DeviceInterface", back_populates="switch", cascade="all, delete-orphan")
+    hardware_components = relationship("HardwareComponent", back_populates="switch", cascade="all, delete-orphan")
+    vlans = relationship("SwitchVlan", back_populates="switch", cascade="all, delete-orphan")
+    lags = relationship("SwitchLag", back_populates="switch", cascade="all, delete-orphan")
 
 class DeviceInterface(Base):
     __tablename__ = "device_interfaces"
@@ -103,16 +117,93 @@ class DeviceInterface(Base):
     interface_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="CASCADE"))
     name = Column(String(100), nullable=False)
-    status = Column(String(32), default="up") # 'up', 'down', 'admin-down'
+    status = Column(String(32), default="up")  # 'up', 'down', 'admin-down'
     speed_duplex = Column(String(64), default="10G / Full")
     vlan = Column(String(100), default="10")
     description = Column(String(255), default="Uplink to Core")
     ip_address = Column(String(45), nullable=True)
     mac_address = Column(String(17), nullable=True)
     media_type = Column(String(64), default="SFP-10G-SR")
-    neighbor = Column(String(255), nullable=True) # connected device name from LLDP/CDP
+    neighbor = Column(String(255), nullable=True)  # connected device name from LLDP/CDP
+
+    # Dell OS10 Switchport & Transceiver Extensions
+    switchport_mode = Column(String(16), default="trunk")  # 'access', 'trunk', 'hybrid', 'routed'
+    transceiver_type = Column(String(32), nullable=True)    # e.g. "SFP+", "SFP28", "QSFP28", "Fixed"
+    transceiver_serial = Column(String(64), nullable=True)  # Transceiver serial number
+    transceiver_qualified = Column(Boolean, default=True)   # Dell qualified
+    mtu = Column(Integer, default=9216)
+    errors_in = Column(BigInteger, default=0)
+    errors_out = Column(BigInteger, default=0)
+    discards_in = Column(BigInteger, default=0)
+    discards_out = Column(BigInteger, default=0)
+    last_flapped = Column(DateTime, nullable=True)
 
     switch = relationship("Switch", back_populates="interfaces")
+
+
+class HardwareComponent(Base):
+    __tablename__ = "hardware_components"
+
+    component_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="CASCADE"))
+    component_type = Column(String(32), nullable=False)  # 'chassis', 'psu', 'fan_tray', 'fan', 'temperature'
+    slot_label = Column(String(32), nullable=False)       # e.g. "PSU-1", "Fan-1", "Temp-1"
+    part_number = Column(String(64), default="")
+    ppid = Column(String(64), default="")
+    service_tag = Column(String(64), default="")
+    status = Column(String(16), default="ok")             # 'ok', 'warning', 'critical', 'absent'
+    detail = Column(String(255), default="")
+    numeric_value = Column(Float, nullable=True)          # For sensors (RPM, °C, watts)
+    discovered_at = Column(DateTime, default=datetime.utcnow)
+
+    switch = relationship("Switch", back_populates="hardware_components")
+
+
+class SwitchVlan(Base):
+    __tablename__ = "switch_vlans"
+    __table_args__ = (
+        UniqueConstraint("switch_id", "vlan_id", name="unique_switch_vlan"),
+    )
+
+    vlan_id = Column(Integer, primary_key=True, autoincrement=False)  # VLAN number 1-4094
+    switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="CASCADE"), primary_key=True)
+    name = Column(String(64), default="")
+    status = Column(String(16), default="active")  # 'active', 'suspended'
+    member_ports = Column(JSON, default=list)       # list of port names
+
+    switch = relationship("Switch", back_populates="vlans")
+
+
+class SwitchLag(Base):
+    __tablename__ = "switch_lags"
+
+    lag_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="CASCADE"))
+    lag_name = Column(String(32), nullable=False)     # e.g. "port-channel1000"
+    lag_type = Column(String(16), default="lacp")     # 'static', 'lacp'
+    member_ports = Column(JSON, default=list)
+    status = Column(String(8), default="up")          # 'up', 'down'
+    protocol = Column(String(32), default="LACP active")
+
+    switch = relationship("Switch", back_populates="lags")
+
+
+class SwitchVltDomain(Base):
+    __tablename__ = "switch_vlt_domains"
+
+    vlt_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="CASCADE"), unique=True)
+    domain_id = Column(Integer, nullable=False)
+    peer_switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="SET NULL"), nullable=True)
+    peer_switch_hostname = Column(String(255), default="")
+    peer_link_status = Column(String(8), default="up")  # 'up', 'down'
+    icl_state = Column(String(8), default="up")         # 'up', 'down'
+    role = Column(String(16), default="primary")        # 'primary', 'backup'
+    peer_routing_enabled = Column(Boolean, default=True)
+    vrrp_groups = Column(JSON, default=list)             # list of {groupId, vip, state}
+
+    switch = relationship("Switch", foreign_keys=[switch_id])
+    peer_switch = relationship("Switch", foreign_keys=[peer_switch_id])
 
 
 class TenantVrf(Base):

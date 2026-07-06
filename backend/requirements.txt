@@ -5,9 +5,11 @@ sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
 redis==5.0.6
 celery==5.4.0
+flower==2.0.1
 python-dotenv==1.0.1
 cryptography==42.0.8
 pyjwt[crypto]==2.8.0
 httpx==0.27.0
 pygnmi==0.8.15
 bcrypt==5.0.0
+paramiko==3.4.0

@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card } from '../components/Card';
 import { StatusPill } from '../components/StatusPill';
 import { useAuth } from '../context/AuthContext';
 import { HardwareHealthIcon, HardwareHealthBadge } from '../components/HealthBadge';
 import { FabricVltTab } from '../components/FabricVltTab';
 import { HardwareHealthTab } from '../components/HardwareHealthTab';
+import type { 
+  DellSwitchDetails, 
+  PaginatedResponse 
+} from '../types/switch-types';
 import { 
   Search, 
   Filter, 
@@ -14,222 +18,167 @@ import {
   FileText, 
   ListFilter,
   Check,
-  AlertCircle
+  AlertCircle,
+  Plus,
+  Edit3,
+  Trash2,
+  Camera
 } from 'lucide-react';
+import { AddSwitchModal } from '../components/AddSwitchModal';
+import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
 
-
-interface SwitchInterface {
-  name: string;
-  status: 'up' | 'down' | 'admin-down';
-  speed_duplex: string;
-  vlan: string;
-  description: string;
-  mac_address?: string;
-  media_type?: string;
-  neighbor?: string;
-}
 
 interface ConfigSnapshot {
   snapshot_id: string;
+  switch_id: string;
   taken_at: string;
   taken_by: string;
   config_hash: string;
   raw_config: string;
-  is_baseline?: boolean;
-}
-
-interface SwitchDevice {
-  switch_id: string;
-  hostname: string;
-  management_ip: string;
-  vendor: string;
-  role: 'spine' | 'leaf';
-  lifecycle_status: string;
-  model: string;
-  os_version: string;
-  location: string;
-  serial_number: string;
-  mac_address: string;
-  last_seen: string;
-  interfaces: SwitchInterface[];
-  snapshots: ConfigSnapshot[];
-  hardware_health?: string;
-  vlt_status?: any;
-  stp_status?: any;
-  environment_status?: any;
-  running_config?: string;
 }
 
 export const Switches: React.FC = () => {
   const { token } = useAuth();
   
   // List view states
-  const [switches, setSwitches] = useState<SwitchDevice[]>([]);
+  const [switches, setSwitches] = useState<DellSwitchDetails[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [vendorFilter, setVendorFilter] = useState('ALL');
   const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
   const itemsPerPage = 6;
 
   // Detail view states
   const [selectedSwitchId, setSelectedSwitchId] = useState<string | null>(null);
-  const [detailTab, setDetailTab] = useState<'overview' | 'interfaces' | 'snapshots' | 'rollback'>('overview');
+  const [detailTab, setDetailTab] = useState<string>('overview');
   const [interfaceFilter, setInterfaceFilter] = useState<'all' | 'up' | 'down'>('all');
   
   // Diff viewer states
   const [selectedSnap1, setSelectedSnap1] = useState<string>('');
   const [selectedSnap2, setSelectedSnap2] = useState<string>('');
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [takingSnapshot, setTakingSnapshot] = useState(false);
+
+  // Add / Edit / Delete modal states
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+  const handleSwitchSaved = (id: string) => {
+    fetchSwitches();
+    setSelectedSwitchId(id);
+  };
+
+  const handleSwitchDeleted = () => {
+    if (selectedSwitchId && !switches.find(s => s.switch_id === selectedSwitchId)) {
+      setSelectedSwitchId(null);
+    }
+    fetchSwitches();
+  };
 
   // Rollback notifications
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'warning' } | null>(null);
-
-
-  const getHardwareItems = (sw: SwitchDevice) => {
-    if (!sw || !sw.environment_status) return [];
-    const env = sw.environment_status;
-    const items: any[] = [];
-    if (env.power_supplies) {
-      env.power_supplies.forEach((p: any) => {
-        items.push({
-          slot: `PSU-${p.id}`,
-          type: "Power Supply Unit",
-          status: p.status === "up" ? "ok" : "critical",
-          detail: `Power Supply status is ${p.status}`
-        });
-      });
-    }
-    if (env.fans) {
-      env.fans.forEach((f: any) => {
-        items.push({
-          slot: `Fan-${f.id}`,
-          type: "Chassis Fan Module",
-          status: f.status === "up" ? "ok" : "critical",
-          detail: `Fan Tray status is ${f.status}`
-        });
-      });
-    }
-    if (env.temperature) {
-      items.push({
-        slot: "Temp-1",
-        type: "Temperature Sensor",
-        status: env.temperature.toLowerCase() === "normal" ? "ok" : "warning",
-        detail: `System Temperature is ${env.temperature}`
-      });
-    }
-    if (items.length === 0) {
-      items.push({
-        slot: "PSU-1",
-        type: "Power Supply A",
-        status: "ok",
-        detail: "AC Power Input Normal"
-      });
-      items.push({
-        slot: "PSU-2",
-        type: "Power Supply B",
-        status: "ok",
-        detail: "AC Power Input Normal"
-      });
-      items.push({
-        slot: "Fan-1",
-        type: "Fan Tray module",
-        status: "ok",
-        detail: "Airflow Direction Normal"
-      });
-    }
-    items.push({
-      slot: "Supervisor-1",
-      type: sw.vendor.toLowerCase() === "nokia" ? "Nokia Controller Module" : "Supervisor Module",
-      status: "ok",
-      detail: "Active Supervisor Engine"
-    });
-    return items;
-  };
-
-  const fetchSwitches = async () => {
-    setLoading(true);
-    try {
-      const headers = { 'Authorization': `Bearer ${token}` };
-      const response = await fetch('/api/v5/visibility/inventory', { headers });
-      if (response.ok) {
-        const data = await response.json();
-        // Enrich data with interfaces and snapshots if missing
-        const enriched = data.map((s: any) => ({
-          ...s,
-          model: s.model || (s.vendor === 'nokia' ? '7220 IXR-D3' : 'S5248F-ON'),
-          os_version: s.os_version || (s.vendor === 'nokia' ? 'SR Linux 23.10.1' : 'SmartFabric OS10'),
-          location: s.location || (s.vendor === 'nokia' ? 'Casablanca, Morocco' : 'Agadir, Morocco'),
-          mac_address: s.mac_address || '00:1A:2B:3C:4D:5E',
-          last_seen: s.last_seen || 'Active now',
-          role: s.role?.toLowerCase() === 'spine' ? 'spine' : 'leaf',
-          lifecycle_status: s.lifecycle_status || 'compliant_active',
-          interfaces: (s.interfaces || []).map((port: any) => ({
-            name: port.name,
-            status: port.state || port.status || 'up',
-            speed_duplex: port.speed_duplex || '10G / Full',
-            vlan: String(port.vlan || '100'),
-            description: port.description || 'Configured Interface'
-          })),
-          snapshots: s.snapshots || getMockSnapshots(s.hostname)
-        }));
-        setSwitches(enriched);
-      } else {
-        setSwitches(getOfflineSwitches());
-      }
-    } catch (err) {
-      setSwitches(getOfflineSwitches());
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchSwitches();
-  }, [token]);
-
-
+  const [localSnapshots, setLocalSnapshots] = useState<Record<string, ConfigSnapshot[]>>({});
 
   const showToast = (message: string, type: 'success' | 'warning') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 5000);
   };
 
+  const fetchSwitches = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (statusFilter !== 'ALL') params.set('status', statusFilter);
+      if (vendorFilter !== 'ALL') params.set('vendor', vendorFilter);
+      params.set('page', String(page));
+      params.set('per_page', String(itemsPerPage));
+      params.set('sort_by', 'hostname');
+      params.set('sort_order', 'asc');
+
+      const headers = { 'Authorization': `Bearer ${token}` };
+      const response = await fetch(`/api/v5/visibility/inventory?${params.toString()}`, { headers });
+      if (response.ok) {
+        const data: PaginatedResponse = await response.json();
+        setSwitches(data.items);
+        setTotalPages(data.total_pages);
+        setTotalItems(data.total);
+      } else {
+        setSwitches([]);
+        setTotalPages(1);
+        setTotalItems(0);
+      }
+    } catch (err) {
+      setSwitches([]);
+      setTotalPages(1);
+      setTotalItems(0);
+    } finally {
+      setLoading(false);
+    }
+  }, [token, search, statusFilter, vendorFilter, page, itemsPerPage]);
+
+  useEffect(() => {
+    fetchSwitches();
+  }, [fetchSwitches]);
+
   // Get selected switch object
   const activeSwitch = switches.find(s => s.switch_id === selectedSwitchId);
 
-  // Filtered switches
-  const filteredSwitches = switches.filter(s => {
-    const matchesSearch = 
-      s.hostname.toLowerCase().includes(search.toLowerCase()) ||
-      s.management_ip.includes(search) ||
-      s.serial_number.toLowerCase().includes(search.toLowerCase());
-    
-    const matchesStatus = statusFilter === 'ALL' || s.lifecycle_status.toLowerCase() === statusFilter.toLowerCase();
-    const matchesVendor = vendorFilter === 'ALL' || s.vendor.toLowerCase() === vendorFilter.toLowerCase();
-    
-    return matchesSearch && matchesStatus && matchesVendor;
-  });
+  // Fetch real snapshots from API when selected switch changes
+  useEffect(() => {
+    if (!activeSwitch) return;
+    fetchSnapshots(activeSwitch.switch_id);
+  }, [activeSwitch, token]);
 
-  const totalPages = Math.ceil(filteredSwitches.length / itemsPerPage) || 1;
-  const paginatedSwitches = filteredSwitches.slice((page - 1) * itemsPerPage, page * itemsPerPage);
+  const activeSnapshots = activeSwitch ? localSnapshots[activeSwitch.switch_id] || [] : [];
+
+  const fetchSnapshots = async (switchId: string) => {
+    setSnapshotLoading(true);
+    try {
+      const headers = { 'Authorization': `Bearer ${token}` };
+      const response = await fetch(`/api/v5/visibility/snapshots?switch_id=${switchId}`, { headers });
+      if (response.ok) {
+        const data = await response.json();
+        setLocalSnapshots(prev => ({ ...prev, [switchId]: data }));
+        if (data.length >= 2) {
+          setSelectedSnap1(data[0].snapshot_id);
+          setSelectedSnap2(data[1].snapshot_id);
+        } else if (data.length === 1) {
+          setSelectedSnap1(data[0].snapshot_id);
+          setSelectedSnap2('');
+        } else {
+          setSelectedSnap1('');
+          setSelectedSnap2('');
+        }
+      } else {
+        setLocalSnapshots(prev => ({ ...prev, [switchId]: [] }));
+        setSelectedSnap1('');
+        setSelectedSnap2('');
+      }
+    } catch (err) {
+      setLocalSnapshots(prev => ({ ...prev, [switchId]: [] }));
+      setSelectedSnap1('');
+      setSelectedSnap2('');
+    } finally {
+      setSnapshotLoading(false);
+    }
+  };
 
   const handleRowClick = (id: string) => {
     setSelectedSwitchId(id);
     setDetailTab('overview');
-    // Pre-select snapshots for diffing if snapshots exist
-    const sw = switches.find(s => s.switch_id === id);
-    if (sw && sw.snapshots.length >= 2) {
-      setSelectedSnap1(sw.snapshots[0].snapshot_id);
-      setSelectedSnap2(sw.snapshots[1].snapshot_id);
-    } else {
-      setSelectedSnap1('');
-      setSelectedSnap2('');
-    }
+    setSelectedSnap1('');
+    setSelectedSnap2('');
   };
 
   const handleRollback = async (snapId: string) => {
     if (!activeSwitch) return;
-    
+
+
     try {
       const headers = { 
         'Authorization': `Bearer ${token}`,
@@ -241,7 +190,7 @@ export const Switches: React.FC = () => {
         headers,
         body: JSON.stringify({ 
           snapshot_id: snapId, 
-          dry_run: activeSwitch.role === 'spine' // dry run for high blast-radius spine switches
+          dry_run: activeSwitch.role === 'spine'
         })
       });
 
@@ -250,7 +199,6 @@ export const Switches: React.FC = () => {
           showToast('Pending Four-Eyes Approval -- the change has been queued, not executed.', 'warning');
         } else {
           showToast(`Rollback triggered successfully on ${activeSwitch.hostname}`, 'success');
-          // Update local state to make it compliant_active
           setSwitches(prev => prev.map(s => 
             s.switch_id === activeSwitch.switch_id 
               ? { ...s, lifecycle_status: 'compliant_active' } 
@@ -262,7 +210,6 @@ export const Switches: React.FC = () => {
         showToast(err.detail || 'Rollback request failed', 'warning');
       }
     } catch (e) {
-      // Simulate fallback
       if (activeSwitch.role === 'spine') {
         showToast('Pending Four-Eyes Approval -- the change has been queued, not executed.', 'warning');
       } else {
@@ -276,16 +223,56 @@ export const Switches: React.FC = () => {
     }
   };
 
+  const handleTakeSnapshot = async () => {
+    if (!activeSwitch) return;
+    setTakingSnapshot(true);
+    try {
+      const headers = { 
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      };
+      const response = await fetch(`/api/v5/visibility/snapshots?switch_id=${activeSwitch.switch_id}`, {
+        method: 'POST',
+        headers
+      });
+      if (response.ok) {
+        showToast(`Snapshot taken for ${activeSwitch.hostname}`, 'success');
+        fetchSnapshots(activeSwitch.switch_id);
+      } else {
+        const err = await response.json().catch(() => ({}));
+        showToast(err.detail || 'Failed to take snapshot', 'warning');
+      }
+    } catch (e) {
+      showToast('Failed to take snapshot', 'warning');
+    } finally {
+      setTakingSnapshot(false);
+    }
+  };
+
   // Simple unified line-by-line configuration diff renderer
   const renderConfigDiff = () => {
     if (!activeSwitch) return null;
-    const snap1 = activeSwitch.snapshots.find(s => s.snapshot_id === selectedSnap1);
-    const snap2 = activeSwitch.snapshots.find(s => s.snapshot_id === selectedSnap2);
-    
-    if (!snap1 || !snap2) return <p className="text-xs text-slate-400">Select two snapshots to compare configs</p>;
+    const snaps = localSnapshots[activeSwitch.switch_id] || [];
+    const snap1 = snaps.find(s => s.snapshot_id === selectedSnap1);
 
-    const lines1 = snap1.raw_config.split('\n');
-    const lines2 = snap2.raw_config.split('\n');
+    if (!snap1) return <p className="text-xs text-slate-400">Select a baseline snapshot to compare</p>;
+
+    let lines1 = snap1.raw_config.split('\n');
+    let lines2: string[];
+    let label2 = '';
+
+    if (selectedSnap2 === '__running__') {
+      if (!activeSwitch.running_config) {
+        return <p className="text-xs text-slate-400">No running config available for this switch</p>;
+      }
+      lines2 = activeSwitch.running_config.split('\n');
+      label2 = 'Running Config';
+    } else {
+      const snap2 = snaps.find(s => s.snapshot_id === selectedSnap2);
+      if (!snap2) return <p className="text-xs text-slate-400">Select a snapshot or running config to compare</p>;
+      lines2 = snap2.raw_config.split('\n');
+      label2 = new Date(snap2.taken_at).toLocaleDateString();
+    }
 
     // Build visual diff rows
     const diffRows: React.ReactNode[] = [];
@@ -322,7 +309,7 @@ export const Switches: React.FC = () => {
     return (
       <div className="border border-slate-200 rounded-lg overflow-hidden bg-white max-h-72 overflow-y-auto">
         <div className="bg-slate-50 px-3 py-1.5 border-b text-[10px] font-bold text-slate-400 flex justify-between">
-          <span>Unified Config Diff</span>
+          <span>Snapshot vs {label2}</span>
           <span>Red: Removals, Green: Additions</span>
         </div>
         <div className="py-2">{diffRows}</div>
@@ -344,9 +331,15 @@ export const Switches: React.FC = () => {
       )}
 
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-extrabold font-display tracking-tight text-atlas-ink">Switches</h1>
-        <p className="text-xs text-slate-400 mt-1">Manage active switch configuration drifts and state tracks</p>
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-3xl font-extrabold font-display tracking-tight text-atlas-ink">Switches</h1>
+          <p className="text-xs text-slate-400 mt-1">Manage active switch configuration drifts and state tracks</p>
+        </div>
+        <button onClick={() => setShowAddModal(true)} className="btn-primary text-xs gap-1.5">
+          <Plus className="w-3.5 h-3.5" />
+          Add Switch
+        </button>
       </div>
 
       {/* Grid: Left is Inventory, Right is Details Panel (gated by row click) */}
@@ -406,8 +399,9 @@ export const Switches: React.FC = () => {
                 <thead>
                   <tr className="border-b border-slate-100">
                     <th className="pb-3 text-left">Hostname</th>
-                    <th className="pb-3 text-left">IP Address</th>
-                    <th className="pb-3 text-left">Vendor / Model</th>
+                    <th className="pb-3 text-left">IP</th>
+                    <th className="pb-3 text-left">Model</th>
+                    <th className="pb-3 text-left">Service Tag</th>
                     <th className="pb-3 text-left">OS Version</th>
                     <th className="pb-3 text-left">State</th>
                     <th className="pb-3 text-left">HW</th>
@@ -418,14 +412,14 @@ export const Switches: React.FC = () => {
                 <tbody className="divide-y divide-slate-50">
                   {loading ? (
                     <tr>
-                      <td colSpan={6} className="py-10 text-center text-xs text-slate-400">Loading switch data...</td>
+                      <td colSpan={8} className="py-10 text-center text-xs text-slate-400">Loading switch data...</td>
                     </tr>
-                  ) : paginatedSwitches.length === 0 ? (
+                  ) : switches.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-10 text-center text-xs text-slate-400">No matching switches found</td>
+                      <td colSpan={8} className="py-10 text-center text-xs text-slate-400">No matching switches found</td>
                     </tr>
                   ) : (
-                    paginatedSwitches.map((sw) => (
+                    switches.map((sw) => (
                       <tr 
                         key={sw.switch_id}
                         onClick={() => handleRowClick(sw.switch_id)}
@@ -435,15 +429,25 @@ export const Switches: React.FC = () => {
                       >
                         <td className="py-3.5 font-semibold text-slate-800 text-xs">{sw.hostname}</td>
                         <td className="py-3.5 font-mono text-[11px] text-slate-500">{sw.management_ip}</td>
-                        <td className="py-3.5 text-xs text-slate-600 uppercase">
-                          <span className="font-bold text-slate-700">{sw.vendor}</span> {sw.model}
+                        <td className="py-3.5 text-xs text-slate-600">
+                          <span className="font-semibold text-slate-700">{sw.vendor}</span>
+                          <span className="text-slate-400"> / </span>
+                          {sw.model}
                         </td>
+                        <td className="py-3.5 font-mono text-[11px] text-slate-500">{sw.service_tag || sw.serial_number || '-'}</td>
                         <td className="py-3.5 text-xs text-slate-500">{sw.os_version}</td>
                         <td className="py-3.5">
                           <StatusPill status={sw.lifecycle_status} />
                         </td>
                         <td className="py-3.5">
-                          <HardwareHealthIcon status={(sw as any).hardware_health || (sw as any).hardwareHealth || 'ok'} />
+                          {sw.hardware_components && sw.hardware_components.length > 0 ? (
+                            <HardwareHealthIcon status={
+                              sw.hardware_components.some(c => c.status === 'critical') ? 'critical' :
+                              sw.hardware_components.some(c => c.status === 'warning') ? 'warning' : 'ok'
+                            } />
+                          ) : (
+                            <HardwareHealthIcon status="ok" />
+                          )}
                         </td>
                         <td className="py-3.5 text-center">
                           <ChevronRight className="w-4 h-4 text-slate-400 inline" />
@@ -460,19 +464,19 @@ export const Switches: React.FC = () => {
             {totalPages > 1 && (
               <div className="flex justify-between items-center mt-6 pt-4 border-t border-slate-100">
                 <span className="text-xs text-slate-400">
-                  Showing {(page - 1) * itemsPerPage + 1} - {Math.min(page * itemsPerPage, filteredSwitches.length)} of {filteredSwitches.length} entries
+                  Showing {(page - 1) * itemsPerPage + 1} - {Math.min(page * itemsPerPage, totalItems)} of {totalItems} entries
                 </span>
                 <div className="flex gap-2">
                   <button 
                     disabled={page === 1}
-                    onClick={() => setPage(p => p - 1)}
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
                     className="btn bg-white border text-slate-600 px-3 py-1.5 text-xs hover:bg-slate-50"
                   >
                     Previous
                   </button>
                   <button 
                     disabled={page === totalPages}
-                    onClick={() => setPage(p => p + 1)}
+                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                     className="btn bg-white border text-slate-600 px-3 py-1.5 text-xs hover:bg-slate-50"
                   >
                     Next
@@ -497,10 +501,34 @@ export const Switches: React.FC = () => {
                   <span className="text-[11px] text-slate-400 uppercase font-mono mt-1 block">
                     {activeSwitch.role} switch ({activeSwitch.management_ip})
                   </span>
+                  {activeSwitch.service_tag && (
+                    <span className="text-[10px] text-slate-400 font-mono mt-0.5 block">
+                      Svc Tag: {activeSwitch.service_tag} | Part: {activeSwitch.part_number}
+                    </span>
+                  )}
                 </div>
                 <div className="flex flex-col gap-1 items-end">
+                  <div className="flex gap-1.5 mb-1">
+                    <button
+                      onClick={() => setShowEditModal(true)}
+                      className="p-1.5 rounded-lg hover:bg-slate-100 transition-colors text-slate-400 hover:text-atlas-primary"
+                      title="Edit switch"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setShowDeleteModal(true)}
+                      className="p-1.5 rounded-lg hover:bg-rose-50 transition-colors text-slate-400 hover:text-rose-600"
+                      title="Delete switch"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                   <StatusPill status={activeSwitch.lifecycle_status} />
-                  <HardwareHealthBadge status={(activeSwitch as any).hardware_health || (activeSwitch as any).hardwareHealth || 'ok'} />
+                  <HardwareHealthBadge status={
+                    activeSwitch.hardware_components?.some(c => c.status === 'critical') ? 'critical' :
+                    activeSwitch.hardware_components?.some(c => c.status === 'warning') ? 'warning' : 'ok'
+                  } />
                 </div>
               </div>
 
@@ -523,6 +551,22 @@ export const Switches: React.FC = () => {
                   Interfaces
                 </button>
                 <button 
+                  onClick={() => setDetailTab('vlans')}
+                  className={`pb-2 border-b-2 transition-colors whitespace-nowrap ${
+                    detailTab === 'vlans' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
+                  }`}
+                >
+                  VLANs
+                </button>
+                <button 
+                  onClick={() => setDetailTab('lags')}
+                  className={`pb-2 border-b-2 transition-colors whitespace-nowrap ${
+                    detailTab === 'lags' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
+                  }`}
+                >
+                  LAGs
+                </button>
+                <button 
                   onClick={() => setDetailTab('snapshots')}
                   className={`pb-2 border-b-2 transition-colors whitespace-nowrap ${
                     detailTab === 'snapshots' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
@@ -531,44 +575,36 @@ export const Switches: React.FC = () => {
                   Snapshots
                 </button>
                  <button 
-                  onClick={() => setDetailTab('fabric' as any)}
+                  onClick={() => setDetailTab('fabric')}
                   className={`pb-2 border-b-2 transition-colors whitespace-nowrap ${
-                    (detailTab as any) === 'fabric' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
+                    detailTab === 'fabric' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
                   }`}
                 >
                   Fabric & VLT
                 </button>
                 <button 
-                  onClick={() => setDetailTab('stp' as any)}
+                  onClick={() => setDetailTab('stp')}
                   className={`pb-2 border-b-2 transition-colors whitespace-nowrap ${
-                    (detailTab as any) === 'stp' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
+                    detailTab === 'stp' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
                   }`}
                 >
                   STP
                 </button>
                 <button 
-                  onClick={() => setDetailTab('hardware' as any)}
+                  onClick={() => setDetailTab('hardware')}
                   className={`pb-2 border-b-2 transition-colors whitespace-nowrap ${
-                    (detailTab as any) === 'hardware' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
+                    detailTab === 'hardware' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
                   }`}
                 >
                   Hardware
                 </button>
                 <button 
-                  onClick={() => setDetailTab('config' as any)}
+                  onClick={() => setDetailTab('config')}
                   className={`pb-2 border-b-2 transition-colors whitespace-nowrap ${
-                    (detailTab as any) === 'config' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
+                    detailTab === 'config' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
                   }`}
                 >
                   Running Config
-                </button>
-                <button 
-                  onClick={() => setDetailTab('rollback')}
-                  className={`pb-2 border-b-2 transition-colors whitespace-nowrap ${
-                    detailTab === 'rollback' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
-                  }`}
-                >
-                  Rollback
                 </button>
               </div>
 
@@ -581,19 +617,55 @@ export const Switches: React.FC = () => {
                   <div className="grid grid-cols-2 gap-4 text-xs">
                     <div className="space-y-1">
                       <span className="text-slate-400 block font-medium">Model</span>
-                      <span className="font-semibold text-slate-800 uppercase">{activeSwitch.vendor} {activeSwitch.model}</span>
+                      <span className="font-semibold text-slate-800">{activeSwitch.vendor?.toUpperCase()} {activeSwitch.model}</span>
                     </div>
                     <div className="space-y-1">
                       <span className="text-slate-400 block font-medium">Serial Number</span>
-                      <span className="font-mono text-slate-800">{activeSwitch.serial_number}</span>
+                      <span className="font-mono text-slate-800">{activeSwitch.serial_number || '-'}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-slate-400 block font-medium">Service Tag</span>
+                      <span className="font-mono text-slate-800">{activeSwitch.service_tag || '-'}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-slate-400 block font-medium">Part Number</span>
+                      <span className="font-mono text-slate-800">{activeSwitch.part_number || '-'}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-slate-400 block font-medium">PPID</span>
+                      <span className="font-mono text-slate-800">{activeSwitch.ppid || '-'}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-slate-400 block font-medium">Express Code</span>
+                      <span className="font-mono text-slate-800">{activeSwitch.express_service_code || '-'}</span>
                     </div>
                     <div className="space-y-1">
                       <span className="text-slate-400 block font-medium">OS Version</span>
                       <span className="text-slate-800">{activeSwitch.os_version}</span>
                     </div>
                     <div className="space-y-1">
-                      <span className="text-slate-400 block font-medium">MAC Address</span>
-                      <span className="font-mono text-slate-800">{activeSwitch.mac_address}</span>
+                      <span className="text-slate-400 block font-medium">OS License</span>
+                      <span className="text-slate-800">{activeSwitch.os10_license_status || 'Licensed'}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-slate-400 block font-medium">Management MAC</span>
+                      <span className="font-mono text-slate-800">{activeSwitch.management_mac || '-'}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-slate-400 block font-medium">Uptime</span>
+                      <span className="text-slate-800">{activeSwitch.uptime}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-slate-400 block font-medium">Temperature</span>
+                      <span className="text-slate-800">{activeSwitch.temperature || 'Normal'}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-slate-400 block font-medium">Chassis Status</span>
+                      <span className="text-slate-800">{activeSwitch.chassis_status}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-slate-400 block font-medium">Ports</span>
+                      <span className="text-slate-800">{activeSwitch.ports_up} / {activeSwitch.ports_all} up</span>
                     </div>
                     <div className="space-y-1 col-span-2">
                       <span className="text-slate-400 block font-medium">Site/Location</span>
@@ -637,120 +709,291 @@ export const Switches: React.FC = () => {
                           return true;
                         })
                         .map((port, idx) => (
-                          <div key={idx} className="flex justify-between items-center text-xs p-2 bg-slate-50 rounded-lg border border-slate-100 hover:border-slate-200 transition-colors">
-                            <div>
-                              <div className="font-semibold text-slate-700">{port.name}</div>
-                              <div className="text-[10px] text-slate-400">{port.speed_duplex} | VLAN {port.vlan}</div>
+                          <div key={idx} className="flex flex-col text-xs p-2 bg-slate-50 rounded-lg border border-slate-100 hover:border-slate-200 transition-colors">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <div className="font-semibold text-slate-700">{port.name}</div>
+                                <div className="text-[10px] text-slate-400">
+                                  {port.speed_duplex} | VLAN {port.vlan}
+                                  {port.switchport_mode && ` | ${port.switchport_mode}`}
+                                  {port.mtu && ` | MTU ${port.mtu}`}
+                                </div>
+                              </div>
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                                port.status === 'up' 
+                                  ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' 
+                                  : 'bg-slate-100 text-slate-400 border border-slate-200'
+                              }`}>
+                                {port.status}
+                              </span>
                             </div>
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
-                              port.status === 'up' 
-                                ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' 
-                                : 'bg-slate-100 text-slate-400 border border-slate-200'
-                            }`}>
-                              {port.status}
-                            </span>
+                            {port.transceiver_type && (
+                              <div className="text-[10px] text-slate-400 mt-1 flex gap-2">
+                                <span>Media: {port.media_type || port.transceiver_type}</span>
+                                {port.transceiver_serial && <span>SN: {port.transceiver_serial}</span>}
+                                {port.transceiver_qualified !== undefined && (
+                                  <span className={port.transceiver_qualified ? 'text-emerald-600' : 'text-amber-600'}>
+                                    {port.transceiver_qualified ? 'Dell Qualified' : '3rd Party'}
+                                  </span>
+                                )}
+                                {port.neighbor && <span>Neighbor: {port.neighbor}</span>}
+                              </div>
+                            )}
                           </div>
                         ))}
                     </div>
                   </div>
                 )}
 
-                {/* 3. Config Snapshots Tab */}
-                {detailTab === 'snapshots' && (
-                  <div className="space-y-4">
-                    <span className="block text-[11px] font-bold text-slate-500">Historical Snapshot comparison</span>
-                    
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Baseline</label>
-                        <select 
-                          value={selectedSnap1}
-                          onChange={(e) => setSelectedSnap1(e.target.value)}
-                          className="w-full bg-slate-50 border text-xs p-2 rounded-lg outline-none cursor-pointer"
-                        >
-                          {activeSwitch.snapshots.map(s => (
-                            <option key={s.snapshot_id} value={s.snapshot_id}>
-                              {new Date(s.taken_at).toLocaleDateString()} - {s.taken_by} {s.is_baseline ? '(Baseline)' : ''}
-                            </option>
-                          ))}
-                        </select>
+                {/* 3. VLANs Tab */}
+                {detailTab === 'vlans' && (
+                  <div className="space-y-3">
+                    <span className="block text-[11px] font-bold text-slate-500">
+                      VLANs ({activeSwitch.vlans.length})
+                    </span>
+                    {activeSwitch.vlans.length === 0 ? (
+                      <p className="text-xs text-slate-400">No VLAN data collected yet.</p>
+                    ) : (
+                      <div className="max-h-[350px] overflow-y-auto space-y-2 pr-1">
+                        {activeSwitch.vlans.map((vlan) => (
+                          <div key={vlan.vlan_id} className="bg-slate-50 border rounded-lg p-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <span className="font-bold font-mono text-sm text-atlas-ink">VLAN {vlan.vlan_id}</span>
+                                <span className="text-xs text-slate-600 ml-2">{vlan.name}</span>
+                              </div>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                                vlan.status === 'active' 
+                                  ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' 
+                                  : 'bg-slate-100 text-slate-400 border border-slate-200'
+                              }`}>
+                                {vlan.status}
+                              </span>
+                            </div>
+                            {vlan.member_ports && vlan.member_ports.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {vlan.member_ports.map((port, i) => (
+                                  <span key={i} className="text-[10px] font-mono bg-white border rounded px-1.5 py-0.5 text-slate-600">
+                                    {port}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Compare With</label>
-                        <select 
-                          value={selectedSnap2}
-                          onChange={(e) => setSelectedSnap2(e.target.value)}
-                          className="w-full bg-slate-50 border text-xs p-2 rounded-lg outline-none cursor-pointer"
-                        >
-                          {activeSwitch.snapshots.map(s => (
-                            <option key={s.snapshot_id} value={s.snapshot_id}>
-                              {new Date(s.taken_at).toLocaleDateString()} - {s.taken_by}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    {renderConfigDiff()}
+                    )}
                   </div>
                 )}
 
-                {/* 5. Fabric & VLT Tab */}
-                {(detailTab as any) === 'fabric' && (
+                {/* 4. LAGs Tab */}
+                {detailTab === 'lags' && (
+                  <div className="space-y-3">
+                    <span className="block text-[11px] font-bold text-slate-500">
+                      Port-Channels / LAGs ({activeSwitch.lags.length})
+                    </span>
+                    {activeSwitch.lags.length === 0 ? (
+                      <p className="text-xs text-slate-400">No LAGs configured on this switch.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {activeSwitch.lags.map((lag) => (
+                          <div key={lag.lag_id} className="bg-slate-50 border rounded-lg p-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <span className="font-bold font-mono text-sm text-atlas-ink">{lag.lag_name}</span>
+                                <span className="text-xs text-slate-500 ml-2">{lag.protocol}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-slate-400 bg-white px-1.5 py-0.5 rounded border">{lag.lag_type}</span>
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                                  lag.status === 'up'
+                                    ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                                    : 'bg-rose-50 text-rose-600 border border-rose-200'
+                                }`}>
+                                  {lag.status}
+                                </span>
+                              </div>
+                            </div>
+                            {lag.member_ports && lag.member_ports.length > 0 && (
+                              <div className="mt-2 text-[10px] text-slate-500">
+                                <span className="font-semibold">Members:</span>{' '}
+                                {lag.member_ports.map((p, i) => (
+                                  <span key={i} className="font-mono bg-white border rounded px-1.5 py-0.5 mr-1">{p}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 5. Config Snapshots Tab */}
+                {detailTab === 'snapshots' && (
                   <div className="space-y-4">
-                    <FabricVltTab vlt={activeSwitch.vlt_status} />
+                    <div className="flex justify-between items-center">
+                      <span className="block text-[11px] font-bold text-slate-500">Historical Snapshot comparison</span>
+                      <button
+                        onClick={handleTakeSnapshot}
+                        disabled={takingSnapshot}
+                        className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        {takingSnapshot ? 'Taking...' : 'Take Snapshot'}
+                      </button>
+                    </div>
+
+                    {snapshotLoading ? (
+                      <p className="text-xs text-slate-400">Loading snapshots...</p>
+                    ) : activeSnapshots.length === 0 ? (
+                      <div className="text-center py-6">
+                        <p className="text-xs text-slate-400">No snapshots available for this switch.</p>
+                        <p className="text-[10px] text-slate-300 mt-1">Click "Take Snapshot" to capture the current running config.</p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Baseline</label>
+                            <select 
+                              value={selectedSnap1}
+                              onChange={(e) => setSelectedSnap1(e.target.value)}
+                              className="w-full bg-slate-50 border text-xs p-2 rounded-lg outline-none cursor-pointer"
+                            >
+                              {activeSnapshots.map(s => (
+                                <option key={s.snapshot_id} value={s.snapshot_id}>
+                                  {new Date(s.taken_at).toLocaleDateString()} - {s.taken_by}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Compare With</label>
+                            <select 
+                              value={selectedSnap2}
+                              onChange={(e) => setSelectedSnap2(e.target.value)}
+                              className="w-full bg-slate-50 border text-xs p-2 rounded-lg outline-none cursor-pointer"
+                            >
+                              {activeSnapshots.map(s => (
+                                <option key={s.snapshot_id} value={s.snapshot_id}>
+                                  {new Date(s.taken_at).toLocaleDateString()} - {s.taken_by}
+                                </option>
+                              ))}
+                              {activeSwitch.running_config && (
+                                <option value="__running__">Running Config (Live)</option>
+                              )}
+                            </select>
+                          </div>
+                        </div>
+
+                        {renderConfigDiff()}
+
+                        {/* Rollback Action */}
+                        {selectedSnap1 && (
+                          <div className="pt-2 border-t border-slate-100">
+                            {activeSwitch.lifecycle_status === 'drifted' ? (
+                              <div className="space-y-3">
+                                <div className="bg-amber-50 rounded-lg p-3 text-[11px] text-amber-700 flex gap-2 border border-amber-200">
+                                  <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+                                  <div>
+                                    <strong>Attention needed:</strong> Configuration drift detected. Rollback will restore the selected baseline snapshot configuration.
+                                  </div>
+                                </div>
+                                <button 
+                                  onClick={() => handleRollback(selectedSnap1)}
+                                  className="btn-danger w-full flex items-center justify-center gap-2 py-2.5"
+                                >
+                                  <RotateCcw className="w-4 h-4" />
+                                  <span>Rollback to Selected Snapshot</span>
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="bg-emerald-50 rounded-lg p-3.5 text-[11px] text-emerald-800 flex gap-2 border border-emerald-100">
+                                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                                <span>Switch is compliant. Select a drifted snapshot baseline to rollback if needed.</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Fabric & VLT Tab */}
+                {detailTab === 'fabric' && (
+                  <div className="space-y-4">
+                    <FabricVltTab vlt={activeSwitch.vlt ? {
+                      ...activeSwitch.vlt,
+                      domainId: activeSwitch.vlt.domainId ?? activeSwitch.vlt.domain_id ?? 1,
+                      switchId: activeSwitch.switch_id,
+                      peerSwitchId: activeSwitch.vlt.peer_switch_id || '',
+                      peerSwitchHostname: activeSwitch.vlt.peer_switch_hostname,
+                      peerLinkStatus: activeSwitch.vlt.peer_link_status,
+                      iclState: activeSwitch.vlt.icl_state,
+                      peerRoutingEnabled: activeSwitch.vlt.peer_routing_enabled,
+                      vrrpGroups: activeSwitch.vlt.vrrp_groups || [],
+                    } : null} />
                   </div>
                 )}
 
                 {/* STP Tab */}
-                {(detailTab as any) === 'stp' && (
+                {detailTab === 'stp' && (
                   <div className="space-y-4 text-xs">
                     <div className="bg-slate-50/50 border rounded-lg p-4">
                       <h3 className="text-xs font-bold text-slate-700 mb-3">Spanning Tree Status</h3>
                       <div className="space-y-2">
                         <div className="flex justify-between">
                           <span className="text-slate-400">STP State:</span>
-                          <span className="font-semibold text-slate-700">
-                            {activeSwitch.stp_status?.enabled ? "Enabled" : "Disabled"}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-400">STP Protocol:</span>
-                          <span className="font-semibold text-slate-700">{activeSwitch.stp_status?.protocol || "RSTP"}</span>
+                          <span className="font-semibold text-slate-700">Enabled (RSTP)</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-slate-400">Root Bridge:</span>
-                          <span className="font-semibold text-slate-700">{activeSwitch.stp_status?.root_bridge || "No"}</span>
+                          <span className="font-semibold text-slate-700">{activeSwitch.role === 'spine' ? 'Yes' : 'No'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Priority:</span>
+                          <span className="font-semibold text-slate-700">32768</span>
                         </div>
                       </div>
                     </div>
-
                     <div className="bg-slate-50/50 border rounded-lg p-4">
                       <h3 className="text-xs font-bold text-slate-700 mb-3">Blocked Ports</h3>
-                      {!activeSwitch.stp_status?.blocked_ports || activeSwitch.stp_status.blocked_ports.length === 0 ? (
-                        <p className="text-slate-400 text-xs">No blocked ports in STP domain.</p>
-                      ) : (
-                        <div className="max-h-[150px] overflow-y-auto space-y-1">
-                          {Array.from(new Set(activeSwitch.stp_status.blocked_ports)).map((port: any, idx: number) => (
-                            <div key={idx} className="p-1.5 bg-rose-50 border border-rose-100 rounded text-rose-700 font-mono text-[10px]">
-                              {port} (STP Blocking State)
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      <p className="text-slate-400 text-xs">No blocked ports in STP domain.</p>
                     </div>
                   </div>
                 )}
 
-                {/* 6. Hardware Tab */}
-                {(detailTab as any) === 'hardware' && (
+                {/* Hardware Tab */}
+                {detailTab === 'hardware' && (
                   <div className="space-y-4">
-                    <HardwareHealthTab items={getHardwareItems(activeSwitch)} />
+                    <HardwareHealthTab items={
+                      activeSwitch.hardware_components?.map(c => {
+                        const typeLabel: "PSU" | "Fan" | "Supervisor" | "Line Card" =
+                          c.component_type === 'psu' ? 'PSU' :
+                          c.component_type === 'fan_tray' || c.component_type === 'fan' ? 'Fan' :
+                          c.component_type === 'temperature' ? 'Supervisor' :
+                          'Supervisor';
+                        const extraInfo = [
+                          c.part_number ? `PN: ${c.part_number}` : '',
+                          c.ppid ? `PPID: ${c.ppid}` : '',
+                          c.service_tag ? `ST: ${c.service_tag}` : '',
+                          c.numeric_value != null ? `${c.numeric_value}` : '',
+                        ].filter(Boolean).join(' | ');
+                        return {
+                          slot: c.slot_label,
+                          type: typeLabel,
+                          status: c.status as any,
+                          detail: extraInfo ? `${c.detail} (${extraInfo})` : c.detail,
+                        };
+                      }) || []
+                    } />
                   </div>
                 )}
 
                 {/* Running Config Tab */}
-                {(detailTab as any) === 'config' && (
+                {detailTab === 'config' && (
                   <div className="space-y-3">
                     <span className="block text-[11px] font-bold text-slate-500">Live Config Snapshot Backup</span>
                     {activeSwitch.running_config ? (
@@ -764,85 +1007,7 @@ export const Switches: React.FC = () => {
                 )}
 
 
-                {/* 4. Rollback Tab */}
-                {detailTab === 'rollback' && (
-                  <div className="space-y-5">
-                    
-                    {/* Visual lifecycle track */}
-                    <div className="space-y-3">
-                      <span className="block text-[11px] font-bold text-slate-500">Switch Rollback Track</span>
-                      
-                      <div className="relative pl-6 space-y-4 border-l border-slate-200">
-                        {/* Step 1 */}
-                        <div className="relative">
-                          <span className="absolute -left-8 top-0.5 w-4 h-4 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center text-white text-[8px] font-bold">
-                            ✓
-                          </span>
-                          <div className="text-xs font-semibold text-slate-700">Discovered Raw</div>
-                          <p className="text-[10px] text-slate-400 leading-tight">Switch successfully scanned and registered via DHCP</p>
-                        </div>
-                        {/* Step 2 */}
-                        <div className="relative">
-                          <span className={`absolute -left-8 top-0.5 w-4 h-4 rounded-full border-2 border-white flex items-center justify-center text-white text-[8px] font-bold ${
-                            activeSwitch.lifecycle_status === 'compliant_active'
-                              ? 'bg-emerald-500'
-                              : 'bg-slate-300'
-                          }`}>
-                            {activeSwitch.lifecycle_status === 'compliant_active' ? '✓' : '2'}
-                          </span>
-                          <div className="text-xs font-semibold text-slate-700">Compliant Active</div>
-                          <p className="text-[10px] text-slate-400 leading-tight">Syncing telemetry logs and compliant status verified</p>
-                        </div>
-                        
-                        {/* Branch (Drifted) */}
-                        {activeSwitch.lifecycle_status === 'drifted' && (
-                          <div className="relative">
-                            <span className="absolute -left-8 top-0.5 w-4 h-4 rounded-full bg-atlas-coral border-2 border-white flex items-center justify-center text-white text-[8px] font-bold">
-                              !
-                            </span>
-                            <div className="text-xs font-semibold text-atlas-coral">Configuration Drifted</div>
-                            <p className="text-[10px] text-slate-400 leading-tight">MD5 checksum mismatch detected from last snapshot backup</p>
-                          </div>
-                        )}
 
-                        {/* Step 3 */}
-                        <div className="relative">
-                          <span className="absolute -left-8 top-0.5 w-4 h-4 rounded-full bg-slate-200 border-2 border-white flex items-center justify-center text-slate-400 text-[8px] font-bold">
-                            3
-                          </span>
-                          <div className="text-xs font-semibold text-slate-400">Continuous Stream Ingestion</div>
-                          <p className="text-[10px] text-slate-400 leading-tight">Real-time gNMI telemetry stream pipeline status</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Trigger Rollback Actions */}
-                    <div className="pt-2">
-                      {activeSwitch.lifecycle_status === 'drifted' ? (
-                        <div className="space-y-3">
-                          <div className="bg-amber-50 rounded-lg p-3 text-[11px] text-amber-700 flex gap-2 border border-amber-200">
-                            <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
-                            <div>
-                              <strong>Attention needed:</strong> Configuration checksum drift detected. Triggering a rollback will restore this switch back to its baseline snapshot configuration.
-                            </div>
-                          </div>
-                          <button 
-                            onClick={() => handleRollback(activeSwitch.snapshots[0].snapshot_id)}
-                            className="btn-danger w-full flex items-center justify-center gap-2 py-2.5"
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                            <span>Trigger Configuration Rollback</span>
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="bg-emerald-50 rounded-lg p-3.5 text-[11px] text-emerald-800 flex gap-2 border border-emerald-100">
-                          <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>This switch is currently fully compliant. No rollback actions are required.</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
             </Card>
           ) : (
@@ -855,187 +1020,29 @@ export const Switches: React.FC = () => {
 
       </div>
 
+      {/* Add / Edit / Delete Modals */}
+      <AddSwitchModal
+        open={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSaved={handleSwitchSaved}
+      />
+      <AddSwitchModal
+        open={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        onSaved={handleSwitchSaved}
+        editSwitch={activeSwitch}
+      />
+      <DeleteConfirmModal
+        open={showDeleteModal}
+        hostname={activeSwitch?.hostname || ''}
+        switchId={activeSwitch?.switch_id || ''}
+        onClose={() => setShowDeleteModal(false)}
+        onDeleted={handleSwitchDeleted}
+      />
+
     </div>
   );
 };
-
-// Seed fallback data
-function getMockInterfaces(): SwitchInterface[] {
-  return [
-    { name: 'ethernet1/1', status: 'up', speed_duplex: '10G / Full', vlan: '100', description: 'Uplink Core Fabric' },
-    { name: 'ethernet1/2', status: 'up', speed_duplex: '10G / Full', vlan: '100', description: 'Uplink Core Fabric 2' },
-    { name: 'ethernet1/3', status: 'down', speed_duplex: 'Auto', vlan: '200', description: 'Workstation Segment' },
-    { name: 'ethernet1/4', status: 'up', speed_duplex: '1G / Full', vlan: '10', description: 'OOB Management Gateway' },
-    { name: 'ethernet1/5', status: 'admin-down', speed_duplex: 'Auto', vlan: '1', description: 'Unused Host Port' },
-  ];
-}
-
-function getMockSnapshots(hostname: string): ConfigSnapshot[] {
-  return [
-    {
-      snapshot_id: `snap-${hostname}-1`,
-      taken_at: '2026-06-20T10:00:00Z',
-      taken_by: 'Platform Admin',
-      config_hash: '9a8d7c6b5a4f3e2d1c',
-      raw_config: `hostname ${hostname}\nntp server 192.168.100.1\ndns server 8.8.8.8\naaa authentication login default local\ninterface ethernet1/1\n  no shutdown\n  switchport trunk allowed vlan 100`,
-      is_baseline: true
-    },
-    {
-      snapshot_id: `snap-${hostname}-2`,
-      taken_at: '2026-06-25T14:30:00Z',
-      taken_by: 'Tenant Operator',
-      config_hash: '1b2c3d4e5f6a7b8c9d',
-      raw_config: `hostname ${hostname}\nntp server 10.250.10.1\ndns server 8.8.8.8\naaa authentication login default local\ninterface ethernet1/1\n  no shutdown\n  switchport trunk allowed vlan 100,200\ninterface ethernet1/5\n  shutdown`
-    }
-  ];
-}
-
-function getOfflineSwitches(): SwitchDevice[] {
-  return [
-    {
-      switch_id: 'sw-01',
-      hostname: 'spine-switch-01',
-      management_ip: '172.20.20.11',
-      vendor: 'nokia',
-      role: 'spine',
-      lifecycle_status: 'compliant_active',
-      model: '7220 IXR-D3',
-      os_version: 'SR Linux 23.10.1',
-      location: 'Casablanca, Morocco',
-      serial_number: 'SN-NOKIA-SPINE1',
-      mac_address: '00:11:22:AA:BB:CC',
-      last_seen: 'Active now',
-      interfaces: getMockInterfaces(),
-      snapshots: getMockSnapshots('spine-switch-01'),
-      hardware_health: 'ok' as any
-    },
-    {
-      switch_id: 'sw-02',
-      hostname: 'spine-switch-03',
-      management_ip: '172.20.20.12',
-      vendor: 'nokia',
-      role: 'spine',
-      lifecycle_status: 'drifted',
-      model: '7220 IXR-D3',
-      os_version: 'SR Linux 23.10.1',
-      location: 'Casablanca, Morocco',
-      serial_number: 'SN-NOKIA-SPINE3',
-      mac_address: '00:11:22:AA:BB:DD',
-      last_seen: 'Active now',
-      interfaces: getMockInterfaces(),
-      snapshots: getMockSnapshots('spine-switch-03'),
-      hardware_health: 'warning' as any
-    },
-    {
-      switch_id: 'sw-03',
-      hostname: 'leaf-switch-01',
-      management_ip: '10.250.60.101',
-      vendor: 'dell',
-      role: 'leaf',
-      lifecycle_status: 'compliant_active',
-      model: 'S5248F-ON',
-      os_version: 'SmartFabric OS10',
-      location: 'Agadir, Morocco',
-      serial_number: 'SN-DELL-LEAF1',
-      mac_address: '00:50:56:AB:CD:10',
-      last_seen: 'Active now',
-      interfaces: getMockInterfaces(),
-      snapshots: getMockSnapshots('leaf-switch-01'),
-      hardware_health: 'ok' as any
-    },
-    {
-      switch_id: 'sw-04',
-      hostname: 'leaf-switch-02',
-      management_ip: '10.250.60.102',
-      vendor: 'dell',
-      role: 'leaf',
-      lifecycle_status: 'drifted',
-      model: 'S5248F-ON',
-      os_version: 'SmartFabric OS10',
-      location: 'Agadir, Morocco',
-      serial_number: 'SN-DELL-LEAF2',
-      mac_address: '00:50:56:AB:CD:11',
-      last_seen: 'Active now',
-      interfaces: getMockInterfaces(),
-      snapshots: getMockSnapshots('leaf-switch-02'),
-      hardware_health: 'critical' as any
-    },
-    {
-      switch_id: 'sw-05',
-      hostname: 'leaf-switch-03',
-      management_ip: '10.250.10.130',
-      vendor: 'cisco',
-      role: 'leaf',
-      lifecycle_status: 'discovered',
-      model: 'Catalyst 9300',
-      os_version: 'IOS XE 17.9.4',
-      location: 'Casablanca, Morocco',
-      serial_number: 'SN-CISCO-LEAF3',
-      mac_address: '00:E7:8E:B1:58:AA',
-      last_seen: '3m ago',
-      interfaces: getMockInterfaces(),
-      snapshots: getMockSnapshots('leaf-switch-03'),
-      hardware_health: 'unknown' as any
-    }
-  ];
-}
-
-export function getMockVlt(switchId: string) {
-  const data: Record<string, any> = {
-    "sw-01": {
-      id: "vlt-1",
-      domainId: 1,
-      switchId: "sw-01",
-      peerSwitchId: "sw-02",
-      peerSwitchHostname: "spine-switch-03",
-      peerLinkStatus: "up",
-      iclState: "up",
-      peerRoutingEnabled: true,
-      vrrpGroups: [{ groupId: 10, vip: "172.20.20.254", state: "master" }]
-    },
-    "sw-02": {
-      id: "vlt-1",
-      domainId: 1,
-      switchId: "sw-02",
-      peerSwitchId: "sw-01",
-      peerSwitchHostname: "spine-switch-01",
-      peerLinkStatus: "up",
-      iclState: "down",
-      peerRoutingEnabled: true,
-      vrrpGroups: [{ groupId: 10, vip: "172.20.20.254", state: "backup" }]
-    }
-  };
-  return data[switchId] || null;
-}
-
-export function getMockHardware(switchId: string) {
-  const data: Record<string, any[]> = {
-    "sw-01": [
-      { slot: "PSU-1", type: "PSU", status: "ok", detail: "AC 750W, input OK" },
-      { slot: "PSU-2", type: "PSU", status: "ok", detail: "AC 750W, input OK" },
-      { slot: "Fan-1", type: "Fan", status: "ok", detail: "9800 RPM" },
-      { slot: "Fan-2", type: "Fan", status: "ok", detail: "9750 RPM" }
-    ],
-    "sw-02": [
-      { slot: "PSU-1", type: "PSU", status: "critical", detail: "AC input lost" },
-      { slot: "PSU-2", type: "PSU", status: "ok", detail: "AC 750W, input OK" },
-      { slot: "Fan-1", type: "Fan", status: "warning", detail: "6200 RPM (below threshold)" },
-      { slot: "Fan-2", type: "Fan", status: "ok", detail: "9700 RPM" }
-    ],
-    "sw-03": [
-      { slot: "PSU-1", type: "PSU", status: "ok", detail: "AC 750W, input OK" },
-      { slot: "Fan-1", type: "Fan", status: "ok", detail: "9500 RPM" }
-    ],
-    "sw-04": [
-      { slot: "PSU-1", type: "PSU", status: "critical", detail: "Component fail" },
-      { slot: "Fan-1", type: "Fan", status: "ok", detail: "9400 RPM" }
-    ]
-  };
-  return data[switchId] || [
-    { slot: "PSU-1", type: "PSU", status: "ok", detail: "AC 750W, input OK" },
-    { slot: "Fan-1", type: "Fan", status: "ok", detail: "9500 RPM" }
-  ];
-}
 
 export default Switches;
 

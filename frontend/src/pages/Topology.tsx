@@ -34,13 +34,13 @@ interface EdgeData {
 
 // URL-encoded SVG asset templates for dynamic multi-vendor icons
 const VENDOR_ICONS: Record<string, string> = {
-  dell: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#007db8" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="23" fill="#ffffff" font-size="7.5" font-family="Arial, Helvetica, sans-serif" font-weight="bold" text-anchor="middle">DELL</text></svg>')}`,
+  dell: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#007db8" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="20" fill="#ffffff" font-size="8" font-family="Arial, Helvetica, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">DELL</text></svg>')}`,
   cisco: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#0b5cad" stroke="#ffffff" stroke-width="1.5"/><path d="M10 20v-4m3 6v-8m3 10V10m3 12v-14m3 16V6m3 14v-10m3 12v-8m3 6v-4" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round"/></svg>')}`,
-  juniper: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#6c2e9c" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="25" fill="#ffffff" font-size="14" font-family="Times New Roman, serif" font-weight="bold" text-anchor="middle">J</text></svg>')}`,
+  juniper: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#6c2e9c" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="20" fill="#ffffff" font-size="14" font-family="Times New Roman, serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">J</text></svg>')}`,
   fortinet: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#c0392b" stroke="#ffffff" stroke-width="1.5"/><path d="M12 14h16v3l-8 7-8-7z" fill="#ffffff"/></svg>')}`,
   huawei: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#27ae60" stroke="#ffffff" stroke-width="1.5"/><circle cx="20" cy="14" r="2.5" fill="#ffffff"/><circle cx="14" cy="24" r="2.5" fill="#ffffff"/><circle cx="26" cy="24" r="2.5" fill="#ffffff"/><line x1="20" y1="14" x2="14" y2="24" stroke="#ffffff" stroke-width="1.2"/><line x1="20" y1="14" x2="26" y2="24" stroke="#ffffff" stroke-width="1.2"/><line x1="14" y1="24" x2="26" y2="24" stroke="#ffffff" stroke-width="1.2"/></svg>')}`,
-  f5: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#e74c3c" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="24" fill="#ffffff" font-size="12" font-family="Impact, Arial Black, sans-serif" font-style="italic" text-anchor="middle">f5</text></svg>')}`,
-  nokia: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#0f3b7d" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="23.5" fill="#ffffff" font-size="5.5" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle">NOKIA</text></svg>')}`,
+  f5: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#e74c3c" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="20" fill="#ffffff" font-size="12" font-family="Impact, Arial Black, sans-serif" font-style="italic" text-anchor="middle" dominant-baseline="middle">f5</text></svg>')}`,
+  nokia: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#0f3b7d" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="20" fill="#ffffff" font-size="6" font-family="Arial, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">NOKIA</text></svg>')}`,
   forcepoint: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#2c3e50" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="26" fill="#2ecc71" font-size="14" font-family="Arial Black, sans-serif" font-weight="extrabold" text-anchor="middle">F</text></svg>')}`,
   generic: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#34495e" stroke="#ffffff" stroke-width="1.5"/><path d="M12 16h16M12 24h16M16 12l-4 4 4 4M24 20l4 4-4 4" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>')}`
 };
@@ -139,8 +139,15 @@ export const Topology: React.FC = () => {
   // Handle dynamic edge updates on showInterfaces state change
   useEffect(() => {
     if (cyRef.current) {
+      // When ports toggle is OFF: always hide labels
+      // When ports toggle is ON: labels still only show on hover (handled in style selectors)
       cyRef.current.style()
         .selector('edge')
+        .style({
+          'source-label': '',
+          'target-label': '',
+        })
+        .selector('edge:hover')
         .style({
           'source-label': showInterfaces ? 'data(sourcePort)' : '',
           'target-label': showInterfaces ? 'data(targetPort)' : '',
@@ -156,7 +163,7 @@ export const Topology: React.FC = () => {
     // Filter elements
     const activeNodes = nodes.filter(n => filterState === 'ALL' || n.status.toLowerCase() === filterState.toLowerCase());
     const activeNodeIds = new Set(activeNodes.map(n => n.id));
-    const activeEdges = edges.filter(e => {
+    const rawEdges = edges.filter(e => {
       const isAttached = activeNodeIds.has(e.source) && activeNodeIds.has(e.target);
       if (!isAttached) return false;
       if (!showMgmtLinks) {
@@ -165,6 +172,20 @@ export const Topology: React.FC = () => {
         const labelLower = (e.label || '').toLowerCase();
         if (srcPort.includes('mgmt') || dstPort.includes('mgmt') || labelLower.includes('mgmt')) return false;
       }
+      return true;
+    });
+
+    // Deduplicate bidirectional edges — DB stores A→B and B→A for each physical link.
+    // Keep only one canonical edge per unique (node-pair, port-pair) combination.
+    const seenEdgePairs = new Set<string>();
+    const activeEdges = rawEdges.filter(e => {
+      // Sort the two node IDs so A→B and B→A produce the same key
+      const nodePair = [e.source, e.target].sort().join('||');
+      // Sort port names so (eth1/1, eth-1/1) and (eth-1/1, eth1/1) match
+      const portPair = [e.sourcePort || '', e.targetPort || ''].sort().join('||');
+      const key = `${nodePair}__${portPair}`;
+      if (seenEdgePairs.has(key)) return false;
+      seenEdgePairs.add(key);
       return true;
     });
 
@@ -286,31 +307,39 @@ export const Topology: React.FC = () => {
         {
           selector: 'edge',
           style: {
-            'width': 2.5,
+            'width': 1.2,
             'line-color': 'data(color)',
             'target-arrow-shape': 'none',
             'curve-style': 'bezier',
-            'opacity': 0.8,
-            'label': 'data(protocol)',
-            'font-size': '7px',
-            'color': '#94a3b8',
+            'opacity': 0.65,
+            'label': '',
+            // Port labels hidden by default — shown only on hover
+            'source-label': '',
+            'target-label': '',
+            'font-size': '9px',
+            'color': '#f1f5f9',
             'text-background-opacity': 0,
-            'source-label': showInterfaces ? 'data(sourcePort)' : '',
-            'target-label': showInterfaces ? 'data(targetPort)' : '',
-            'source-text-offset': 28,
-            'target-text-offset': 28,
+            'source-text-offset': 40,
+            'target-text-offset': 40,
             'font-family': "'Sora', 'Inter', sans-serif",
-            'font-weight': 'normal',
+            'font-weight': '600',
             'edge-text-rotation': 'autorotate',
             'transition-property': 'width, opacity',
-            'transition-duration': 0.2
+            'transition-duration': 0.15
           }
         },
         {
           selector: 'edge:hover',
           style: {
-            'width': 4.5,
-            'opacity': 1.0
+            'width': 3,
+            'opacity': 1.0,
+            // Show port labels only on hover when Ports toggle is active
+            'source-label': showInterfaces ? 'data(sourcePort)' : '',
+            'target-label': showInterfaces ? 'data(targetPort)' : '',
+            'text-background-opacity': 0.85,
+            'text-background-color': '#0f172a',
+            'text-background-padding': '3px',
+            'text-background-shape': 'roundrectangle',
           }
         }
       ] as any,

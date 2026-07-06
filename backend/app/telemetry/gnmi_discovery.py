@@ -1,6 +1,10 @@
 import json
 import uuid
 import datetime
+_original_print = print
+def print(*args, **kwargs):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _original_print(f"[{timestamp}]", *args, **kwargs)
 import socket
 import time
 import re
@@ -102,7 +106,7 @@ def parse_dell_console_output(s, command):
                 break
         except socket.timeout:
             break
-    return out
+    return out.replace('\x00', '')
 
 def discover_dell_switch(sw, db: Session):
     """
@@ -113,7 +117,7 @@ def discover_dell_switch(sw, db: Session):
     s = clean_and_login_dell_console(sw.management_ip)
     if not s:
         print(f"[Dell Discovery] Could not open console session for {sw.hostname}")
-        return []
+        return [], []
 
     interfaces = []
     lldp_links = []
@@ -204,6 +208,120 @@ def discover_dell_switch(sw, db: Session):
                     "remote_chassis": rem_chassis
                 })
                 
+        # 4. Retrieve VLT status
+        vlt_out = parse_dell_console_output(s, "show vlt")
+        vlt_status = {
+            "configured": False,
+            "domain_id": "N/A",
+            "role": "N/A",
+            "peer_status": "N/A",
+            "heartbeat": "N/A"
+        }
+        if vlt_out and "Domain ID" in vlt_out:
+            vlt_status["configured"] = True
+            domain_match = re.search(r'Domain ID\s*:\s*(\d+)', vlt_out, re.IGNORECASE)
+            if domain_match:
+                vlt_status["domain_id"] = domain_match.group(1)
+            role_match = re.search(r'Role\s*:\s*(\S+)', vlt_out, re.IGNORECASE)
+            if role_match:
+                vlt_status["role"] = role_match.group(1)
+            peer_match = re.search(r'Peer-link status\s*:\s*(\S+)', vlt_out, re.IGNORECASE)
+            if peer_match:
+                vlt_status["peer_status"] = peer_match.group(1)
+            hb_match = re.search(r'Heartbeat status\s*:\s*(\S+)', vlt_out, re.IGNORECASE)
+            if hb_match:
+                vlt_status["heartbeat"] = hb_match.group(1)
+        sw.vlt_status = json.dumps(vlt_status)
+
+        # 5. Retrieve Spanning-Tree status
+        stp_out = parse_dell_console_output(s, "show spanning-tree brief")
+        stp_status = {
+            "enabled": False,
+            "protocol": "RSTP",
+            "root_bridge": "No",
+            "blocked_ports": []
+        }
+        if stp_out:
+            if "Spanning tree enabled" in stp_out or "Spanning-tree" in stp_out or "rstp" in stp_out.lower():
+                stp_status["enabled"] = True
+            if "this bridge is the root" in stp_out.lower() or "is root" in stp_out.lower():
+                stp_status["root_bridge"] = "Yes"
+            
+            # Look for blocked ports in table lines (containing BLK or Blocking)
+            blocked = []
+            for line in stp_out.splitlines():
+                if "BLK" in line or "Blocking" in line:
+                    parts = line.split()
+                    if parts:
+                        blocked.append(parts[0])
+            stp_status["blocked_ports"] = blocked
+        sw.stp_status = json.dumps(stp_status)
+
+        # 6. Retrieve Environment Status
+        env_out = parse_dell_console_output(s, "show environment")
+        # Fall back to sys_out if show environment is empty
+        env_status = {
+            "power_supplies": [],
+            "fans": [],
+            "temperature": "Normal"
+        }
+        
+        # Parse Power Supplies
+        psu_lines = []
+        in_psu = False
+        for line in sys_out.splitlines() + env_out.splitlines():
+            if "-- Power Supplies --" in line or "Power Supplies" in line:
+                in_psu = True
+                continue
+            if in_psu and "--" in line:
+                continue
+            if in_psu and not line.strip():
+                in_psu = False
+            if in_psu:
+                psu_lines.append(line)
+                
+        for line in psu_lines:
+            parts = line.split()
+            if len(parts) >= 2 and parts[0].isdigit():
+                env_status["power_supplies"].append({
+                    "id": parts[0],
+                    "status": parts[1]
+                })
+
+        # Parse Fans
+        fan_lines = []
+        in_fan = False
+        for line in sys_out.splitlines() + env_out.splitlines():
+            if "-- Fan Status --" in line or "Fan Status" in line:
+                in_fan = True
+                continue
+            if in_fan and "--" in line:
+                continue
+            if in_fan and not line.strip():
+                in_fan = False
+            if in_fan:
+                fan_lines.append(line)
+                
+        for line in fan_lines:
+            parts = line.split()
+            if len(parts) >= 2 and parts[0].isdigit():
+                env_status["fans"].append({
+                    "id": parts[0],
+                    "status": parts[1]
+                })
+        
+        # Parse Temperature
+        temp_match = re.search(r'(temp|temperature)\s*:\s*(\S+)', env_out + sys_out, re.IGNORECASE)
+        if temp_match:
+            env_status["temperature"] = temp_match.group(2)
+            
+        sw.environment_status = json.dumps(env_status)
+
+        # 7. Pull running config snapshot
+        run_config = parse_dell_console_output(s, "show running-configuration")
+        if run_config and len(run_config) > 200:
+            sw.running_config = run_config
+
         # Update Switch ports counters
         sw.ports_all = ports_all
         sw.ports_up = ports_up
@@ -440,6 +558,75 @@ def run_gnmi_discovery(db: Session):
         remote_sw = None
         if remote_name:
             remote_sw = host_to_sw.get(remote_name)
+            # Auto-create switch record if discovered via LLDP but not yet in DB
+            if remote_sw is None and remote_name:
+                remote_ip = l.get("remote_ip", "")
+                print(f"[DISCOVERY] Auto-creating new switch from LLDP: {remote_name} (ip={remote_ip})")
+                import uuid as _uuid
+                # Determine vendor from remote system description if available
+                remote_desc = l.get("remote_desc", "").lower()
+                if "nokia" in remote_desc or "srl" in remote_desc or "7220" in remote_desc:
+                    vendor = "nokia"
+                    model = "7220 IXR-D2L"
+                    os_version = "v26.3.2"
+                elif "dell" in remote_desc or "os10" in remote_desc or "ftos" in remote_desc:
+                    vendor = "dell_os10"
+                    model = "S5248F-ON"
+                    os_version = "OS10 10.5.4"
+                else:
+                    vendor = "unknown"
+                    model = "Unknown"
+                    os_version = "Unknown"
+
+                # Determine role from name
+                role = "spine" if "spine" in remote_name.lower() else "leaf"
+
+                # Get fabric_id from local switch
+                fabric_id = local_sw.fabric_id
+
+                # Generate a unique loopback IP based on UUID (just use a high range)
+                new_uuid = _uuid.uuid4()
+                loopback = f"10.200.99.{abs(hash(remote_name)) % 200 + 1}"
+                vtep = f"10.250.99.{abs(hash(remote_name)) % 200 + 1}"
+
+                new_sw = models.Switch(
+                    switch_id=new_uuid,
+                    fabric_id=fabric_id,
+                    hostname=remote_name,
+                    management_ip=remote_ip or f"0.0.0.{abs(hash(remote_name)) % 200 + 1}",
+                    vendor=vendor,
+                    role=role,
+                    local_bgp_asn=65000 + abs(hash(remote_name)) % 100,
+                    loopback_0_ip=loopback,
+                    lifecycle_status="discovered",
+                    model=model,
+                    os_version=os_version,
+                    status="Up",
+                    serial_number="",
+                    location="Auto-discovered",
+                    device_type="Switch",
+                    os_type="IOS-XE",
+                    client_tenant=local_sw.client_tenant,
+                    credentials_status="Unknown",
+                    ports_up=0,
+                    ports_all=0,
+                    chassis_status="Unknown",
+                )
+                # Avoid duplicate loopback_0_ip conflicts
+                existing_loopback = db.query(models.Switch).filter(
+                    models.Switch.loopback_0_ip == loopback
+                ).first()
+                if not existing_loopback:
+                    db.add(new_sw)
+                    try:
+                        db.commit()
+                        remote_sw = new_sw
+                        host_to_sw[remote_name] = remote_sw
+                        ip_to_sw[new_sw.management_ip] = remote_sw
+                        print(f"[DISCOVERY] Auto-created switch: {remote_name}")
+                    except Exception as e:
+                        db.rollback()
+                        print(f"[DISCOVERY] Failed to auto-create {remote_name}: {e}")
             
         if local_sw and remote_sw:
             # Format a sorted key to identify unique edge

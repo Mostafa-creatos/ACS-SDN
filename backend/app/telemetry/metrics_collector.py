@@ -16,7 +16,7 @@ class GnmiTelemetryCollector:
         self.session_factory = db_session_factory
         self._is_running = False
 
-    async def collect_switch_metrics(self):
+    def collect_switch_metrics(self):
         """
         Polls metrics from all switches and writes them to the DB.
         If switches are unreachable, does not write telemetry metrics (disables randomized fallbacks).

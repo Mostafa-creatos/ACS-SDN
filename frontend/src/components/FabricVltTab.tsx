@@ -31,7 +31,7 @@ export function FabricVltTab({ vlt }: { vlt: VltDomain | null }) {
     );
   }
 
-  const isSplitBrainRisk = vlt.iclState === "down";
+  const isSplitBrainRisk = (vlt.iclState ?? vlt.icl_state) === "down";
 
   return (
     <div className="space-y-4">
@@ -49,22 +49,22 @@ export function FabricVltTab({ vlt }: { vlt: VltDomain | null }) {
         <div className="grid grid-cols-2 gap-4 text-xs">
           <div>
             <p className="text-slate-400 mb-1">Peer switch</p>
-            <p className="font-semibold text-slate-700">{vlt.peerSwitchHostname}</p>
+            <p className="font-semibold text-slate-700">{vlt.peerSwitchHostname ?? vlt.peer_switch_hostname}</p>
           </div>
           <div>
             <p className="text-slate-400 mb-1">Peer routing</p>
-            <p className="font-semibold text-slate-700">{vlt.peerRoutingEnabled ? "Enabled" : "Disabled"}</p>
+            <p className="font-semibold text-slate-700">{(vlt.peerRoutingEnabled ?? vlt.peer_routing_enabled) ? "Enabled" : "Disabled"}</p>
           </div>
         </div>
         <div className="mt-4 flex flex-col gap-2 border-t pt-3">
-          <LinkStateBadge state={vlt.peerLinkStatus} label="Peer link" />
-          <LinkStateBadge state={vlt.iclState} label="ICL (inter-chassis link)" />
+          <LinkStateBadge state={vlt.peerLinkStatus ?? vlt.peer_link_status} label="Peer link" />
+          <LinkStateBadge state={vlt.iclState ?? vlt.icl_state} label="ICL (inter-chassis link)" />
         </div>
       </div>
 
       <div className="bg-slate-50/50 border rounded-lg p-4">
         <h3 className="text-xs font-bold text-slate-700 mb-3">VRRP Groups</h3>
-        {vlt.vrrpGroups.length === 0 ? (
+        {(vlt.vrrpGroups ?? vlt.vrrp_groups).length === 0 ? (
           <p className="text-xs text-slate-400">No VRRP groups configured on this switch.</p>
         ) : (
           <table className="w-full text-xs">
@@ -76,7 +76,7 @@ export function FabricVltTab({ vlt }: { vlt: VltDomain | null }) {
               </tr>
             </thead>
             <tbody>
-              {vlt.vrrpGroups.map((g) => (
+              {(vlt.vrrpGroups ?? vlt.vrrp_groups).map((g: { groupId: number; vip: string; state: "master" | "backup" }) => (
                 <tr key={g.groupId} className="border-b border-slate-100 last:border-0">
                   <td className="py-2 text-slate-600 font-mono">{g.groupId}</td>
                   <td className="py-2 text-slate-600 font-mono">{g.vip}</td>

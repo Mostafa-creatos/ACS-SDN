@@ -9,8 +9,24 @@ const CONFIG: Record<HealthStatus, { icon: typeof CheckCircle2; color: string; l
   unknown: { icon: HelpCircle, color: "text-slate-400", label: "Hardware Unknown" }
 };
 
-export function HardwareHealthIcon({ status }: { status: HealthStatus }) {
-  const cfg = CONFIG[status];
+function normalizeStatus(status: any): HealthStatus {
+  if (!status) return "unknown";
+  const s = String(status).toLowerCase().trim();
+  if (["ok", "up", "active", "normal", "ready", "healthy"].includes(s)) {
+    return "ok";
+  }
+  if (["warning", "warn", "alert", "minor"].includes(s)) {
+    return "warning";
+  }
+  if (["critical", "down", "fail", "failed", "fault", "error", "major"].includes(s)) {
+    return "critical";
+  }
+  return "unknown";
+}
+
+export function HardwareHealthIcon({ status }: { status: any }) {
+  const norm = normalizeStatus(status);
+  const cfg = CONFIG[norm] || CONFIG.unknown;
   const Icon = cfg.icon;
   return (
     <span title={cfg.label} aria-label={cfg.label}>
@@ -19,8 +35,9 @@ export function HardwareHealthIcon({ status }: { status: HealthStatus }) {
   );
 }
 
-export function HardwareHealthBadge({ status }: { status: HealthStatus }) {
-  const cfg = CONFIG[status];
+export function HardwareHealthBadge({ status }: { status: any }) {
+  const norm = normalizeStatus(status);
+  const cfg = CONFIG[norm] || CONFIG.unknown;
   const Icon = cfg.icon;
   return (
     <span className={clsx("inline-flex items-center gap-1.5 text-xs font-semibold", cfg.color)}>
