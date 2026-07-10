@@ -1,4 +1,5 @@
 import datetime
+import os
 import uuid
 import re
 from sqlalchemy.orm import Session
@@ -53,13 +54,21 @@ class GnmiTelemetryCollector:
                     except Exception as e:
                         print(f"[Telemetry Nokia] Failed to collect metrics for {sw.hostname}: {e}")
                 
-                # 2. Dell Switch Ingestion (Console socket)
+                # 2. Dell Switch Ingestion (SSH)
                 elif sw.vendor.lower() == "dell_os10":
                     try:
-                        s = clean_and_login_dell_console(sw.management_ip)
-                        if s:
-                            out = parse_dell_console_output(s, "show interface")
-                            s.close()
+                        from ..drivers.dell_os10_collector import DellOS10Collector
+                        ssh_user = os.environ.get("DELL_SSH_USERNAME", "admin")
+                        ssh_pass = os.environ.get("DELL_SSH_PASSWORD", "admin")
+                        ssh_port = int(os.environ.get("DELL_SSH_PORT", "22"))
+                        with DellOS10Collector(
+                            host=sw.management_ip,
+                            username=ssh_user,
+                            password=ssh_pass,
+                            port=5000,
+                            use_ssh=False,
+                        ) as collector:
+                            out = collector._send_command("show interface")
                             
                             # Parse output sections by interface
                             sections = re.split(r'(?i)ethernet\s+(\d+/\d+/\d+)\s+is', out)

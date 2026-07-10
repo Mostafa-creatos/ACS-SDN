@@ -83,10 +83,12 @@ export interface DellSwitchDetails {
   vendor: string;
   role: string;
   lifecycle_status: string;
+  configuration_drift_category?: string | null;
   model: string;
   os_version: string;
   status: string;
   uptime: string;
+  last_successful_sync?: string;
   serial_number: string;
   service_tag: string;
   part_number: string;

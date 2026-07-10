@@ -1,0 +1,41 @@
+
+sshpass -p NokiaSrl1! ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null admin@172.20.20.11
+telnet 172.20.20.10 5000
+telnet 172.20.20.13 5000
+ssh -t -i "$env:USERPROFILE\.ssh\id_rsa" mostafafaouzi89@34.90.176.247 "docker exec -it clab-sdn-fabric-dell-spines-spine-01 telnet 127.0.0.1 5000"
+
+Method 1: Check Live Background Operations (Logs)
+docker logs --tail 40 sdn_controller_app
+
+Method 2: Inspect Database State
+Check the switch count (should be 7)
+docker exec -it sdn_postgres_dev psql -U sdn_admin -d sdn_controller -c "SELECT hostname, vendor, role, lifecycle_status FROM switches;"
+Check active topology links
+docker exec -it sdn_postgres_dev psql -U sdn_admin -d sdn_controller -c "SELECT local_switch, local_port, remote_switch, remote_port, state FROM topology_edges;"
+
+Test API Endpoints Directly (CLI/cURL)
+1- Get an Authentication Token:
+curl -k -X POST https://34.90.176.247:8000/api/v5/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "admin_password_123!"}'
+2-Query Switch Inventory:
+curl -k -X GET https://34.90.176.247:8000/api/v5/visibility/inventory \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsInVzZXJfaWQiOiI0MzI2MGRhOC1lNWViLTQyNzgtOTBjZS1mMzNlYWEyYzIyMDkiLCJ1c2VybmFtZSI6ImFkbWluIiwicm9sZSI6IlBsYXRmb3JtIEFkbWluIiwidGVuYW50X2lkIjpudWxsfQ.oeqsELNArE0U8HtRWyXclZh2WCQ5A40aoU7Li343K9w"
+
+3-Query Topology Edges:
+curl -k -X GET https://34.90.176.247:8000/api/v5/topology/graph -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsInVzZXJfaWQiOiI0MzI2MGRhOC1lNWViLTQyNzgtOTBjZS1mMzNlYWEyYzIyMDkiLCJ1c2VybmFtZSI6ImFkbWluIiwicm9sZSI6IlBsYXRmb3JtIEFkbWluIiwidGVuYW50X2lkIjpudWxsfQ.oeqsELNArE0U8HtRWyXclZh2WCQ5A40aoU7Li343K9w"
+
+
+
+
+
+ssh -i ~/.ssh/id_rsa mostafafaouzi89@34.90.176.247
+# See all active (currently executing) tasks
+docker exec sdn_celery_worker celery -A app.workers.celery_app inspect active
+# See tasks waiting in the queue (reserved/scheduled)
+docker exec sdn_celery_worker celery -A app.workers.celery_app inspect reserved
+docker exec sdn_celery_worker celery -A app.workers.celery_app inspect scheduled
+# See registered task types
+docker exec sdn_celery_worker celery -A app.workers.celery_app inspect registered
+# Check worker stats (concurrency, pool, etc.)
+docker exec sdn_celery_worker celery -A app.workers.celery_app inspect stats

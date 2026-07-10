@@ -63,6 +63,8 @@ class DellOS10Collector:
                 username=self.username,
                 password=self.password,
                 timeout=self.connect_timeout,
+                banner_timeout=30,
+                auth_timeout=30,
                 look_for_keys=False,
                 allow_agent=False,
             )
@@ -95,12 +97,17 @@ class DellOS10Collector:
         """Read until the channel goes silent (up to *timeout* seconds)."""
         buf = ""
         deadline = time.time() + timeout
+        if self._channel:
+            self._channel.settimeout(0.2)
         while time.time() < deadline:
             try:
                 chunk = self._recv(4096)
                 if not chunk:
                     break
                 buf += chunk
+                stripped = buf.strip()
+                if stripped.endswith("#") or stripped.endswith(">") or "login:" in stripped or "Password:" in stripped:
+                    break
             except socket.timeout:
                 break
             except Exception:
@@ -125,12 +132,17 @@ class DellOS10Collector:
         time.sleep(0.3)
         out = ""
         deadline = time.time() + timeout
+        if self._channel:
+            self._channel.settimeout(0.2)
         while time.time() < deadline:
             try:
                 chunk = self._recv(8192)
                 if not chunk:
                     break
                 out += chunk
+                stripped = out.strip()
+                if stripped.endswith("#") or stripped.endswith(">"):
+                    break
             except socket.timeout:
                 break
             except Exception:
@@ -196,7 +208,7 @@ class DellOS10Collector:
         return result
 
     def collect_version(self) -> Dict[str, str]:
-        """Parse `show version` for OS version / uptime details (fallback)."""
+        """Parse `show version` for OS version details (fallback)."""
         raw = self._send_command("show version")
         result: Dict[str, str] = {}
         for line in raw.splitlines():
@@ -210,9 +222,19 @@ class DellOS10Collector:
                 continue
             if key == "os_version":
                 result["os_version"] = val
-            elif key == "up_time":
-                result["uptime"] = val
         return result
+
+    def collect_uptime(self) -> str:
+        """Parse `show uptime` to get the exact uptime."""
+        raw = self._send_command("show uptime")
+        # Example output:
+        # 00:57:59
+        for line in raw.splitlines():
+            stripped = line.strip()
+            # If the line contains a timestamp-like string (e.g. 01:06:38, or 1 week, 2 days), we can just take the first non-empty line that isn't the command echo
+            if stripped and "show" not in stripped and "uptime" not in stripped and "#" not in stripped and ">" not in stripped:
+                return stripped
+        return ""
 
     def collect_inventory(self) -> List[Dict[str, Any]]:
         """Parse `show inventory` into hardware components list."""
@@ -685,7 +707,24 @@ class DellOS10Collector:
     def collect_running_config(self) -> str:
         """Return raw `show running-configuration` output."""
         raw = self._send_command("show running-configuration", timeout=30)
-        return raw
+        raw_clean = raw.replace("\r", "")
+        lines = raw_clean.split("\n")
+        
+        # Remove echoed command at the beginning if present
+        if lines and "show running-configuration" in lines[0]:
+            lines.pop(0)
+            
+        # Remove prompt at the end if present
+        if lines and (lines[-1].strip().endswith("#") or lines[-1].strip().endswith(">")):
+            lines.pop()
+            
+        # Clean any remaining empty leading/trailing lines
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+            
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Orchestrator
@@ -698,6 +737,10 @@ class DellOS10Collector:
         for k, v in version.items():
             if k not in system or not system.get(k):
                 system[k] = v
+
+        uptime = self.collect_uptime()
+        if uptime:
+            system["uptime"] = uptime
 
         environment = self.collect_environment()
         inventory = self.collect_inventory()

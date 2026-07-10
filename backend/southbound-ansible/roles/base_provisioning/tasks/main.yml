@@ -1,0 +1,7 @@
+---
+- include_tasks: identity.yml
+- include_tasks: mgmt_isolation.yml
+- include_tasks: aaa_security.yml
+- include_tasks: observability.yml
+- include_tasks: control_plane_security.yml
+- include_tasks: interface_defaults.yml

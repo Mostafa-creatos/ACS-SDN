@@ -1,0 +1,39 @@
+---
+- name: Configure TACACS servers
+  dellos10_command:
+    commands:
+      - tacacs-server host {{ item }}
+  loop: "{{ tacacs_servers }}"
+  when: tacacs_servers is defined
+
+- name: Configure AAA Authentication
+  dellos10_command:
+    commands:
+      - aaa authentication login default group tacacs+ local
+
+- name: Configure Enable Secret
+  dellos10_command:
+    commands:
+      - enable password {{ enable_secret }}
+
+- name: Disable Telnet
+  dellos10_command:
+    commands:
+      - no ip telnet server
+
+- name: Disable HTTP
+  dellos10_command:
+    commands:
+      - no ip http server
+
+- name: Enforce SSHv2 and disable weak algorithms
+  dellos10_command:
+    commands:
+      - ip ssh server enable
+      - ip ssh server version 2
+
+- name: Configure password complexity and lockout
+  dellos10_command:
+    commands:
+      - password-attributes min-length 14 lower 1 upper 1 numeric 1 special 1
+      - login-attempts 3 lockout-time 5

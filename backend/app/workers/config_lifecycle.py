@@ -5,6 +5,8 @@ import datetime
 from sqlalchemy.orm import Session
 from .. import models
 from ..main import resolve_southbound_driver
+from celery import shared_task
+import difflib
 
 def generate_golden_config(switch: models.Switch) -> str:
     """
@@ -41,30 +43,30 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
     if not switch:
         raise ValueError("Switch not found")
 
-    # Generate configuration content: golden boilerplate + interface VRF overlay
-    config_lines = [generate_golden_config(switch)]
+    # Fetch live configuration from the device
+    from app.drivers.dell_os10_collector import DellOS10Collector
     
-    # Append subnet allocations
-    subnets = db.query(models.IpamSubnet).filter(models.IpamSubnet.fabric_id == switch.fabric_id).all()
-    for sub in subnets:
-        vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == sub.vrf_id).first()
-        vrf_name = vrf.vrf_name if vrf else "VRF-A"
-        
-        if switch.vendor == "nokia":
-            config_lines.append(
-                f"/ interface vlan-{sub.vlan_id} subinterface 0 ipv4 address {sub.anycast_gateway_ip} anycast-gw true\n"
-                f"/ network-instance {vrf_name} interface vlan-{sub.vlan_id}.0\n"
-            )
-        elif switch.vendor == "dell_os10":
-            config_lines.append(
-                f"interface vlan{sub.vlan_id}\n vrf-member {vrf_name}\n ip address {sub.anycast_gateway_ip}\n"
-            )
-        elif switch.vendor == "arista_eos":
-            config_lines.append(
-                f"interface Vlan{sub.vlan_id}\n vrf {vrf_name}\n ip address {sub.anycast_gateway_ip}\n"
-            )
-
-    raw_config = "\n".join(config_lines)
+    if switch.vendor == "dell_os10" or switch.vendor == "dell":
+        collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
+        try:
+            collector.connect()
+            raw_config = collector.collect_running_config()
+        except Exception as e:
+            raw_config = switch.running_config or "! Failed to connect to device for snapshot"
+            print(f"[SNAPSHOT] Failed to collect real config for {switch.hostname}: {e}")
+        finally:
+            collector.close()
+    elif switch.vendor == "nokia":
+        from app.telemetry.gnmi_client import get_nokia_config
+        try:
+            raw_config = get_nokia_config(switch.management_ip, password="NokiaSrl1!")
+            switch.running_config = raw_config
+        except Exception as e:
+            raw_config = switch.running_config or "! Failed to connect to Nokia device via gNMI"
+            print(f"[SNAPSHOT] Failed to collect real config for Nokia {switch.hostname}: {e}")
+    else:
+        # Fallback to whatever is in the DB
+        raw_config = switch.running_config or ""
     config_hash = hashlib.sha256(raw_config.encode('utf-8')).hexdigest()
 
     snapshot = models.ConfigSnapshot(
@@ -174,6 +176,57 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
         else:
             passed_rules += 1
 
+        # Rule 4: MTU check
+        total_rules += 1
+        mtu_present = "mtu 9216" in config or "mtu 9000" in config or "mtu" in config.lower()
+        if not mtu_present:
+            finding = models.ComplianceFinding(
+                finding_id=uuid.uuid4(),
+                compliance_run_id=run.run_id,
+                switch_id=sw.switch_id,
+                rule_name="Jumbo Frames MTU Check",
+                severity="warning",
+                detail="Jumbo Frames (MTU >= 9000) are not configured on fabric link interfaces."
+            )
+            db.add(finding)
+            findings_list.append(finding)
+        else:
+            passed_rules += 1
+
+        # Rule 5: Syslog check
+        total_rules += 1
+        syslog_present = "logging server" in config or "logging-server" in config or "syslog-server" in config or "syslog" in config.lower()
+        if not syslog_present:
+            finding = models.ComplianceFinding(
+                finding_id=uuid.uuid4(),
+                compliance_run_id=run.run_id,
+                switch_id=sw.switch_id,
+                rule_name="Centralized Syslog Check",
+                severity="info",
+                detail="Centralized Syslog logging server target is not configured."
+            )
+            db.add(finding)
+            findings_list.append(finding)
+        else:
+            passed_rules += 1
+
+        # Rule 6: LLDP check
+        total_rules += 1
+        lldp_present = "lldp enable" in config or "lldp" in config.lower()
+        if not lldp_present:
+            finding = models.ComplianceFinding(
+                finding_id=uuid.uuid4(),
+                compliance_run_id=run.run_id,
+                switch_id=sw.switch_id,
+                rule_name="LLDP Status Check",
+                severity="warning",
+                detail="LLDP protocol is not enabled globally on this device."
+            )
+            db.add(finding)
+            findings_list.append(finding)
+        else:
+            passed_rules += 1
+
     summary_data = {
         "switches_audited": len(switches),
         "total_checks": total_rules,
@@ -251,3 +304,70 @@ def restore_config_snapshot(db: Session, snapshot_id: uuid.UUID, operator_claims
         "target_switch": switch.hostname,
         "config_hash": snapshot.config_hash
     }
+
+def categorize_drift(diff_text: str) -> str:
+    """
+    Heuristically categorizes the drift based on the diff.
+    """
+    diff_lower = diff_text.lower()
+    if any(keyword in diff_lower for keyword in ["tacacs", "aaa", "password", "ssh"]):
+        return "AAA Security"
+    if any(keyword in diff_lower for keyword in ["ntp", "snmp", "syslog", "telemetry", "grpc"]):
+        return "Observability"
+    if any(keyword in diff_lower for keyword in ["vrf management", "mgmt", "access-list mgmt"]):
+        return "Management Isolation"
+    if any(keyword in diff_lower for keyword in ["bpduguard", "control-plane", "copp"]):
+        return "Control Plane Security"
+    if any(keyword in diff_lower for keyword in ["storm-control", "errdisable"]):
+        return "Interface Defaults"
+    if any(keyword in diff_lower for keyword in ["hostname", "banner", "timezone"]):
+        return "Identity"
+    return "Unknown Category"
+
+@shared_task
+def config_compliance_mgr():
+    """
+    Periodic task to detect config drift for all compliant switches.
+    """
+    from ..db import SessionLocal
+    db = SessionLocal()
+    try:
+        switches = db.query(models.Switch).filter(models.Switch.lifecycle_status == "CompliantActive").all()
+        for switch in switches:
+            # 1. Fetch latest baseline snapshot
+            baseline_snapshot = db.query(models.ConfigSnapshot).filter(
+                models.ConfigSnapshot.switch_id == switch.switch_id,
+                models.ConfigSnapshot.is_baseline == True
+            ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
+            
+            if not baseline_snapshot:
+                continue
+
+            # 2. Get current running config (simulated for now by getting latest snapshot that is not baseline, or we just simulate a fetch)
+            # In a real scenario we use the driver to fetch it. For now, let's use the switch.running_config or take a new snapshot.
+            current_config = switch.running_config
+            if not current_config:
+                continue
+
+            # 3. Check for drift
+            if current_config != baseline_snapshot.raw_config:
+                # Drift detected!
+                switch.lifecycle_status = "ConfigurationDrifted"
+                
+                # Simple diff
+                baseline_lines = baseline_snapshot.raw_config.splitlines(keepends=True)
+                current_lines = current_config.splitlines(keepends=True)
+                diff = "".join(difflib.unified_diff(baseline_lines, current_lines))
+                
+                category = categorize_drift(diff)
+                switch.configuration_drift_category = category
+                
+                print(f"[DRIFT DETECTED] Switch {switch.hostname} drifted in category: {category}")
+        
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[DRIFT MGR] Error: {e}")
+    finally:
+        db.close()
+

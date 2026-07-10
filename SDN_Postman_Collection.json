@@ -1,0 +1,1360 @@
+{
+    "info": {
+        "name": "SDN Controller API",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "variable": [
+        {
+            "key": "base_url",
+            "value": "http://127.0.0.1:8000"
+        },
+        {
+            "key": "token",
+            "value": ""
+        }
+    ],
+    "item": [
+        {
+            "name": "Orchestrator",
+            "item": [
+                {
+                    "name": "POST /api/v5/orchestrator/policy-enforcement",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/orchestrator/policy-enforcement",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "orchestrator",
+                                "policy-enforcement"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/orchestrator/policy-reconciliation",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/orchestrator/policy-reconciliation",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "orchestrator",
+                                "policy-reconciliation"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/orchestrator/approvals",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/orchestrator/approvals",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "orchestrator",
+                                "approvals"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/orchestrator/approvals/{approval_id}/approve",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/orchestrator/approvals/{approval_id}/approve",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "orchestrator",
+                                "approvals",
+                                "{approval_id}",
+                                "approve"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/orchestrator/approvals/{approval_id}/reject",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/orchestrator/approvals/{approval_id}/reject",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "orchestrator",
+                                "approvals",
+                                "{approval_id}",
+                                "reject"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/orchestrator/async-config-push",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/orchestrator/async-config-push",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "orchestrator",
+                                "async-config-push"
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Admin",
+            "item": [
+                {
+                    "name": "POST /api/v5/admin/tenants",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/tenants",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "tenants"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/stats",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/stats",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "stats"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/tenants",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/tenants",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "tenants"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/switches",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/switches",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "switches"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/ztp-pool",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/ztp-pool",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "ztp-pool"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/subnets",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/subnets",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "subnets"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/topology",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/topology",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "topology"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/admin/sync-netdisco",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/sync-netdisco",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "sync-netdisco"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/admin/sync-gnmi",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/sync-gnmi",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "sync-gnmi"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/admin/trigger-discover",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/trigger-discover",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "trigger-discover"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/switches/{switch_id}",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/switches/{switch_id}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "switches",
+                                "{switch_id}"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/switches/{switch_id}/hardware",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/switches/{switch_id}/hardware",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "switches",
+                                "{switch_id}",
+                                "hardware"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/switches/{switch_id}/vlans",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/switches/{switch_id}/vlans",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "switches",
+                                "{switch_id}",
+                                "vlans"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/switches/{switch_id}/lags",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/switches/{switch_id}/lags",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "switches",
+                                "{switch_id}",
+                                "lags"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/admin/switches/{switch_id}/vlt",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/switches/{switch_id}/vlt",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "switches",
+                                "{switch_id}",
+                                "vlt"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/admin/switches",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/switches",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "switches"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "PUT /api/v5/admin/switches/{switch_id}",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/switches/{switch_id}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "switches",
+                                "{switch_id}"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "DELETE /api/v5/admin/switches/{switch_id}",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/switches/{switch_id}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "switches",
+                                "{switch_id}"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/admin/switches/{switch_id}/collect",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/switches/{switch_id}/collect",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "switches",
+                                "{switch_id}",
+                                "collect"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "DELETE /api/v5/admin/tenants/{tenant_id}",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/admin/tenants/{tenant_id}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "admin",
+                                "tenants",
+                                "{tenant_id}"
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Other",
+            "item": [
+                {
+                    "name": "GET /",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                ""
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Topology",
+            "item": [
+                {
+                    "name": "GET /api/v5/topology/graph",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/topology/graph",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "topology",
+                                "graph"
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Visibility",
+            "item": [
+                {
+                    "name": "POST /api/v5/visibility/snapshots",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/snapshots",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "snapshots"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/visibility/snapshots",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/snapshots",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "snapshots"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/visibility/rollback",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/rollback",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "rollback"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/visibility/accept-drift",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/accept-drift",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "accept-drift"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/visibility/compliance/run",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/compliance/run",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "compliance",
+                                "run"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/visibility/compliance/latest",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/compliance/latest",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "compliance",
+                                "latest"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/visibility/endpoints",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/endpoints",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "endpoints"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/visibility/telemetry",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/telemetry",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "telemetry"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/visibility/inventory",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/inventory",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "inventory"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/visibility/stp",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/stp",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "stp"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/visibility/reports/csv",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/visibility/reports/csv",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "visibility",
+                                "reports",
+                                "csv"
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Auth",
+            "item": [
+                {
+                    "name": "POST /api/v5/auth/login",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/auth/login",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "auth",
+                                "login"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/auth/switch-tenant",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/auth/switch-tenant",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "auth",
+                                "switch-tenant"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/auth/change-password",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/auth/change-password",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "auth",
+                                "change-password"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/auth/forgot-password",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/auth/forgot-password",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "auth",
+                                "forgot-password"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/auth/reset-password",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/auth/reset-password",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "auth",
+                                "reset-password"
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Discovery",
+            "item": [
+                {
+                    "name": "POST /api/v5/discovery/on-boarding-ingestion",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/discovery/on-boarding-ingestion",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "discovery",
+                                "on-boarding-ingestion"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "GET /api/v5/discovery/pool",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/discovery/pool",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "discovery",
+                                "pool"
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Switches",
+            "item": [
+                {
+                    "name": "POST /api/v5/switches/{id}/rollback",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/switches/{id}/rollback",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "switches",
+                                "{id}",
+                                "rollback"
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users",
+            "item": [
+                {
+                    "name": "PATCH /api/v5/users/{user_id}",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/users/{user_id}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "users",
+                                "{user_id}"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "DELETE /api/v5/users/{user_id}",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/users/{user_id}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "users",
+                                "{user_id}"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "POST /api/v5/users/{user_id}/tenants",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/users/{user_id}/tenants",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "users",
+                                "{user_id}",
+                                "tenants"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "DELETE /api/v5/users/{user_id}/tenants/{tenant_id}",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/v5/users/{user_id}/tenants/{tenant_id}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "v5",
+                                "users",
+                                "{user_id}",
+                                "tenants",
+                                "{tenant_id}"
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

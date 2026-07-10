@@ -1,0 +1,151 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{tcolorbox}
+
+\definecolor{atlasblue}{HTML}{3B3081}
+\definecolor{atlasteal}{HTML}{42CCB2}
+\definecolor{atlascoral}{HTML}{E26C48}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=atlasblue,
+    urlcolor=atlasteal,
+    pdftitle={Enterprise SDN Controller - Progress & Gap Analysis},
+    pdfauthor={Mostafa Faouzi}
+}
+
+\title{\textbf{\Huge ENTERPRISE SDN CONTROLLER}\\
+\vspace{0.3cm}
+\large Implementation Progress \& Architecture Gap Analysis Report}
+\author{\textbf{Mostafa Faouzi} \\
+Master 2 RES, Sorbonne University \\
+\vspace{0.2cm}
+Prepared for: \textbf{Hamza ZERTA}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Executive Summary}
+This progress and gap analysis report details the implementation milestones achieved on the \textbf{Enterprise SDN Controller} orchestrator. The prototype has been successfully deployed on a dedicated GCP virtual machine hosting multi-vendor network simulation topologies (Nokia SR Linux and Dell OS10 virtual switches). 
+
+All major REST endpoint services (38 endpoints), real-time gNMI topology stream bindings, dynamic configuration audits, and configuration drift-detection state transitions have been successfully engineered and verified. The code-level architecture is aligned with the Sorbonne University Master 2 RES consolidated technical blueprint. This document details the exact implementations completed, solved infrastructure bottlenecks, and provides a clear pathway for the final production deployment onto a SUSE RKE2 Kubernetes cluster.
+
+\section{Implemented Architecture vs. Blueprint Reference}
+The proposed production architecture relies on a converged 3-node SUSE RKE2 Kubernetes cluster orchestrating stateless microservice pods (Ingress, API gateway, Celery worker stream, telemetry collectors) paired with stateful cluster structures (HA PostgreSQL and Redis Sentinels). 
+
+To ensure rapid prototyping and simplify debugging loops, the implementation was successfully executed on a single-node VM via a virtualized Docker-Compose environment simulating the components as dedicated containers.
+
+\begin{table}[ht]
+\centering
+\caption{Architecture Mapping: Reference Blueprint vs. Current VM Deployment}
+\vspace{0.2cm}
+\begin{tabular}{p{3.5cm} p{5.5cm} p{5.5cm} c}
+\toprule
+\textbf{Layer} & \textbf{Production Blueprint} & \textbf{Current VM Implementation} & \textbf{Status} \\
+\midrule
+\textbf{Simulation} & PNETLab (20x Dell OS10 switches) & Containerlab (6x Nokia SRL, 2x Dell OS10) & \textcolor{green}{Active} \\
+\textbf{Ingress} & MetalLB L2 VIP + NGINX Ingress & Nginx Docker container (TLS routing) & \textcolor{green}{Active} \\
+\textbf{Stateless Apps} & FastAPI Gateway, gNMI Collector, Celery Workers (KEDA) & Monolithic FastAPI backend container, Fixed Celery worker & \textcolor{orange}{Merged} \\
+\textbf{Stateful Tiers} & PostgreSQL HA (1P+2R), Redis Sentinel & PostgreSQL container (Single), Redis container (Single) & \textcolor{green}{Active} \\
+\textbf{Storage Layer} & Longhorn CSI, MinIO S3 bucket & Docker local volumes \& bind mounts & \textcolor{green}{Active} \\
+\textbf{Monitoring} & Rancher UI, Prometheus + Grafana & Flower Celery dashboard & \textcolor{orange}{Partial} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Architectural Alignment Rationale}
+Operating a single-node Docker-Compose virtual network topology instead of a complete RKE2 cluster during active feature development has several advantages:
+\begin{itemize}
+    \item \textbf{Reduced Iteration Overhead:} Rebuilding and deploying updated code runs in under 15 seconds, compared to 3--5 minutes required to rebuild, push, pull, and cycle Kubernetes pods.
+    \item \textbf{Simplified Diagnostic Surface:} Network tracing, database inspection, and process monitoring are co-located, isolating software bugs from cluster orchestration issues (e.g., PVC mount locks, service mesh routing mismatches).
+\end{itemize}
+
+\newpage
+\section{Configuration Drift Detection \& Lifecycle Management}
+
+The switch configuration lifecycle follows a state machine mapping:
+\begin{center}
+\texttt{DiscoveredRaw} $\rightarrow$ \texttt{CompliantActive} $\rightarrow$ \texttt{ConfigurationDrifted} $\rightarrow$ \texttt{TriggerRollback} $\rightarrow$ \texttt{CompliantActive}
+\end{center}
+
+\begin{figure}[ht]
+\centering
+\begin{tcolorbox}[colback=blue!5!white,colframe=atlasblue,title=State Transition Diagram]
+\small
+\begin{enumerate}
+    \item \textbf{ZTP Onboarding:} Switch boots, queries DHCP option 67, runs the onboarding script, and registers with the controller (\texttt{DiscoveredRaw}).
+    \item \textbf{Baseline Snapshot:} An approved initial configuration is generated and snapshot-saved in the database (\texttt{CompliantActive}).
+    \item \textbf{Out-of-Band Mismatch:} An administrator modifies parameters (e.g., adding VLANs) directly on the switch CLI via console or SSH.
+    \item \textbf{Drift State:} The background audit daemon detects a hash mismatch between the running config and baseline snapshot (\texttt{ConfigurationDrifted}).
+    \item \textbf{Remediation:} The operator triggers a rollback to the baseline configuration, or clicks ``Accept Drift'' to promote the current live config to the new baseline.
+\end{enumerate}
+\end{tcolorbox}
+\end{figure}
+
+\subsection{Solved Infrastructure Challenges}
+During system validation, two critical bugs were diagnosed and resolved to make drift detection functional:
+\begin{itemize}
+    \item \textbf{Transition from Console to SSH-based Collection:} \\
+    Initially, the background discovery daemon queried Dell switches on the raw console socket (telnet on port \texttt{5000}). However, once the switch virtual machine completes its boot cycle inside the Containerlab container, Vrnetlab shuts down console communication. This caused connection timeouts in the collector. \\
+    \textbf{Solution:} Rewrote the collector in \texttt{gnmi\_discovery.py} to connect via standard \textbf{SSH (Port 22)} using the robust \texttt{DellOS10Collector} driver class.
+    
+    \item \textbf{Command Echo \& Pager Pagination Mitigation:} \\
+    When fetching the running configuration, the terminal pager triggered a \texttt{--More--} interactive prompt, causing incomplete configuration reads. Furthermore, command echo (e.g., \texttt{show running-configuration} at the first line of the output) caused text alignment mismatches against baseline snapshots. \\
+    \textbf{Solution:} Configured the collector to send an escape command (\texttt{end}) followed by \texttt{terminal length 0} before config pulls. Added parsing logic in the collector to pop the echoed command, prune trailing terminal prompt lines, and strip carriage returns before saving configuration hashes to PostgreSQL.
+\end{itemize}
+
+\subsection{The ``Accept Drift'' Implementation}
+We implemented an ``Accept Drift'' capability to complement the ``Rollback'' function. When a manual configuration change is validated, the operator can click ``Accept Drift as Baseline'' in the UI. 
+
+This sends a POST request to \texttt{/api/v5/visibility/accept-drift}, creating a new \texttt{ConfigSnapshot} containing the live switch configuration, setting the new checksum hash as the switch baseline, and transitioning the switch state back to \texttt{compliant\_active}.
+
+\newpage
+\section{Verification and Test Coverage}
+The platform includes an automated testing framework comprising:
+\begin{itemize}
+    \item \textbf{Unit \& Integration Tests:} 43 tests inside \texttt{test\_endpoints.py} verifying all 38 REST endpoints under a local SQLite database session manager.
+    \item \textbf{Hybrid Discovery Tests:} SSH execution wrappers inside \texttt{test\_device\_inventory.py} validating live gNMI data structures.
+\end{itemize}
+
+\begin{lstlisting}[language=bash, caption=Verification Log of Switch Drift State inside PostgreSQL]
+$ docker exec -t sdn_postgres_dev psql -U sdn_admin -d sdn_controller -c \
+  "SELECT hostname, lifecycle_status, SUBSTRING(configuration_checksum, 1, 12) \
+   FROM switches WHERE role = 'spine';"
+
+ hostname | lifecycle_status | substring 
+----------+------------------+-----------
+ spine-01 | drifted          | 590df46167
+ spine-02 | drifted          | a0e92f0166
+(2 rows)
+\end{lstlisting}
+
+\section{Kubernetes Production Migration Path}
+Upon feature completion, the transition from the single VM development environment to the target RKE2 production infrastructure is planned as follows:
+
+\begin{enumerate}
+    \item \textbf{Decouple Microservices:} Separate the FastAPI REST gateway, the Celery async worker, and the telemetry collectors into individual lightweight container images (defined in separate Dockerfiles).
+    \item \textbf{Construct Kubernetes Deployment Manifests:} Author Helm charts wrapping resource allocations, Horizontal Pod Autoscalers (HPA), and KEDA scaled objects pointing to the Redis broker queue depth.
+    \item \textbf{Provision Stateful Sets via Operators:}
+    \begin{itemize}
+        \item Deploy PostgreSQL High-Availability using the CloudNativePG Operator (1 primary, 2 replicas, configured with automated WAL archiving).
+        \item Deploy Redis Sentinel clusters for task brokers.
+    \end{itemize}
+    \item \textbf{S3-Compatible Storage Integration (MinIO):} Update the python file storage logic inside \texttt{config\_lifecycle.py} to store configuration snapshot text strings inside S3 buckets hosted on MinIO using the \texttt{boto3} client library, offloading bulk text columns from PostgreSQL.
+\end{enumerate}
+
+\end{document}

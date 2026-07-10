@@ -1,6 +1,7 @@
 clab-*/
 clab_*/
 sdn_fabric*/
+topology/
 venv/
 .git/
 __pycache__/

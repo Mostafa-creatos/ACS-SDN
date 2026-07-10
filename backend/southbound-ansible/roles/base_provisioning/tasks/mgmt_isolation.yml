@@ -1,0 +1,16 @@
+---
+- name: Configure management VRF
+  dellos10_command:
+    commands:
+      - ip vrf management
+      - interface mgmt 1/1/1
+      - ip vrf forwarding management
+
+- name: Configure Management ACL
+  dellos10_command:
+    commands:
+      - ip access-list MGMT-ACL
+      - permit ip {{ mgmt_acl_allowed_sources }} any
+      - deny ip any any
+      - interface mgmt 1/1/1
+      - ip access-group MGMT-ACL in

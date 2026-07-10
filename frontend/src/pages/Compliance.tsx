@@ -25,7 +25,7 @@ interface Finding {
 }
 
 export const Compliance: React.FC = () => {
-  const { token } = useAuth();
+  const { token, selectedTenant } = useAuth();
   
   const [score, setScore] = useState(94);
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -40,7 +40,10 @@ export const Compliance: React.FC = () => {
 
   const loadComplianceData = async () => {
     try {
-      const headers = { 'Authorization': `Bearer ${token}` };
+      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
+      if (selectedTenant) {
+        headers['X-Tenant-ID'] = selectedTenant;
+      }
       const response = await fetch('/api/v5/visibility/compliance/latest', { headers });
       
       if (response.ok) {
@@ -48,18 +51,45 @@ export const Compliance: React.FC = () => {
         setScore(data.summary?.compliance_score_pct || 94);
         
         // Map findings from API
-        const mapped = (data.findings || []).map((f: any, idx: number) => ({
-          id: f.id || `find-${idx}`,
-          switch_name: f.switch_hostname || 'leaf-switch-02',
-          vector: f.rule_name?.includes('ntp') ? 'NTP' : f.rule_name?.includes('dns') ? 'DNS' : 'AAA',
-          expected: f.expected || 'ntp server 192.168.100.1',
-          actual: f.detail?.split('found')?.[1]?.trim() || f.detail || 'NTP server missing',
-          severity: f.severity === 'critical' ? 'Critical' : 'High',
-          remediation: f.detail?.includes('ntp') 
-            ? 'Configure NTP server 192.168.100.1 via configuration rollback or manual provisioning.' 
-            : 'Validate AAA authentication parameters against default local profiles.',
-          status: f.resolved ? 'resolved' : 'open'
-        }));
+        const mapped = (data.findings || []).map((f: any, idx: number) => {
+          const rName = (f.rule_name || '').toLowerCase();
+          const vector = rName.includes('ntp') ? 'NTP'
+                       : rName.includes('dns') ? 'DNS'
+                       : rName.includes('mtu') ? 'MTU'
+                       : rName.includes('syslog') ? 'Syslog'
+                       : rName.includes('lldp') ? 'LLDP'
+                       : 'AAA';
+          
+          let remediation = 'Validate configuration settings.';
+          if (rName.includes('ntp')) {
+            remediation = 'Configure NTP server 192.168.100.1 via configuration rollback or manual provisioning.';
+          } else if (rName.includes('dns')) {
+            remediation = 'Define DNS server IP 8.8.8.8 under name-server settings.';
+          } else if (rName.includes('aaa')) {
+            remediation = 'Validate AAA authentication parameters against default local profiles.';
+          } else if (rName.includes('mtu')) {
+            remediation = 'Configure interface MTU to 9216 or 9000 for jumbo frame support.';
+          } else if (rName.includes('syslog')) {
+            remediation = 'Configure centralized logging target (e.g. logging server 10.10.100.5).';
+          } else if (rName.includes('lldp')) {
+            remediation = 'Enable LLDP protocol globally to restore topology discovery.';
+          }
+
+          const severity = f.severity === 'critical' ? 'Critical'
+                         : f.severity === 'warning' ? 'High'
+                         : 'Low';
+
+          return {
+            id: f.id || `find-${idx}`,
+            switch_name: f.switch_hostname || 'leaf-switch-02',
+            vector,
+            expected: f.expected || (vector === 'MTU' ? 'mtu 9216' : vector === 'Syslog' ? 'logging server' : vector === 'LLDP' ? 'lldp enable' : 'configured'),
+            actual: f.detail || 'parameter missing',
+            severity,
+            remediation,
+            status: f.resolved ? 'resolved' : 'open'
+          };
+        });
         setFindings(mapped);
       } else {
         setScore(78); // Simulate a drifted compliance score under 80% to show coral transition
@@ -73,13 +103,27 @@ export const Compliance: React.FC = () => {
 
   useEffect(() => {
     loadComplianceData();
-  }, [token]);
+  }, [token, selectedTenant]);
 
   const handleRunAudit = () => {
     setIsAuditModalOpen(true);
     setAuditProgress(0);
     setAuditCompleted(false);
     setAuditMessage('Initializing golden config scanner...');
+
+    // Trigger real backend compliance run in parallel
+    const triggerAudit = async () => {
+      try {
+        const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
+        if (selectedTenant) {
+          headers['X-Tenant-ID'] = selectedTenant;
+        }
+        await fetch('/api/v5/visibility/compliance/run', { method: 'POST', headers });
+      } catch (e) {
+        console.error("Failed to run audit on backend:", e);
+      }
+    };
+    triggerAudit();
 
     const interval = setInterval(() => {
       setAuditProgress(p => {
@@ -99,9 +143,8 @@ export const Compliance: React.FC = () => {
           clearInterval(interval);
           setAuditCompleted(true);
           setAuditMessage('Golden configuration audit completed successfully!');
-          // Remediate one item in seed data upon completed audit
-          setScore(94);
-          setFindings(prev => prev.map(f => f.vector === 'DNS' ? { ...f, status: 'resolved' } : f));
+          // Re-load the real compliance data from backend upon completion
+          loadComplianceData();
           return 100;
         }
         return p + 10;

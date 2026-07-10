@@ -48,11 +48,8 @@ topology:
       mgmt-ipv4: 172.20.20.17
 
     # ==========================================
-    # 3. Border/Edge (Arista cEOS)
+    # 3. Border/Edge (Arista cEOS) - Removed due to missing image
     # ==========================================
-    border-01:
-      kind: arista_ceos
-      mgmt-ipv4: 172.20.20.18
 
   # ==========================================
   # 4. Network Link Mappings
@@ -81,7 +78,3 @@ topology:
     # leaf-06 links to Spines
     - endpoints: ["leaf-06:ethernet-1/1", "spine-01:eth6"]
     - endpoints: ["leaf-06:ethernet-1/2", "spine-02:eth6"]
-
-    # border-01 links to Spines
-    - endpoints: ["border-01:ethernet1", "spine-01:eth7"]
-    - endpoints: ["border-01:ethernet2", "spine-02:eth7"]

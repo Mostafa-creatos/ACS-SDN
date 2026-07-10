@@ -35,10 +35,11 @@ interface ConfigSnapshot {
   taken_by: string;
   config_hash: string;
   raw_config: string;
+  is_baseline?: boolean;
 }
 
 export const Switches: React.FC = () => {
-  const { token } = useAuth();
+  const { token, selectedTenant } = useAuth();
   
   // List view states
   const [switches, setSwitches] = useState<DellSwitchDetails[]>([]);
@@ -61,6 +62,7 @@ export const Switches: React.FC = () => {
   const [selectedSnap2, setSelectedSnap2] = useState<string>('');
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [takingSnapshot, setTakingSnapshot] = useState(false);
+  const [acceptingDrift, setAcceptingDrift] = useState(false);
 
   // Add / Edit / Delete modal states
   const [showAddModal, setShowAddModal] = useState(false);
@@ -100,7 +102,10 @@ export const Switches: React.FC = () => {
       params.set('sort_by', 'hostname');
       params.set('sort_order', 'asc');
 
-      const headers = { 'Authorization': `Bearer ${token}` };
+      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
+      if (selectedTenant) {
+        headers['X-Tenant-ID'] = selectedTenant;
+      }
       const response = await fetch(`/api/v5/visibility/inventory?${params.toString()}`, { headers });
       if (response.ok) {
         const data: PaginatedResponse = await response.json();
@@ -249,6 +254,38 @@ export const Switches: React.FC = () => {
     }
   };
 
+  const handleAcceptDrift = async () => {
+    if (!activeSwitch) return;
+    setAcceptingDrift(true);
+    try {
+      const headers = { 
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      };
+      const response = await fetch('/api/v5/visibility/accept-drift', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ switch_id: activeSwitch.switch_id })
+      });
+      if (response.ok) {
+        showToast(`Configuration drift accepted as new baseline for ${activeSwitch.hostname}`, 'success');
+        setSwitches(prev => prev.map(s => 
+          s.switch_id === activeSwitch.switch_id 
+            ? { ...s, lifecycle_status: 'compliant_active' } 
+            : s
+        ));
+        fetchSnapshots(activeSwitch.switch_id);
+      } else {
+        const err = await response.json().catch(() => ({}));
+        showToast(err.detail || 'Failed to accept drift', 'warning');
+      }
+    } catch (e) {
+      showToast('Failed to accept drift', 'warning');
+    } finally {
+      setAcceptingDrift(false);
+    }
+  };
+
   // Simple unified line-by-line configuration diff renderer
   const renderConfigDiff = () => {
     if (!activeSwitch) return null;
@@ -257,52 +294,76 @@ export const Switches: React.FC = () => {
 
     if (!snap1) return <p className="text-xs text-slate-400">Select a baseline snapshot to compare</p>;
 
-    let lines1 = snap1.raw_config.split('\n');
-    let lines2: string[];
+    const normalizeConfig = (config: string) => {
+      return config
+        .replace(/\r/g, '') // Remove carriage returns
+        .split('\n')
+        .map(line => line.trimEnd()) // Remove trailing spaces
+        .filter(line => line.length > 0 && !line.trimStart().startsWith('!'));
+    };
+
+    let lines1: string[] = [];
+    let lines2: string[] = [];
     let label2 = '';
 
     if (selectedSnap2 === '__running__') {
       if (!activeSwitch.running_config) {
         return <p className="text-xs text-slate-400">No running config available for this switch</p>;
       }
-      lines2 = activeSwitch.running_config.split('\n');
+      lines1 = normalizeConfig(snap1.raw_config);
+      lines2 = normalizeConfig(activeSwitch.running_config);
       label2 = 'Running Config';
     } else {
       const snap2 = snaps.find(s => s.snapshot_id === selectedSnap2);
       if (!snap2) return <p className="text-xs text-slate-400">Select a snapshot or running config to compare</p>;
-      lines2 = snap2.raw_config.split('\n');
-      label2 = new Date(snap2.taken_at).toLocaleDateString();
+      lines1 = normalizeConfig(snap1.raw_config);
+      lines2 = normalizeConfig(snap2.raw_config);
+      label2 = new Date(snap2.taken_at).toLocaleString();
     }
 
-    // Build visual diff rows
+    // Myers/LCS dynamic programming diff algorithm
+    const N = lines1.length;
+    const M = lines2.length;
+    const dp: number[][] = Array(N + 1).fill(0).map(() => Array(M + 1).fill(0));
+
+    for (let i = 1; i <= N; i++) {
+      for (let j = 1; j <= M; j++) {
+        if (lines1[i - 1] === lines2[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+      }
+    }
+
     const diffRows: React.ReactNode[] = [];
-    const maxLines = Math.max(lines1.length, lines2.length);
+    let i = N;
+    let j = M;
+    let indexKey = 0;
 
-    for (let i = 0; i < maxLines; i++) {
-      const l1 = lines1[i];
-      const l2 = lines2[i];
-
-      if (l1 === l2) {
-        diffRows.push(
-          <div key={i} className="py-0.5 px-3 hover:bg-slate-50 font-mono text-[11px] text-slate-600 whitespace-pre">
-            {`  ${l1}`}
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && lines1[i - 1] === lines2[j - 1]) {
+        diffRows.unshift(
+          <div key={`unchanged-${indexKey++}`} className="py-0.5 px-3 hover:bg-slate-50 font-mono text-[11px] text-slate-600 whitespace-pre">
+            {`  ${lines1[i - 1]}`}
           </div>
         );
+        i--;
+        j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        diffRows.unshift(
+          <div key={`add-${indexKey++}`} className="py-0.5 px-3 bg-emerald-50 hover:bg-emerald-100/70 font-mono text-[11px] text-emerald-700 whitespace-pre">
+            {`+ ${lines2[j - 1]}`}
+          </div>
+        );
+        j--;
       } else {
-        if (l1 !== undefined) {
-          diffRows.push(
-            <div key={`rem-${i}`} className="py-0.5 px-3 bg-rose-50 hover:bg-rose-100/70 font-mono text-[11px] text-rose-700 whitespace-pre">
-              {`- ${l1}`}
-            </div>
-          );
-        }
-        if (l2 !== undefined) {
-          diffRows.push(
-            <div key={`add-${i}`} className="py-0.5 px-3 bg-emerald-50 hover:bg-emerald-100/70 font-mono text-[11px] text-emerald-700 whitespace-pre">
-              {`+ ${l2}`}
-            </div>
-          );
-        }
+        diffRows.unshift(
+          <div key={`rem-${indexKey++}`} className="py-0.5 px-3 bg-rose-50 hover:bg-rose-100/70 font-mono text-[11px] text-rose-700 whitespace-pre">
+            {`- ${lines1[i - 1]}`}
+          </div>
+        );
+        i--;
       }
     }
 
@@ -404,6 +465,7 @@ export const Switches: React.FC = () => {
                     <th className="pb-3 text-left">Service Tag</th>
                     <th className="pb-3 text-left">OS Version</th>
                     <th className="pb-3 text-left">State</th>
+                    <th className="pb-3 text-left">Last Discovery</th>
                     <th className="pb-3 text-left">HW</th>
                     <th className="pb-3 text-center"></th>
                   </tr>
@@ -438,6 +500,13 @@ export const Switches: React.FC = () => {
                         <td className="py-3.5 text-xs text-slate-500">{sw.os_version}</td>
                         <td className="py-3.5">
                           <StatusPill status={sw.lifecycle_status} />
+                        </td>
+                        <td className="py-3.5 text-xs text-slate-500">
+                          {sw.last_collection_timestamp 
+                            ? new Date(sw.last_collection_timestamp).toLocaleString([], {
+                                month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                              })
+                            : 'Never'}
                         </td>
                         <td className="py-3.5">
                           {sw.hardware_components && sw.hardware_components.length > 0 ? (
@@ -541,6 +610,14 @@ export const Switches: React.FC = () => {
                   }`}
                 >
                   Overview
+                </button>
+                <button 
+                  onClick={() => setDetailTab('lifecycle')}
+                  className={`pb-2 border-b-2 transition-colors whitespace-nowrap ${
+                    detailTab === 'lifecycle' ? 'border-atlas-primary text-atlas-primary font-bold' : 'border-transparent hover:text-slate-700'
+                  }`}
+                >
+                  Lifecycle
                 </button>
                 <button 
                   onClick={() => setDetailTab('interfaces')}
@@ -656,6 +733,14 @@ export const Switches: React.FC = () => {
                       <span className="text-slate-800">{activeSwitch.uptime}</span>
                     </div>
                     <div className="space-y-1">
+                      <span className="text-slate-400 block font-medium">Last Discovery</span>
+                      <span className="text-slate-800">
+                        {activeSwitch.last_collection_timestamp 
+                          ? new Date(activeSwitch.last_collection_timestamp).toLocaleString() 
+                          : 'Never'}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
                       <span className="text-slate-400 block font-medium">Temperature</span>
                       <span className="text-slate-800">{activeSwitch.temperature || 'Normal'}</span>
                     </div>
@@ -671,6 +756,54 @@ export const Switches: React.FC = () => {
                       <span className="text-slate-400 block font-medium">Site/Location</span>
                       <span className="text-slate-800 font-semibold">{activeSwitch.location}</span>
                     </div>
+                  </div>
+                )}
+
+                {/* 1.5 Lifecycle Tab */}
+                {detailTab === 'lifecycle' && (
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-semibold text-slate-800 border-b pb-2">Lifecycle State Diagram</h4>
+                    <div className="flex items-center space-x-2 text-xs">
+                      <div className={`px-3 py-2 rounded-lg font-mono ${activeSwitch.lifecycle_status === 'DiscoveredRaw' ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-slate-50 text-slate-400'}`}>
+                        DiscoveredRaw
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-slate-300" />
+                      <div className={`px-3 py-2 rounded-lg font-mono ${activeSwitch.lifecycle_status === 'CompliantActive' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-slate-50 text-slate-400'}`}>
+                        CompliantActive
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-slate-300" />
+                      <div className={`px-3 py-2 rounded-lg font-mono ${activeSwitch.lifecycle_status === 'ConfigurationDrifted' ? 'bg-rose-100 text-rose-800 border border-rose-300' : 'bg-slate-50 text-slate-400'}`}>
+                        ConfigurationDrifted
+                      </div>
+                    </div>
+
+                    {activeSwitch.lifecycle_status === 'ConfigurationDrifted' && (
+                      <div className="mt-6 p-4 rounded-xl border border-rose-200 bg-rose-50/50">
+                        <div className="flex items-start gap-3">
+                          <AlertCircle className="w-5 h-5 text-rose-500 mt-0.5 shrink-0" />
+                          <div>
+                            <h5 className="text-sm font-semibold text-rose-800">Compliance Drift Detected</h5>
+                            <p className="text-xs text-rose-600 mt-1">
+                              This switch has drifted from the approved enterprise baseline.
+                            </p>
+                            <div className="mt-3 bg-white p-3 rounded-lg border border-rose-100 inline-block">
+                              <span className="text-xs text-slate-500 uppercase tracking-wider font-semibold">Drifted Category:</span>
+                              <div className="text-sm font-bold text-rose-700 mt-1">{activeSwitch.configuration_drift_category || 'Unknown'}</div>
+                            </div>
+                            
+                            <div className="mt-4">
+                              <button 
+                                onClick={() => handleRollback(activeSnapshots.find(s => s.is_baseline)?.snapshot_id || '')}
+                                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors flex items-center gap-2"
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                                Initiate Compliance Rollback
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -863,7 +996,7 @@ export const Switches: React.FC = () => {
                             >
                               {activeSnapshots.map(s => (
                                 <option key={s.snapshot_id} value={s.snapshot_id}>
-                                  {new Date(s.taken_at).toLocaleDateString()} - {s.taken_by}
+                                  {new Date(s.taken_at).toLocaleString()} - {s.taken_by}
                                 </option>
                               ))}
                             </select>
@@ -875,9 +1008,11 @@ export const Switches: React.FC = () => {
                               onChange={(e) => setSelectedSnap2(e.target.value)}
                               className="w-full bg-slate-50 border text-xs p-2 rounded-lg outline-none cursor-pointer"
                             >
-                              {activeSnapshots.map(s => (
+                              {activeSnapshots
+                                .filter(s => s.snapshot_id !== selectedSnap1)
+                                .map(s => (
                                 <option key={s.snapshot_id} value={s.snapshot_id}>
-                                  {new Date(s.taken_at).toLocaleDateString()} - {s.taken_by}
+                                  {new Date(s.taken_at).toLocaleString()} - {s.taken_by}
                                 </option>
                               ))}
                               {activeSwitch.running_config && (
@@ -900,13 +1035,23 @@ export const Switches: React.FC = () => {
                                     <strong>Attention needed:</strong> Configuration drift detected. Rollback will restore the selected baseline snapshot configuration.
                                   </div>
                                 </div>
-                                <button 
-                                  onClick={() => handleRollback(selectedSnap1)}
-                                  className="btn-danger w-full flex items-center justify-center gap-2 py-2.5"
-                                >
-                                  <RotateCcw className="w-4 h-4" />
-                                  <span>Rollback to Selected Snapshot</span>
-                                </button>
+                                <div className="flex flex-col sm:flex-row gap-3">
+                                  <button 
+                                    onClick={() => handleRollback(selectedSnap1)}
+                                    className="btn-danger flex-1 flex items-center justify-center gap-2 py-2.5"
+                                  >
+                                    <RotateCcw className="w-4 h-4" />
+                                    <span>Rollback Config</span>
+                                  </button>
+                                  <button 
+                                    onClick={handleAcceptDrift}
+                                    disabled={acceptingDrift}
+                                    className="btn-secondary border-emerald-500/30 text-emerald-600 hover:bg-emerald-50 flex-1 flex items-center justify-center gap-2 py-2.5"
+                                  >
+                                    <Check className="w-4 h-4" />
+                                    <span>{acceptingDrift ? 'Accepting...' : 'Accept Drift as Baseline'}</span>
+                                  </button>
+                                </div>
                               </div>
                             ) : (
                               <div className="bg-emerald-50 rounded-lg p-3.5 text-[11px] text-emerald-800 flex gap-2 border border-emerald-100">

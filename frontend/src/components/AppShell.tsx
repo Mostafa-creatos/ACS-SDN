@@ -11,7 +11,10 @@ import {
   LogOut, 
   Menu,
   ChevronDown,
-  User as UserIcon
+  User as UserIcon,
+  PlugZap,
+  Users,
+  Building2
 } from 'lucide-react';
 
 export const AppShell: React.FC = () => {
@@ -33,10 +36,12 @@ export const AppShell: React.FC = () => {
     { name: 'Topology', path: '/topology', icon: Binary },
     { name: 'IP Management', path: '/ipam', icon: Network }, // we will use Network icon or another
     { name: 'Compliance', path: '/compliance', icon: ShieldCheck },
+    { name: 'ZTP Console', path: '/ztp', icon: PlugZap },
   ];
 
   // Gated approvals page
-  const showApprovals = user?.role === 'Platform Admin';
+  const showApprovals = user?.role === 'Platform Admin' || user?.role === 'platform_admin';
+  const showUsersNav = user?.role === 'Platform Admin' || user?.role === 'platform_admin' || user?.role === 'Tenant Admin' || user?.role === 'tenant_admin';
 
   return (
     <div className="min-h-screen flex bg-surface-light text-slate-800">
@@ -88,6 +93,50 @@ export const AppShell: React.FC = () => {
               </NavLink>
             );
           })}
+
+          {/* Users & Access (Visible only to Tenant Admins & Platform Admins) */}
+          {showUsersNav && (
+            <NavLink
+              to="/users"
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
+                  isActive
+                    ? 'bg-white/10 text-white font-semibold'
+                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  {isActive && <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-atlas-teal" />}
+                  <Users className={`w-5 h-5 ${isActive ? 'text-atlas-teal' : 'text-slate-400 group-hover:text-white'}`} />
+                  {sidebarOpen && <span>Users & Access</span>}
+                </>
+              )}
+            </NavLink>
+          )}
+
+          {/* Tenant Management (Visible only to Platform Admins) */}
+          {(user?.role === 'Platform Admin' || user?.role === 'platform_admin') && (
+            <NavLink
+              to="/tenants"
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
+                  isActive
+                    ? 'bg-white/10 text-white font-semibold'
+                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  {isActive && <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-atlas-teal" />}
+                  <Building2 className={`w-5 h-5 ${isActive ? 'text-atlas-teal' : 'text-slate-400 group-hover:text-white'}`} />
+                  {sidebarOpen && <span>Tenant Management</span>}
+                </>
+              )}
+            </NavLink>
+          )}
 
           {/* Pending Approvals (Visible only to Platform Admins) */}
           {showApprovals && (

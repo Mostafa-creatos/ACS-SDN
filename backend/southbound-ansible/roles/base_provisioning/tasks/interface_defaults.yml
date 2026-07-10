@@ -1,0 +1,10 @@
+---
+- name: Apply storm control and errdisable recovery to all interfaces
+  dellos10_command:
+    commands:
+      - errdisable recovery cause bpduguard
+      - errdisable recovery interval 300
+      - interface range ethernet 1/1/1-1/1/48
+      - storm-control broadcast 5
+      - storm-control multicast 5
+      - storm-control unknown-unicast 5

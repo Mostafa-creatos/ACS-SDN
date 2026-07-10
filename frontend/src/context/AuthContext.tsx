@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
-export type UserRole = 'Platform Admin' | 'Tenant Admin' | 'Operator' | 'Read-only';
+export type UserRole = 'Platform Admin' | 'Tenant Admin' | 'Operator' | 'Read-only' | 'platform_admin' | 'tenant_admin';
 
 export interface User {
   email: string;
@@ -64,7 +64,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser({
         email: decoded.sub || decoded.email || 'user@atlascloud.com',
         role: mappedRole,
-        tenants: decoded.tenants || ['AtlasWave Maroc Demo', 'Acme-Enterprise'],
+        tenants: decoded.tenants || ['AtlasWave Maroc Demo'],
       });
     } else {
       localStorage.removeItem('atlas_jwt');

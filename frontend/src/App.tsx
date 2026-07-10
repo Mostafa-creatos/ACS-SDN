@@ -11,6 +11,10 @@ import { Topology } from './pages/Topology';
 import { IPAM } from './pages/IPAM';
 import { Compliance } from './pages/Compliance';
 import { PendingApprovals } from './pages/PendingApprovals';
+import { ZtpConsolePage } from './pages/ZtpConsolePage';
+import { UsersPage } from './pages/UsersPage';
+import { ChangePasswordPage } from './pages/ChangePasswordPage';
+import { TenantsPage } from './pages/TenantsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,6 +43,7 @@ export const App: React.FC = () => {
             {/* Public routes */}
             <Route path="/login" element={<Login />} />
             <Route path="/styleguide" element={<Styleguide />} />
+            <Route path="/change-password" element={<ChangePasswordPage />} />
 
             {/* Protected dashboard shell routes */}
             <Route 
@@ -56,6 +61,9 @@ export const App: React.FC = () => {
               <Route path="ipam" element={<IPAM />} />
               <Route path="compliance" element={<Compliance />} />
               <Route path="pending-approvals" element={<PendingApprovals />} />
+              <Route path="ztp" element={<ZtpConsolePage />} />
+              <Route path="users" element={<UsersPage />} />
+              <Route path="tenants" element={<TenantsPage />} />
             </Route>
 
             {/* Catch-all fallback */}

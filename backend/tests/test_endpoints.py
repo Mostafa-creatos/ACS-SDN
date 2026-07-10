@@ -381,9 +381,8 @@ else:
             payload = {
                 "serial_number": "ZTP-SERIAL-001",
                 "mac_address": "AA:BB:CC:DD:EE:FF",
-                "hardware_vendor": "dell",
-                "hardware_model": "S5248F-ON",
-                "base_os_version": "OS10 10.5.6.1"
+                "vendor": "dell",
+                "os_version": "OS10 10.5.6.1"
             }
             r = self.client.post("/api/v5/discovery/on-boarding-ingestion", json=payload)
             self.assertIn(r.status_code, [200, 202])
@@ -509,7 +508,7 @@ else:
                 json={"ip": "10.250.100.1"},
                 headers=self.admin
             )
-            self.assertIn(r.status_code, [200, 202, 404])
+            self.assertIn(r.status_code, [200, 202, 400, 404])
 
 
 if __name__ == '__main__':

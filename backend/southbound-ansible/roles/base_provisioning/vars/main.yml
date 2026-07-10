@@ -1,0 +1,18 @@
+---
+banner_text: "UNAUTHORIZED ACCESS IS PROHIBITED. All activity is monitored."
+timezone_name: "UTC"
+mgmt_acl_allowed_sources: "10.0.0.0/8"
+
+tacacs_servers:
+  - 10.10.10.10
+  - 10.10.10.11
+enable_secret: "S3cr3tP@ssw0rd!"
+
+ntp_servers:
+  - 192.168.100.1
+  - 192.168.100.2
+syslog_server: 10.20.20.20
+
+snmp_v3_user: sdnadmin
+snmp_v3_pass: "sdnAuthPass123"
+snmp_v3_priv: "sdnPrivPass123"

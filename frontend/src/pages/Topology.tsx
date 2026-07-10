@@ -98,7 +98,10 @@ export const Topology: React.FC = () => {
   const loadGraphData = async () => {
     setLoading(true);
     try {
-      const headers = { 'Authorization': `Bearer ${token}` };
+      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
+      if (selectedTenant) {
+        headers['X-Tenant-ID'] = selectedTenant;
+      }
       const response = await fetch('/api/v5/topology/graph', { headers });
       
       let fetchedNodes: NodeData[] = [];

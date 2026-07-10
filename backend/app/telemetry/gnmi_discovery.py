@@ -70,6 +70,9 @@ def clean_and_login_dell_console(ip, port=5000):
             s.send(b"admin\n")
             time.sleep(1.0)
             
+        # Send end to make sure we are in exec mode and not config mode
+        s.send(b"end\n")
+        time.sleep(0.5)
         # Send terminal length 0 to prevent --More-- pagination
         s.send(b"terminal length 0\n")
         time.sleep(0.5)
@@ -110,229 +113,100 @@ def parse_dell_console_output(s, command):
 
 def discover_dell_switch(sw, db: Session):
     """
-    Connects to a Dell OS10 switch console, retrieves interface status and LLDP neighbors,
-    and updates the database interfaces table.
+    Connects to a Dell OS10 switch via SSH, retrieves status, running config, and neighbors,
+    and updates the database.
     """
-    print(f"[Dell Discovery] Connecting to {sw.hostname} at {sw.management_ip}...")
-    s = clean_and_login_dell_console(sw.management_ip)
-    if not s:
-        print(f"[Dell Discovery] Could not open console session for {sw.hostname}")
-        return [], []
-
+    import os
+    print(f"[Dell Discovery] Connecting to {sw.hostname} at {sw.management_ip} via SSH...")
+    
+    from ..drivers.dell_os10_collector import DellOS10Collector
+    
+    ssh_user = os.environ.get("DELL_SSH_USERNAME", "admin")
+    ssh_pass = os.environ.get("DELL_SSH_PASSWORD", "admin")
+    ssh_port = int(os.environ.get("DELL_SSH_PORT", "22"))
+    
     interfaces = []
     lldp_links = []
+    
     try:
-        # 1. Retrieve Version and System Details for Metadata
-        ver_out = parse_dell_console_output(s, "show version")
-        sys_out = parse_dell_console_output(s, "show system")
-        
-        os_version = sw.os_version or "10.5.4.3"
-        model = sw.model or "S6010-VM"
-        uptime = sw.uptime or "05:58:00"
-        serial_number = sw.serial_number or f"SN-DELL-{sw.hostname.upper()}"
-        
-        os_match = re.search(r'OS Version:\s*(\S+)', ver_out)
-        if os_match:
-            os_version = os_match.group(1)
+        with DellOS10Collector(
+            host=sw.management_ip,
+            username=ssh_user,
+            password=ssh_pass,
+            port=5000,
+            use_ssh=False,
+        ) as collector:
+            data = collector.collect_all()
             
-        model_match = re.search(r'System Type:\s*(\S+)', ver_out)
-        if model_match:
-            model = model_match.group(1)
-            
-        uptime_match = re.search(r'Up Time:\s*(\S+)', ver_out)
-        if uptime_match:
-            uptime = uptime_match.group(1)
-            
-        mac_match = re.search(r'MAC\s*:\s*(\S+)', sys_out)
-        if mac_match:
-            mac = mac_match.group(1)
-            serial_number = f"SN-DELL-{mac.replace(':', '').upper()}"
-            
-        sw.os_version = os_version
-        sw.model = model
-        sw.uptime = uptime
-        sw.serial_number = serial_number
-
-        # 2. Retrieve Interface Status
-        status_out = parse_dell_console_output(s, "show interface status")
+        system = data.get("system", {})
+        environment = data.get("environment", {})
+        inventory = data.get("inventory", [])
+        interfaces_data = data.get("interfaces", [])
+        vlans = data.get("vlans", [])
+        lags = data.get("lags", [])
+        lldp = data.get("lldp", [])
+        vlt = data.get("vlt")
+        stp = data.get("stp")
+        running_config = data.get("running_config", "")
         
-        # Line pattern: Eth 1/1/1                       up       40G      full     A    1    -
-        pattern = re.compile(r'^\s*Eth\s+(\d+/\d+/\d+)\s+(.*?)\s+(up|down|admin-down)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*$')
+        # 1. Update metadata
+        sw.os_version = system.get("os_version") or sw.os_version
+        sw.model = system.get("model") or sw.model
+        sw.uptime = system.get("uptime") or sw.uptime
+        sw.serial_number = system.get("serial_number") or sw.serial_number
+        sw.management_mac = system.get("management_mac") or sw.management_mac
+        sw.chassis_status = data.get("chassis_status") or sw.chassis_status
+        sw.temperature = data.get("temperature") or sw.temperature
         
-        ports_all = 0
-        ports_up = 0
-        
-        for line in status_out.splitlines():
-            m = pattern.match(line)
-            if m:
-                port_num = m.group(1)
-                desc = m.group(2).strip()
-                status = m.group(3)
-                speed = m.group(4)
-                duplex = m.group(5)
-                vlan = m.group(7)
-                
-                ports_all += 1
-                if status == "up":
-                    ports_up += 1
-                
-                # Normalize port names to ethernet1/1/1 style to match LLDP format
-                port_name = f"ethernet{port_num}"
-                interfaces.append({
-                    "name": port_name,
-                    "status": status,
-                    "speed_duplex": f"{speed} / {duplex.capitalize()}",
-                    "vlan": vlan,
-                    "description": desc or "Ethernet Interface",
-                    "mac_address": None,
-                    "media_type": "QSFP+ 40GBASE-CR4" if "40G" in speed else "SFP-10G-SR"
-                })
-                
-        # 3. Retrieve LLDP Neighbors
-        lldp_out = parse_dell_console_output(s, "show lldp neighbors")
-        lldp_pattern = re.compile(r'^\s*(ethernet\d+/\d+/\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s*$')
-        
-        for line in lldp_out.splitlines():
-            m = lldp_pattern.match(line)
-            if m:
-                local_port = m.group(1)
-                rem_host = m.group(2)
-                rem_port = m.group(3)
-                rem_chassis = m.group(4)
-                
-                lldp_links.append({
-                    "ip": sw.management_ip,
-                    "port": local_port,
-                    "remote_name": rem_host,
-                    "remote_port": rem_port,
-                    "remote_chassis": rem_chassis
-                })
-                
-        # 4. Retrieve VLT status
-        vlt_out = parse_dell_console_output(s, "show vlt")
-        vlt_status = {
-            "configured": False,
-            "domain_id": "N/A",
-            "role": "N/A",
-            "peer_status": "N/A",
-            "heartbeat": "N/A"
-        }
-        if vlt_out and "Domain ID" in vlt_out:
-            vlt_status["configured"] = True
-            domain_match = re.search(r'Domain ID\s*:\s*(\d+)', vlt_out, re.IGNORECASE)
-            if domain_match:
-                vlt_status["domain_id"] = domain_match.group(1)
-            role_match = re.search(r'Role\s*:\s*(\S+)', vlt_out, re.IGNORECASE)
-            if role_match:
-                vlt_status["role"] = role_match.group(1)
-            peer_match = re.search(r'Peer-link status\s*:\s*(\S+)', vlt_out, re.IGNORECASE)
-            if peer_match:
-                vlt_status["peer_status"] = peer_match.group(1)
-            hb_match = re.search(r'Heartbeat status\s*:\s*(\S+)', vlt_out, re.IGNORECASE)
-            if hb_match:
-                vlt_status["heartbeat"] = hb_match.group(1)
-        sw.vlt_status = json.dumps(vlt_status)
-
-        # 5. Retrieve Spanning-Tree status
-        stp_out = parse_dell_console_output(s, "show spanning-tree brief")
-        stp_status = {
-            "enabled": False,
-            "protocol": "RSTP",
-            "root_bridge": "No",
-            "blocked_ports": []
-        }
-        if stp_out:
-            if "Spanning tree enabled" in stp_out or "Spanning-tree" in stp_out or "rstp" in stp_out.lower():
-                stp_status["enabled"] = True
-            if "this bridge is the root" in stp_out.lower() or "is root" in stp_out.lower():
-                stp_status["root_bridge"] = "Yes"
-            
-            # Look for blocked ports in table lines (containing BLK or Blocking)
-            blocked = []
-            for line in stp_out.splitlines():
-                if "BLK" in line or "Blocking" in line:
-                    parts = line.split()
-                    if parts:
-                        blocked.append(parts[0])
-            stp_status["blocked_ports"] = blocked
-        sw.stp_status = json.dumps(stp_status)
-
-        # 6. Retrieve Environment Status
-        env_out = parse_dell_console_output(s, "show environment")
-        # Fall back to sys_out if show environment is empty
-        env_status = {
-            "power_supplies": [],
-            "fans": [],
-            "temperature": "Normal"
-        }
-        
-        # Parse Power Supplies
-        psu_lines = []
-        in_psu = False
-        for line in sys_out.splitlines() + env_out.splitlines():
-            if "-- Power Supplies --" in line or "Power Supplies" in line:
-                in_psu = True
-                continue
-            if in_psu and "--" in line:
-                continue
-            if in_psu and not line.strip():
-                in_psu = False
-            if in_psu:
-                psu_lines.append(line)
-                
-        for line in psu_lines:
-            parts = line.split()
-            if len(parts) >= 2 and parts[0].isdigit():
-                env_status["power_supplies"].append({
-                    "id": parts[0],
-                    "status": parts[1]
-                })
-
-        # Parse Fans
-        fan_lines = []
-        in_fan = False
-        for line in sys_out.splitlines() + env_out.splitlines():
-            if "-- Fan Status --" in line or "Fan Status" in line:
-                in_fan = True
-                continue
-            if in_fan and "--" in line:
-                continue
-            if in_fan and not line.strip():
-                in_fan = False
-            if in_fan:
-                fan_lines.append(line)
-                
-        for line in fan_lines:
-            parts = line.split()
-            if len(parts) >= 2 and parts[0].isdigit():
-                env_status["fans"].append({
-                    "id": parts[0],
-                    "status": parts[1]
-                })
-        
-        # Parse Temperature
-        temp_match = re.search(r'(temp|temperature)\s*:\s*(\S+)', env_out + sys_out, re.IGNORECASE)
-        if temp_match:
-            env_status["temperature"] = temp_match.group(2)
-            
-        sw.environment_status = json.dumps(env_status)
-
-        # 7. Pull running config snapshot
-        run_config = parse_dell_console_output(s, "show running-configuration")
-        if run_config and len(run_config) > 200:
-            sw.running_config = run_config
-
-        # Update Switch ports counters
-        sw.ports_all = ports_all
-        sw.ports_up = ports_up
+        # 2. Update status and sync time
         sw.status = "Up"
         sw.last_successful_sync = datetime.datetime.utcnow()
+        
+        # 3. Store raw config and check for configuration drift
+        if running_config:
+            sw.running_config = running_config
+            latest_snap = db.query(models.ConfigSnapshot).filter(
+                models.ConfigSnapshot.switch_id == sw.switch_id
+            ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
+            
+            if latest_snap:
+                def normalize_cfg(c: str) -> str:
+                    return "\n".join([l.strip() for l in c.replace("\r\n", "\n").split("\n") if l.strip()])
+                if normalize_cfg(running_config) != normalize_cfg(latest_snap.raw_config):
+                    sw.lifecycle_status = "drifted"
+                else:
+                    sw.lifecycle_status = "compliant_active"
+            else:
+                sw.lifecycle_status = "compliant_active"
+                
         db.commit()
         
+        # 4. Map interfaces for returning to caller
+        for intf in interfaces_data:
+            interfaces.append({
+                "name": intf.get("name"),
+                "status": intf.get("status"),
+                "speed_duplex": intf.get("speed_duplex"),
+                "vlan": intf.get("vlan"),
+                "description": intf.get("description"),
+                "mac_address": intf.get("mac_address"),
+                "media_type": intf.get("media_type")
+            })
+            
+        # 5. Map LLDP links for returning to caller
+        for entry in lldp:
+            lldp_links.append({
+                "ip": sw.management_ip,
+                "port": entry.get("port"),
+                "remote_name": entry.get("remote_name"),
+                "remote_port": entry.get("remote_port"),
+                "remote_chassis": entry.get("remote_chassis")
+            })
+            
     except Exception as e:
-        print(f"[Dell Discovery] Error during CLI ingestion for {sw.hostname}: {e}")
-    finally:
-        s.close()
+        print(f"[Dell Discovery] SSH discovery failed for {sw.hostname}: {e}")
+        sw.status = "Down"
+        db.commit()
         
     return interfaces, lldp_links
 
@@ -584,7 +458,6 @@ def run_gnmi_discovery(db: Session):
                 # Get fabric_id from local switch
                 fabric_id = local_sw.fabric_id
 
-                # Generate a unique loopback IP based on UUID (just use a high range)
                 new_uuid = _uuid.uuid4()
                 loopback = f"10.200.99.{abs(hash(remote_name)) % 200 + 1}"
                 vtep = f"10.250.99.{abs(hash(remote_name)) % 200 + 1}"

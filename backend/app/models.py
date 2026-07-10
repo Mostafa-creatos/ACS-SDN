@@ -53,6 +53,8 @@ class ZtpDiscoveryPool(Base):
     base_os_version = Column(String(32), nullable=False)
     first_seen = Column(DateTime, default=datetime.utcnow)
     last_boot_request = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    onboarding_status = Column(String(32), default="pending")  # 'pending', 'provisioned', 'failed'
+    error_message = Column(String, nullable=True)
 
     # Relationships
     switch_reference = relationship("Switch", back_populates="discovery_reference")
@@ -70,7 +72,8 @@ class Switch(Base):
     local_bgp_asn = Column(Integer, nullable=False)
     loopback_0_ip = Column(String(45), nullable=False, unique=True)
     vtep_ip = Column(String(45), nullable=True, unique=True)
-    lifecycle_status = Column(String(64), default="discovered_raw")
+    lifecycle_status = Column(String(64), default="DiscoveredRaw")
+    configuration_drift_category = Column(String(255), nullable=True)
     configuration_checksum = Column(String(64), nullable=True)
     last_successful_sync = Column(DateTime, nullable=True)
 
@@ -311,6 +314,7 @@ class ConfigSnapshot(Base):
     taken_at = Column(DateTime, default=datetime.utcnow)
     raw_config = Column(String, nullable=False)
     config_hash = Column(String(64), nullable=False)
+    is_baseline = Column(Boolean, default=False)
     taken_by = Column(String(100), default="system")
 
     switch = relationship("Switch")
@@ -370,9 +374,62 @@ class User(Base):
     user_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     username = Column(String(100), nullable=False, unique=True)
     hashed_password = Column(String(255), nullable=False)
-    role = Column(String(64), default="Tenant Auditor") # 'Platform Admin', 'Tenant Operator', 'Tenant Auditor'
+    
+    # Deprecated fields (to be removed in future refactoring)
+    role = Column(String(64), nullable=True) 
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id", ondelete="SET NULL"), nullable=True)
+    
+    # New fields for Sprint 1
+    is_active = Column(Boolean, default=True)
+    last_login_at = Column(DateTime, nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    must_change_password = Column(Boolean, default=True)
 
+    tenant = relationship("Tenant")
+    memberships = relationship("UserTenantMembership", back_populates="user", cascade="all, delete-orphan")
+
+
+class UserTenantMembership(Base):
+    __tablename__ = "user_tenant_memberships"
+
+    membership_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(64), nullable=False)
+
+    user = relationship("User", back_populates="memberships")
+    tenant = relationship("Tenant")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "tenant_id", name="unique_user_tenant"),
+    )
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    token_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    token_hash = Column(String(255), nullable=False, unique=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+
+    user = relationship("User")
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    audit_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id", ondelete="SET NULL"), nullable=True)
+    action = Column(String(255), nullable=False)
+    resource = Column(String(255), nullable=False)
+    status = Column(String(64), nullable=False)  # e.g., "denied", "success"
+    detail = Column(String, nullable=True)
+
+    user = relationship("User")
     tenant = relationship("Tenant")
 
 

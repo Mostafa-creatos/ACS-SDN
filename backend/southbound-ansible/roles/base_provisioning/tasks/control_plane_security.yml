@@ -1,0 +1,20 @@
+---
+- name: Enable Spanning-Tree BPDU guard by default
+  dellos10_command:
+    commands:
+      - spanning-tree bpduguard disable-timeout 300
+
+- name: Apply Control Plane Policing (CoPP) policy
+  dellos10_command:
+    commands:
+      - class-map type control-plane match-any COPP_CLASS
+      - match protocol bgp
+      - match protocol ospf
+      - match protocol arp
+      - match protocol icmp
+      - match protocol ssh
+      - policy-map type control-plane COPP_POLICY
+      - class COPP_CLASS
+      - police cir 10000 cbs 20000
+      - control-plane
+      - service-policy in type control-plane COPP_POLICY

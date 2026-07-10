@@ -1,0 +1,26 @@
+---
+- name: Configure NTP servers
+  dellos10_command:
+    commands:
+      - ntp server {{ item }}
+  loop: "{{ ntp_servers }}"
+  when: ntp_servers is defined
+
+- name: Configure Syslog servers
+  dellos10_command:
+    commands:
+      - logging server {{ syslog_server }} severity info
+
+- name: Enable SNMPv3 and restrict views
+  dellos10_command:
+    commands:
+      - snmp-server view RESTRICTED_VIEW 1.3.6.1 included
+      - snmp-server group READ_ONLY v3 auth read RESTRICTED_VIEW
+      - snmp-server user {{ snmp_v3_user }} READ_ONLY v3 auth sha {{ snmp_v3_pass }} priv aes 128 {{ snmp_v3_priv }}
+
+- name: Enable gNMI / Telemetry
+  dellos10_command:
+    commands:
+      - telemetry
+      - grpc server
+      - no shutdown

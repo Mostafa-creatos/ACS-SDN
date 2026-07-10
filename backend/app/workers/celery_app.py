@@ -44,8 +44,16 @@ celery_app.conf.update(
     timezone='UTC',
     enable_utc=True,
     broker_connection_retry_on_startup=True,
+    beat_schedule={
+        'run-config-compliance-mgr-every-15-mins': {
+            'task': 'app.workers.config_lifecycle.config_compliance_mgr',
+            'schedule': 900.0,
+        },
+    }
 )
 
 # Import tasks to register them with the celery worker
 # We will define tasks in sync_tasks.py
 import app.workers.sync_tasks
+import app.workers.ztp_tasks
+import app.workers.config_lifecycle

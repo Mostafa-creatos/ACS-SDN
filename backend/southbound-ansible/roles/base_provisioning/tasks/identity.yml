@@ -1,0 +1,15 @@
+---
+- name: Configure hostname
+  dellos10_command:
+    commands:
+      - hostname {{ inventory_hostname }}
+
+- name: Configure MOTD banner
+  dellos10_command:
+    commands:
+      - banner motd "{{ banner_text }}"
+
+- name: Configure timezone
+  dellos10_command:
+    commands:
+      - clock timezone {{ timezone_name }}

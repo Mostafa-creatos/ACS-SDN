@@ -14,6 +14,7 @@ from sqlalchemy import or_
 from ..db import get_db
 from .. import models
 from ..auth import get_current_user_claims, verify_switch_access
+from ..auth_permissions import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -245,8 +246,10 @@ def get_inventory_details(
 
     query = db.query(models.Switch)
     
+    requested_tenant = claims.get("requested_tenant_name")
+    
     # Tenant isolation
-    if user_role != "Platform Admin":
+    if user_role not in ["Platform Admin", "platform_admin"] or requested_tenant != "AtlasWave Maroc Demo":
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
         query = query.join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
             models.TenantVrf.tenant_id == t_uuid
@@ -296,7 +299,7 @@ def get_inventory_details(
 
 # Get Single Switch with full details
 @router.get("/admin/switches/{switch_id}")
-def get_switch_detail(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_switch_detail(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
     verify_switch_access(db, switch_id, claims)
     sw = db.query(models.Switch).filter(models.Switch.switch_id == switch_id).first()
     if not sw:
@@ -306,7 +309,7 @@ def get_switch_detail(switch_id: uuid.UUID, db: Session = Depends(get_db), claim
 
 # Get Switch Hardware Components
 @router.get("/admin/switches/{switch_id}/hardware")
-def get_switch_hardware(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_switch_hardware(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
     verify_switch_access(db, switch_id, claims)
     components = db.query(models.HardwareComponent).filter(
         models.HardwareComponent.switch_id == switch_id
@@ -329,7 +332,7 @@ def get_switch_hardware(switch_id: uuid.UUID, db: Session = Depends(get_db), cla
 
 # Get Switch VLANs
 @router.get("/admin/switches/{switch_id}/vlans")
-def get_switch_vlans(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_switch_vlans(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
     verify_switch_access(db, switch_id, claims)
     vlans = db.query(models.SwitchVlan).filter(
         models.SwitchVlan.switch_id == switch_id
@@ -347,7 +350,7 @@ def get_switch_vlans(switch_id: uuid.UUID, db: Session = Depends(get_db), claims
 
 # Get Switch LAGs
 @router.get("/admin/switches/{switch_id}/lags")
-def get_switch_lags(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_switch_lags(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
     verify_switch_access(db, switch_id, claims)
     lags = db.query(models.SwitchLag).filter(
         models.SwitchLag.switch_id == switch_id
@@ -367,7 +370,7 @@ def get_switch_lags(switch_id: uuid.UUID, db: Session = Depends(get_db), claims:
 
 # Get Switch VLT Domain
 @router.get("/admin/switches/{switch_id}/vlt")
-def get_switch_vlt(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_switch_vlt(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
     verify_switch_access(db, switch_id, claims)
     vlt = db.query(models.SwitchVltDomain).filter(
         models.SwitchVltDomain.switch_id == switch_id
@@ -389,13 +392,7 @@ def get_switch_vlt(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: 
 
 # Create Switch
 @router.post("/admin/switches", status_code=status.HTTP_201_CREATED)
-def create_switch(payload: SwitchCreate, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
-    user_role = claims.get("role")
-    if user_role != "Platform Admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins can manually register devices."
-        )
+def create_switch(payload: SwitchCreate, db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
         
     # Get active fabric ID (bind to default DataCenter fabric)
     fabric = db.query(models.Fabric).first()
@@ -446,13 +443,7 @@ def create_switch(payload: SwitchCreate, db: Session = Depends(get_db), claims: 
 
 # Edit Switch
 @router.put("/admin/switches/{switch_id}")
-def update_switch(switch_id: uuid.UUID, payload: SwitchUpdate, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
-    user_role = claims.get("role")
-    if user_role not in ["Platform Admin", "Tenant Operator"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: User lacks authorization to edit device metadata."
-        )
+def update_switch(switch_id: uuid.UUID, payload: SwitchUpdate, db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
         
     # Verify tenant bounds
     verify_switch_access(db, switch_id, claims)
@@ -471,13 +462,7 @@ def update_switch(switch_id: uuid.UUID, payload: SwitchUpdate, db: Session = Dep
 
 # Delete Switch
 @router.delete("/admin/switches/{switch_id}")
-def delete_switch(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
-    user_role = claims.get("role")
-    if user_role != "Platform Admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins can delete devices from the registry."
-        )
+def delete_switch(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
         
     sw = db.query(models.Switch).filter(models.Switch.switch_id == switch_id).first()
     if not sw:
@@ -486,6 +471,40 @@ def delete_switch(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: d
     db.delete(sw)
     db.commit()
     return {"status": "DEVICE_DELETED", "switch_id": str(switch_id)}
+
+@router.post("/api/v5/switches/{id}/rollback", status_code=status.HTTP_202_ACCEPTED)
+def rollback_switch(id: uuid.UUID, db: Session = Depends(get_db)):
+    """
+    Triggers a compliance rollback to re-apply the Ansible baseline.
+    Requires approval if blast radius is high (spine).
+    """
+    switch = db.query(models.Switch).filter(models.Switch.switch_id == id).first()
+    if not switch:
+        raise HTTPException(status_code=404, detail="Switch not found.")
+
+    if switch.role.lower() == "spine":
+        # Requires approval
+        approval = models.PolicyApproval(
+            tenant_id=None,  # Or assign system/tenant
+            vrf_name="management",
+            vlan_id=1,
+            layer2_vni=0,
+            layer3_vni=0,
+            requested_cidr="0.0.0.0/0",
+            target_switch_serials=switch.serial_number,
+            blast_radius=6,
+            status="pending",
+            diff_payload="Spine Baseline Rollback request"
+        )
+        db.add(approval)
+        db.commit()
+        return {"status": "APPROVAL_REQUIRED", "message": "Rollback of a spine switch requires Platform Admin approval.", "approval_id": str(approval.approval_id)}
+    
+    # Trigger rollback immediately
+    from app.workers.ztp_tasks import trigger_rollback
+    trigger_rollback.delay(str(switch.switch_id))
+    
+    return {"status": "ROLLBACK_INITIATED", "message": f"Rollback task queued for leaf {switch.hostname}."}
 
 # ---------------------------------------------------------------------------
 # Seed data helpers (fallback when live SSH collection is unavailable)
@@ -823,7 +842,7 @@ def _apply_collected_data(db: Session, sw: models.Switch, data: dict) -> str:
 
 # Immediate Data / Config Collection Trigger
 @router.post("/admin/switches/{switch_id}/collect")
-def collect_switch_snapshot(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def collect_switch_snapshot(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:write"))):
     verify_switch_access(db, switch_id, claims)
 
     sw = db.query(models.Switch).filter(models.Switch.switch_id == switch_id).first()

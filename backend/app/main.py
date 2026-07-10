@@ -16,13 +16,18 @@ from . import models, schemas
 from .drivers.dell_os10 import DellOS10Driver
 from .drivers.arista_eos import AristaEosDriver
 from .admin_ui import ADMIN_HTML
-from .routers import inventory
+from .routers import inventory, discovery, auth, users, tenants
 from .auth import security, get_current_user_claims, verify_switch_access
+from .auth_permissions import require_permission
 
 # Initialize FastAPI App
 app = FastAPI(title="Enterprise SDN Controller — Core Ingress & Validation Orchestrator")
 
 app.include_router(inventory.router)
+app.include_router(discovery.router)
+app.include_router(auth.router)
+app.include_router(users.router)
+app.include_router(tenants.router)
 
 def migrate_db_columns(engine):
     from sqlalchemy import inspect
@@ -160,7 +165,7 @@ def startup_db_configure():
 
             # 4. Switches (Seeding the Dell Spines and Nokia Leafs + detailed inventory switches)
             spine1 = models.Switch(
-                switch_id=uuid.UUID("44444444-4444-4444-4444-44444444444d"),
+                switch_id=uuid.uuid4(),
                 fabric_id=fabric_id,
                 hostname="spine-01",
                 management_ip="172.20.20.10",
@@ -189,7 +194,7 @@ def startup_db_configure():
                 chassis_status="Ready"
             )
             spine2 = models.Switch(
-                switch_id=uuid.UUID("77777777-7777-7777-7777-77777777777d"),
+                switch_id=uuid.uuid4(),
                 fabric_id=fabric_id,
                 hostname="spine-02",
                 management_ip="172.20.20.13",
@@ -218,7 +223,7 @@ def startup_db_configure():
                 chassis_status="Ready"
             )
             leaf1 = models.Switch(
-                switch_id=uuid.UUID("55555555-5555-5555-5555-55555555555e"),
+                switch_id=uuid.uuid4(),
                 fabric_id=fabric_id,
                 hostname="leaf-01",
                 management_ip="172.20.20.11",
@@ -240,7 +245,7 @@ def startup_db_configure():
                 chassis_status="Ready"
             )
             leaf2 = models.Switch(
-                switch_id=uuid.UUID("66666666-6666-6666-6666-66666666666f"),
+                switch_id=uuid.uuid4(),
                 fabric_id=fabric_id,
                 hostname="leaf-02",
                 management_ip="172.20.20.12",
@@ -262,7 +267,7 @@ def startup_db_configure():
                 chassis_status="Ready"
             )
             leaf3 = models.Switch(
-                switch_id=uuid.UUID("88888888-8888-8888-8888-88888888888a"),
+                switch_id=uuid.uuid4(),
                 fabric_id=fabric_id,
                 hostname="leaf-03",
                 management_ip="172.20.20.14",
@@ -284,7 +289,7 @@ def startup_db_configure():
                 chassis_status="Ready"
             )
             leaf4 = models.Switch(
-                switch_id=uuid.UUID("99999999-9999-9999-9999-99999999999b"),
+                switch_id=uuid.uuid4(),
                 fabric_id=fabric_id,
                 hostname="leaf-04",
                 management_ip="172.20.20.15",
@@ -306,7 +311,7 @@ def startup_db_configure():
                 chassis_status="Ready"
             )
             leaf5 = models.Switch(
-                switch_id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                switch_id=uuid.uuid4(),
                 fabric_id=fabric_id,
                 hostname="leaf-05",
                 management_ip="172.20.20.16",
@@ -328,7 +333,7 @@ def startup_db_configure():
                 chassis_status="Ready"
             )
             leaf6 = models.Switch(
-                switch_id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+                switch_id=uuid.uuid4(),
                 fabric_id=fabric_id,
                 hostname="leaf-06",
                 management_ip="172.20.20.17",
@@ -436,12 +441,6 @@ async def process_policy_intent_pipeline(
     # Load user roles and verify tenant scoping access
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-
-    if user_role not in ["Platform Admin", "Tenant Operator"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Unauthorized: User does not possess write privileges."
-        )
         
     # If the user is a Tenant Operator, verify they only provision within their tenant boundary
     if user_role == "Tenant Operator" and str(user_tenant_id) != payload.tenant_id:
@@ -642,44 +641,6 @@ async def process_policy_intent_pipeline(
         "switches_queued": payload.target_switch_serials
     }
 
-@app.post("/api/v5/discovery/on-boarding-ingestion", status_code=status.HTTP_202_ACCEPTED)
-async def ingest_ztp_signal(
-    payload: schemas.ZtpDiscoverySubmission,
-    request: Request,
-    db: Session = Depends(get_db)
-):
-    """
-    Ingest a ZTP discovery signal from a newly unboxed switch.
-    """
-    # Check if a discovery record already exists for this serial or MAC
-    record = db.query(models.ZtpDiscoveryPool).filter(
-        (models.ZtpDiscoveryPool.serial_number == payload.serial_number) |
-        (models.ZtpDiscoveryPool.mac_address == payload.mac_address)
-    ).first()
-    
-    client_ip = request.client.host if request.client else "127.0.0.1"
-
-    if record:
-        # Update existing record
-        record.current_dhcp_ip = client_ip
-        record.base_os_version = payload.base_os_version
-        record.hardware_model = payload.hardware_model
-    else:
-        # Create a new raw discovery entry
-        record = models.ZtpDiscoveryPool(
-            serial_number=payload.serial_number,
-            mac_address=payload.mac_address,
-            hardware_vendor=payload.hardware_vendor,
-            hardware_model=payload.hardware_model,
-            current_dhcp_ip=client_ip,
-            base_os_version=payload.base_os_version
-        )
-        db.add(record)
-    
-    db.commit()
-    print(f"[ZTP INGESTION] Discovered bare-metal switch serial: {payload.serial_number} at IP: {client_ip}")
-    return {"status": "DISCOVERY_INGESTION_ACCEPTED", "serial_number": payload.serial_number}
-
 @app.post("/api/v5/orchestrator/policy-reconciliation", status_code=status.HTTP_200_OK)
 async def process_policy_reconciliation(
     payload: schemas.PolicyReconciliationSubmission,
@@ -691,12 +652,6 @@ async def process_policy_reconciliation(
     """
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-
-    if user_role not in ["Platform Admin", "Tenant Operator"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Unauthorized: User does not possess write privileges."
-        )
 
     if user_role == "Tenant Operator" and str(user_tenant_id) != payload.tenant_id:
         raise HTTPException(
@@ -767,32 +722,8 @@ async def process_policy_reconciliation(
 
 
 # ==========================================
-# AUTHENTICATION & ADMINISTRATIVE ENDPOINTS
+# ADMINISTRATIVE ENDPOINTS
 # ==========================================
-
-@app.post("/api/v5/auth/login")
-def login(payload: schemas.LoginPayload, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.username == payload.username).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password"
-        )
-    if not bcrypt.checkpw(payload.password.encode("utf-8"), user.hashed_password.encode("utf-8")):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password"
-        )
-    
-    token_payload = {
-        "sub": user.username,
-        "user_id": str(user.user_id),
-        "username": user.username,
-        "role": user.role,
-        "tenant_id": str(user.tenant_id) if user.tenant_id else None
-    }
-    token = jwt.encode(token_payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
-    return {"access_token": token, "token_type": "bearer"}
 
 @app.post("/api/v5/admin/tenants", status_code=status.HTTP_201_CREATED)
 def create_tenant(
@@ -800,12 +731,6 @@ def create_tenant(
     db: Session = Depends(get_db),
     claims: dict = Depends(get_current_user_claims)
 ):
-    user_role = claims.get("role")
-    if user_role != "Platform Admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins can create tenants."
-        )
     
     # Check if tenant name already exists
     existing = db.query(models.Tenant).filter(models.Tenant.tenant_name == payload.tenant_name).first()
@@ -829,12 +754,6 @@ def get_pending_approvals(
 ):
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-
-    if user_role not in ["Platform Admin", "Tenant Operator"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Unauthorized: User does not possess write/read permissions for approvals."
-        )
 
     query = db.query(models.PolicyApproval).filter(models.PolicyApproval.status == "pending")
     if user_role == "Tenant Operator":
@@ -862,12 +781,6 @@ def approve_policy_intent(
     db: Session = Depends(get_db),
     claims: dict = Depends(get_current_user_claims)
 ):
-    user_role = claims.get("role")
-    if user_role != "Platform Admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins can authorize suspended configurations."
-        )
 
     approval = db.query(models.PolicyApproval).filter(
         models.PolicyApproval.approval_id == approval_id,
@@ -948,12 +861,6 @@ def reject_policy_intent(
     db: Session = Depends(get_db),
     claims: dict = Depends(get_current_user_claims)
 ):
-    user_role = claims.get("role")
-    if user_role != "Platform Admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins can reject suspended configurations."
-        )
 
     approval = db.query(models.PolicyApproval).filter(
         models.PolicyApproval.approval_id == approval_id,
@@ -989,7 +896,7 @@ if os.path.exists("frontend/dist"):
 
 
 @app.get("/api/v5/admin/stats")
-def get_admin_stats(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_admin_stats(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
     if user_role == "Platform Admin":
@@ -1015,7 +922,7 @@ def get_admin_stats(db: Session = Depends(get_db), claims: dict = Depends(get_cu
 
 
 @app.get("/api/v5/admin/tenants")
-def get_admin_tenants(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_admin_tenants(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
     if user_role == "Platform Admin":
@@ -1027,7 +934,7 @@ def get_admin_tenants(db: Session = Depends(get_db), claims: dict = Depends(get_
 
 
 @app.get("/api/v5/admin/switches")
-def get_admin_switches(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_admin_switches(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
     if user_role == "Platform Admin":
@@ -1051,13 +958,9 @@ def get_admin_switches(db: Session = Depends(get_db), claims: dict = Depends(get
 
 
 @app.get("/api/v5/admin/ztp-pool")
-def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     user_role = claims.get("role")
-    if user_role != "Platform Admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins have access to the ZTP pool."
-        )
+    user_tenant_id = claims.get("tenant_id")
     ztp_devices = db.query(models.ZtpDiscoveryPool).all()
     return [
         {
@@ -1073,7 +976,7 @@ def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(get
 
 
 @app.get("/api/v5/admin/subnets")
-def get_admin_subnets(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_admin_subnets(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
     if user_role == "Platform Admin":
@@ -1098,9 +1001,7 @@ def get_admin_subnets(db: Session = Depends(get_db), claims: dict = Depends(get_
 
 
 @app.get("/api/v5/admin/topology")
-async def get_admin_topology(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
+async def get_admin_topology(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     try:
         edges = db.query(models.TopologyEdge).filter(models.TopologyEdge.state == "up").all()
         if not edges:
@@ -1150,7 +1051,7 @@ async def get_admin_topology(db: Session = Depends(get_db), claims: dict = Depen
         ]
 
 @app.get("/api/v5/topology/graph")
-async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     """
     Returns the real discovered topology nodes and edges formatted for Cytoscape.js.
     """
@@ -1211,13 +1112,7 @@ async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depen
 
 @app.post("/api/v5/admin/sync-netdisco")
 @app.post("/api/v5/admin/sync-gnmi")
-async def trigger_admin_sync(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
-    user_role = claims.get("role")
-    if user_role != "Platform Admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins can trigger synchronization."
-        )
+async def trigger_admin_sync(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     from .workers.sync_tasks import run_topology_discovery_sync
     await run_topology_discovery_sync(db)
     return {"status": "SYNC_SUCCESSFUL"}
@@ -1228,13 +1123,7 @@ class DiscoverPayload(BaseModel):
     ip: str
 
 @app.post("/api/v5/admin/trigger-discover")
-async def trigger_admin_discover(payload: DiscoverPayload, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
-    user_role = claims.get("role")
-    if user_role != "Platform Admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins can trigger discovery."
-        )
+async def trigger_admin_discover(payload: DiscoverPayload, db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
 
     from .telemetry.gnmi_client import get_switch_lldp, parse_local_device_info
     import asyncio
@@ -1299,16 +1188,17 @@ def create_snapshot(
     
     from .workers.config_lifecycle import take_config_snapshot
     try:
-        snap = take_config_snapshot(db, sw_uuid, claims.get("role", "system"))
+        username = claims.get("username") or claims.get("email") or claims.get("role", "system")
+        snap = take_config_snapshot(db, sw_uuid, username)
         return {"status": "SNAPSHOT_TAKEN", "snapshot_id": str(snap.snapshot_id), "hash": snap.config_hash}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/v5/visibility/snapshots")
-def list_snapshots(switch_id: Optional[str] = None, db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def list_snapshots(switch_id: Optional[str] = None, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
+    
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    
     query = db.query(models.ConfigSnapshot)
     if switch_id:
         sw_uuid = uuid.UUID(switch_id)
@@ -1368,8 +1258,64 @@ def trigger_rollback(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+class AcceptDriftPayload(BaseModel):
+    switch_id: str
+
+@app.post("/api/v5/visibility/accept-drift")
+def accept_switch_drift(
+    payload: AcceptDriftPayload,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(get_current_user_claims)
+):
+    user_role = claims.get("role")
+    if user_role not in ["Platform Admin", "Tenant Operator"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Only Platform Admins and Tenant Operators can accept configuration drift."
+        )
+    
+    sw_uuid = uuid.UUID(payload.switch_id)
+    verify_switch_access(db, sw_uuid, claims)
+    
+    switch = db.query(models.Switch).filter(models.Switch.switch_id == sw_uuid).first()
+    if not switch:
+        raise HTTPException(status_code=404, detail="Switch not found.")
+        
+    if not switch.running_config:
+        raise HTTPException(status_code=400, detail="No live running configuration available to accept.")
+        
+    # Create new snapshot capturing the current running config as the baseline
+    import hashlib
+    import datetime
+    
+    raw_config = switch.running_config
+    config_hash = hashlib.sha256(raw_config.encode('utf-8')).hexdigest()
+    
+    snapshot = models.ConfigSnapshot(
+        snapshot_id=uuid.uuid4(),
+        switch_id=sw_uuid,
+        taken_at=datetime.datetime.utcnow(),
+        raw_config=raw_config,
+        config_hash=config_hash,
+        taken_by=claims.get("username") or claims.get("email") or "operator"
+    )
+    db.add(snapshot)
+    
+    # Update switch status
+    switch.configuration_checksum = config_hash
+    switch.lifecycle_status = "compliant_active"
+    db.commit()
+    
+    return {
+        "status": "DRIFT_ACCEPTED",
+        "snapshot_id": str(snapshot.snapshot_id),
+        "config_hash": config_hash
+    }
+
 @app.post("/api/v5/visibility/compliance/run")
-def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends(require_permission("compliance:run"))):
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
     from .workers.config_lifecycle import run_compliance_check
     if claims.get("role") not in ["Platform Admin", "Tenant Operator"]:
         raise HTTPException(
@@ -1386,17 +1332,22 @@ def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends
     }
 
 @app.get("/api/v5/visibility/compliance/latest")
-def get_latest_compliance(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_latest_compliance(db: Session = Depends(get_db), claims: dict = Depends(require_permission("compliance:run"))):
+    
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    
     run = db.query(models.ComplianceRun).order_by(models.ComplianceRun.started_at.desc()).first()
     if not run:
         return {"status": "NO_RUNS_EVALUATED"}
     import json
     
     query = db.query(models.ComplianceFinding).filter(models.ComplianceFinding.compliance_run_id == run.run_id)
-    if user_role != "Platform Admin":
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
+    requested_tenant = claims.get("requested_tenant_name")
+    if user_role in ["Platform Admin", "platform_admin"] and requested_tenant == "AtlasWave Maroc Demo":
+        pass
+    elif user_tenant_id and str(user_tenant_id) != "00000000-0000-0000-0000-000000000000":
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
         allowed_switch_ids = db.query(models.Switch.switch_id).join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
             models.TenantVrf.tenant_id == t_uuid
@@ -1423,10 +1374,10 @@ def get_latest_compliance(db: Session = Depends(get_db), claims: dict = Depends(
     }
 
 @app.get("/api/v5/visibility/endpoints")
-def get_discovered_endpoints(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_discovered_endpoints(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
+    
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    
     query = db.query(models.DiscoveredEndpoint)
     if user_role != "Platform Admin":
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
@@ -1491,12 +1442,15 @@ def get_telemetry_metrics(
 
 
 @app.get("/api/v5/visibility/inventory")
-def get_inventory_details(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_inventory_details(db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
+    
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    
     query = db.query(models.Switch)
-    if user_role != "Platform Admin":
+    requested_tenant = claims.get("requested_tenant_name")
+    if user_role in ["Platform Admin", "platform_admin"] and requested_tenant == "AtlasWave Maroc Demo":
+        pass # Allow Platform Admin to see all switches when on the default Global view
+    elif user_tenant_id and str(user_tenant_id) != "00000000-0000-0000-0000-000000000000":
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
         query = query.join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
             models.TenantVrf.tenant_id == t_uuid
@@ -1538,10 +1492,10 @@ def get_inventory_details(db: Session = Depends(get_db), claims: dict = Depends(
 
 
 @app.get("/api/v5/visibility/stp")
-def get_stp_states(db: Session = Depends(get_db), claims: dict = Depends(get_current_user_claims)):
+def get_stp_states(db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
+    
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    
     query = db.query(models.Switch)
     if user_role != "Platform Admin":
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
@@ -1592,7 +1546,7 @@ def export_reports_csv(
     if report_type == "inventory":
         writer.writerow(["Hostname", "Management IP", "Vendor", "Role", "Serial Number", "Status"])
         query = db.query(models.Switch)
-        if user_role != "Platform Admin":
+        if user_role not in ["Platform Admin", "platform_admin"]:
             t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
             query = query.join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
                 models.TenantVrf.tenant_id == t_uuid

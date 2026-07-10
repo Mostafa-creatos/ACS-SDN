@@ -44,7 +44,10 @@ export const Dashboard: React.FC = () => {
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      const headers = { 'Authorization': `Bearer ${token}` };
+      const headers: any = { 'Authorization': `Bearer ${token}` };
+      if (selectedTenant) {
+        headers['X-Tenant-ID'] = selectedTenant;
+      }
       
       // Attempt to load from real API routes
       const swRes = await fetch('/api/v5/visibility/inventory', { headers });
@@ -52,10 +55,17 @@ export const Dashboard: React.FC = () => {
       const switches = swRes.ok ? await swRes.json() : [];
       const compliance = compRes.ok ? await compRes.json() : null;
 
+      let switchesList = [];
+      if (Array.isArray(switches)) {
+        switchesList = switches;
+      } else if (switches.items && Array.isArray(switches.items)) {
+        switchesList = switches.items;
+      }
+
       // Extract details
-      const total = switches.length || 6;
-      const active = switches.filter((s: any) => s.status === 'Up').length || 4;
-      const drifted = switches.filter((s: any) => s.lifecycle_status === 'drifted').length || 1;
+      const total = switchesList.length;
+      const active = switchesList.filter((s: any) => s.status === 'Up' || s.lifecycle_status === 'compliant_active').length;
+      const drifted = switchesList.filter((s: any) => s.lifecycle_status === 'drifted').length;
       const approvals = 2; // Mock approval count
 
       // Distribution
@@ -117,6 +127,21 @@ export const Dashboard: React.FC = () => {
   const handleRunAudit = () => {
     setAuditRunning(true);
     setAuditStep(1);
+
+    // Trigger real backend compliance run in parallel
+    const triggerAudit = async () => {
+      try {
+        const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
+        if (selectedTenant) {
+          headers['X-Tenant-ID'] = selectedTenant;
+        }
+        await fetch('/api/v5/visibility/compliance/run', { method: 'POST', headers });
+      } catch (e) {
+        console.error("Failed to run audit on backend:", e);
+      }
+    };
+    triggerAudit();
+
     const interval = setInterval(() => {
       setAuditStep(prev => {
         if (prev >= 3) {

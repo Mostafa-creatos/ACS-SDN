@@ -71,3 +71,16 @@ def parse_local_device_info(lldp_data: dict, ip: str) -> dict:
                 desc = val["system-description"]
                 info["os"] = desc.split()[0] if desc else "SRLinux"
     return info
+
+def get_nokia_config(ip: str, password: str = "NokiaSrl1!", port: int = 57400) -> str:
+    """
+    Connects to a Nokia SR Linux switch via gNMI and retrieves the full configuration as JSON string.
+    """
+    try:
+        with gNMIclient(target=(ip, port), username="admin", password=password, skip_verify=True, gnmi_timeout=2) as gc:
+            config_data = gc.get(path=['/'])
+            return json.dumps(config_data, indent=2)
+    except Exception as e:
+        print(f"[gNMI CLIENT] Failed to fetch config from {ip}: {e}")
+        return ""
+

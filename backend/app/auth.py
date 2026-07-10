@@ -1,14 +1,19 @@
 import uuid
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from .config import settings
+from .db import get_db
 from . import models
 
 security = HTTPBearer()
 
-def get_current_user_claims(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+def get_current_user_claims(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> dict:
     """
     Decodes the JWT token from the Authorization header to enforce tenant boundaries and roles.
     Includes simple mock tokens for test execution loops.
@@ -29,6 +34,32 @@ def get_current_user_claims(credentials: HTTPAuthorizationCredentials = Depends(
     
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        
+        # Override the tenant_id if the frontend specified one via X-Tenant-ID
+        x_tenant = request.headers.get("X-Tenant-ID")
+        if x_tenant:
+            payload["requested_tenant_name"] = x_tenant
+            tenant = db.query(models.Tenant).filter(models.Tenant.tenant_name == x_tenant).first()
+            if tenant:
+                payload["tenant_id"] = str(tenant.tenant_id)
+                payload["tenant_name"] = tenant.tenant_name
+        else:
+            tenants = payload.get("tenants", [])
+            if tenants:
+                tenant = db.query(models.Tenant).filter(models.Tenant.tenant_name == tenants[0]).first()
+                if tenant:
+                    payload["tenant_id"] = str(tenant.tenant_id)
+                    payload["tenant_name"] = tenant.tenant_name
+                
+        # Normalize roles to legacy format to support legacy endpoint role checks
+        role = payload.get("role")
+        if role == "platform_admin":
+            payload["role"] = "Platform Admin"
+        elif role == "operator":
+            payload["role"] = "Tenant Operator"
+        elif role == "readonly":
+            payload["role"] = "Tenant Auditor"
+            
         return payload
     except jwt.PyJWTError:
         raise HTTPException(
@@ -42,7 +73,7 @@ def verify_switch_access(db: Session, switch_id: uuid.UUID, claims: dict):
     """
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    if user_role == "Platform Admin":
+    if user_role in ["Platform Admin", "platform_admin"]:
         return True
     
     if not user_tenant_id:
