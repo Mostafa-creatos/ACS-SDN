@@ -12,6 +12,42 @@ from sqlalchemy.orm import Session
 from .. import models
 from .gnmi_client import gNMIclient, get_switch_lldp, parse_lldp_neighbors
 
+def is_valid_host_mac(mac: str) -> bool:
+    """
+    Returns True for unicast MACs that are plausibly real end-host addresses.
+    Filters out:
+      - All-zeros / all-ff broadcast
+      - Multicast MACs (LSB of first octet = 1)
+      - Common control-plane prefixes (01:80:c2, 01:00:5e, 33:33:, ff:ff:ff)
+      - Nokia internal control-plane pattern: xx:xx:xx:ff:00:01 / ff:00:02
+    NOTE: We do NOT filter locally-administered (second LSB of first byte)
+    because Containerlab assigns those to real client containers.
+    NOTE: Containerlab uses aa:c1:ab prefix for ALL its device MACs,
+    including real client containers, so we do NOT filter that prefix.
+    """
+    mac = mac.replace('-', ':').replace('.', ':').lower().strip()
+    parts = mac.split(':')
+    if len(parts) != 6:
+        return False
+    try:
+        first_byte = int(parts[0], 16)
+    except ValueError:
+        return False
+    # Multicast: LSB of first byte is 1
+    if first_byte & 0x01:
+        return False
+    # All zeros
+    if all(p == '00' for p in parts):
+        return False
+    # All ff (broadcast)
+    if all(p == 'ff' for p in parts):
+        return False
+    # Nokia internal control-plane: xx:xx:xx:ff:00:01 or ff:00:02
+    if len(parts) >= 6 and parts[3] == 'ff' and parts[4] == '00' and parts[5] in ('01', '02'):
+        return False
+    return True
+
+
 def clean_and_login_dell_console(ip, port=5000):
     """
     Connects to the Dell console TCP socket, handles the login prompts,
@@ -202,13 +238,75 @@ def discover_dell_switch(sw, db: Session):
                 "remote_port": entry.get("remote_port"),
                 "remote_chassis": entry.get("remote_chassis")
             })
+
+        # 6. Parse MAC address table and ARP table for endpoints
+        endpoints = []
+        try:
+            with DellOS10Collector(
+                host=sw.management_ip,
+                username=ssh_user,
+                password=ssh_pass,
+                port=5000,
+                use_ssh=False,
+            ) as collector:
+                mac_out = collector._send_command("show mac address-table")
+                arp_out = collector._send_command("show arp")
+                
+                # Parse ARP IP-to-MAC mapping
+                mac_to_ip = {}
+                for line in arp_out.split("\n"):
+                    ip_match = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', line)
+                    mac_match = re.search(r'([0-9a-fA-F]{2}[:.-][0-9a-fA-F]{2}[:.-][0-9a-fA-F]{2}[:.-][0-9a-fA-F]{2}[:.-][0-9a-fA-F]{2}[:.-][0-9a-fA-F]{2}|[0-9a-fA-F]{4}[.][0-9a-fA-F]{4}[.][0-9a-fA-F]{4})', line)
+                    if ip_match and mac_match:
+                        mac_to_ip[mac_match.group(1).upper()] = ip_match.group(1)
+                
+                # Parse MAC address-table entries
+                # VlanId     Mac Address          Type           Ports
+                # 100        00:11:22:33:44:55    dynamic        ethernet1/1/1
+                mac_pattern = re.compile(
+                    r'(\d+)\s+([0-9a-fA-F]{2}[:.-][0-9a-fA-F]{2}[:.-][0-9a-fA-F]{2}[:.-][0-9a-fA-F]{2}[:.-][0-9a-fA-F]{2}[:.-][0-9a-fA-F]{2}|[0-9a-fA-F]{4}[.][0-9a-fA-F]{4}[.][0-9a-fA-F]{4})\s+(?:dynamic|static)\s+(\S+)',
+                    re.IGNORECASE
+                )
+                lldp_ports = {l["port"] for l in lldp_links}
+                raw_count = 0
+                filtered_mac = 0
+                filtered_lldp = 0
+                for line in mac_out.split("\n"):
+                    m = mac_pattern.search(line)
+                    if m:
+                        raw_count += 1
+                        vlan_id = int(m.group(1))
+                        mac_addr = m.group(2)
+                        port_name = m.group(3)
+                        
+                        # Skip invalid/internal MACs
+                        if not is_valid_host_mac(mac_addr):
+                            filtered_mac += 1
+                            continue
+                        
+                        # Filter out LLDP neighbor ports to only keep edge host endpoints
+                        if port_name in lldp_ports:
+                            filtered_lldp += 1
+                            continue
+                            
+                        endpoints.append({
+                            "mac_address": mac_addr,
+                            "ip_address": mac_to_ip.get(mac_addr.upper()),
+                            "vlan_id": vlan_id,
+                            "port": port_name,
+                            "switch_id": sw.switch_id
+                        })
+                print(f"[Dell Discovery] {sw.hostname}: {raw_count} raw, {filtered_mac} filtered by MAC, {filtered_lldp} filtered by LLDP, {len(endpoints)} valid")
+        except Exception as e:
+            print(f"[Dell Discovery] Endpoints CLI parsing failed for {sw.hostname}: {e}")
             
     except Exception as e:
         print(f"[Dell Discovery] SSH discovery failed for {sw.hostname}: {e}")
         sw.status = "Down"
         db.commit()
+        endpoints = []
         
-    return interfaces, lldp_links
+    return interfaces, lldp_links, endpoints
 
 def discover_nokia_switch(sw, db: Session):
     """
@@ -328,13 +426,140 @@ def discover_nokia_switch(sw, db: Session):
             sw.status = "Up"
             sw.last_successful_sync = datetime.datetime.utcnow()
             db.commit()
-            
+
+            # Query network-instance MAC and ARP tables for endpoints
+            endpoints = []
+            mac_table_data = {}
+            arp_table_data = {}
+            try:
+                mac_table_data = gc.get(path=['/network-instance[name=default]/bridge-table/mac-learning/learnt-entries'])
+            except Exception as ex:
+                print(f"[Nokia Discovery] MAC table query failed for {sw.hostname}: {ex}")
+
+            try:
+                arp_table_data = gc.get(path=['/interface/subinterface/ipv4/arp/neighbor'])
+            except Exception as ex:
+                print(f"[Nokia Discovery] ARP neighbor query failed for {sw.hostname}: {ex}")
+
+            # 1. Parse ARP table to map MAC -> IP and extract standalone ARP entries
+            mac_to_ip = {}
+            arp_endpoints = []
+            if arp_table_data and "notification" in arp_table_data:
+                for notification in arp_table_data.get("notification", []):
+                    for update in notification.get("update", []):
+                        val = update.get("val", {})
+
+                        def extract_arp_neighbors(d):
+                            """Recursively extract (port_name, ip, mac) from ARP gNMI response."""
+                            results = []
+                            if isinstance(d, dict):
+                                iface_name = d.get("name", "")
+                                subinterfaces = d.get("subinterface", None)
+                                if iface_name and subinterfaces:
+                                    for si in subinterfaces if isinstance(subinterfaces, list) else []:
+                                        ipv4 = si.get("ipv4", {})
+                                        arp = ipv4.get("srl_nokia-interfaces-nbr:arp", {})
+                                        neighbors = arp.get("neighbor", [])
+                                        if isinstance(neighbors, list):
+                                            for entry in neighbors:
+                                                ip_addr = entry.get("ipv4-address")
+                                                mac_addr = entry.get("link-layer-address")
+                                                if ip_addr and mac_addr:
+                                                    results.append((iface_name, ip_addr, mac_addr))
+                                    return results
+                                for v in d.values():
+                                    results.extend(extract_arp_neighbors(v))
+                            elif isinstance(d, list):
+                                for item in d:
+                                    results.extend(extract_arp_neighbors(item))
+                            return results
+
+                        neighbors = extract_arp_neighbors(val)
+                        for port_name, ip_addr, mac_addr in neighbors:
+                            mac_to_ip[mac_addr.upper()] = ip_addr
+                            if port_name and port_name.startswith("ethernet"):
+                                arp_endpoints.append({
+                                    "mac_address": mac_addr,
+                                    "ip_address": ip_addr,
+                                    "vlan_id": 1,
+                                    "port": port_name,
+                                    "switch_id": sw.switch_id
+                                })
+
+            # 2. Parse MAC table
+            mac_entries = []
+            if mac_table_data and "notification" in mac_table_data:
+                for notification in mac_table_data.get("notification", []):
+                    for update in notification.get("update", []):
+                        val = update.get("val", {})
+                        def find_active_entries(d):
+                            if not isinstance(d, dict):
+                                return None
+                            if "active-entries" in d:
+                                return d["active-entries"]
+                            for k, v in d.items():
+                                res = find_active_entries(v)
+                                if res is not None:
+                                    return res
+                            return None
+                        entries_list = find_active_entries(val)
+                        if entries_list and isinstance(entries_list, list):
+                            for entry in entries_list:
+                                mac_addr = entry.get("mac-address")
+                                dest = entry.get("destination", {}).get("interface", "")
+                                vlan_id = entry.get("vlan-id", 1)
+                                if mac_addr and dest:
+                                    port_name = dest.split(".")[0]
+                                    mac_entries.append({
+                                        "mac_address": mac_addr,
+                                        "port": port_name,
+                                        "vlan_id": int(vlan_id) if vlan_id else 1
+                                    })
+
+            # 3. Associate IP and filter out LLDP ports
+            lldp_ports = {l["port"] for l in lldp_links}
+            print(f"[Nokia Discovery] {sw.hostname}: {len(mac_entries)} raw MAC entries, {len(arp_endpoints)} raw ARP entries, {len(lldp_ports)} LLDP ports")
+
+            # Source A: MAC table entries (L2 learned)
+            for entry in mac_entries:
+                if entry["port"] in lldp_ports:
+                    continue
+                if not is_valid_host_mac(entry["mac_address"]):
+                    print(f"[Nokia Discovery] {sw.hostname}: filtered MAC {entry['mac_address']} port={entry['port']}")
+                    continue
+                endpoints.append({
+                    "mac_address": entry["mac_address"],
+                    "ip_address": mac_to_ip.get(entry["mac_address"].upper()),
+                    "vlan_id": entry["vlan_id"],
+                    "port": entry["port"],
+                    "switch_id": sw.switch_id
+                })
+
+            # Source B: ARP entries as standalone endpoint source (for L3-only interfaces)
+            for entry in arp_endpoints:
+                if entry["port"] in lldp_ports:
+                    continue
+                # Deduplicate against MAC-table-sourced endpoints
+                already_have = any(
+                    e["mac_address"].lower() == entry["mac_address"].lower()
+                    for e in endpoints
+                )
+                if already_have:
+                    continue
+                if not is_valid_host_mac(entry["mac_address"]):
+                    print(f"[Nokia Discovery] {sw.hostname}: filtered ARP MAC {entry['mac_address']} port={entry['port']}")
+                    continue
+                endpoints.append(entry)
+
+            print(f"[Nokia Discovery] {sw.hostname}: {len(endpoints)} valid endpoints found")
+
     except Exception as e:
         print(f"[Nokia Discovery] gNMI discovery failed for {sw.hostname}: {e}")
         sw.status = "Down"
         db.commit()
+        endpoints = []
         
-    return interfaces, lldp_links
+    return interfaces, lldp_links, endpoints
 
 def run_gnmi_discovery(db: Session):
     """
@@ -368,21 +593,24 @@ def run_gnmi_discovery(db: Session):
     host_to_sw = {s.hostname: s for s in switches}
     ip_to_sw = {s.management_ip: s for s in switches}
     
-    # Keep track of active edges we see in this run to mark others as down
+    # Keep track of active edges and endpoints we see in this run
     discovered_edge_keys = set()
     all_lldp_links = []
+    all_discovered_endpoints = []
     
     # 2. Query each switch based on vendor
     for sw in switches:
         sw_interfaces = []
         sw_lldp_links = []
+        sw_endpoints = []
         
         if sw.vendor.lower() == "nokia":
-            sw_interfaces, sw_lldp_links = discover_nokia_switch(sw, db)
+            sw_interfaces, sw_lldp_links, sw_endpoints = discover_nokia_switch(sw, db)
         elif sw.vendor.lower() == "dell_os10":
-            sw_interfaces, sw_lldp_links = discover_dell_switch(sw, db)
+            sw_interfaces, sw_lldp_links, sw_endpoints = discover_dell_switch(sw, db)
             
         all_lldp_links.extend(sw_lldp_links)
+        all_discovered_endpoints.extend(sw_endpoints)
         
         # Populate/update DeviceInterface records
         if sw_interfaces:
@@ -535,5 +763,27 @@ def run_gnmi_discovery(db: Session):
         if key not in discovered_edge_keys:
             edge.state = "down"
             
+    # 4. Update DiscoveredEndpoint records in DB
+    # Clean up endpoints for the switches audited in this run
+    audited_switch_ids = [sw.switch_id for sw in switches if sw.status == "Up"]
+    if audited_switch_ids:
+        db.query(models.DiscoveredEndpoint).filter(
+            models.DiscoveredEndpoint.switch_id.in_(audited_switch_ids)
+        ).delete(synchronize_session=False)
+        db.commit()
+
+    # Consistently format and insert newly discovered MAC/IP endpoints
+    for ep in all_discovered_endpoints:
+        clean_mac = ep["mac_address"].lower()
+        new_ep = models.DiscoveredEndpoint(
+            endpoint_id=uuid.uuid4(),
+            mac_address=clean_mac,
+            ip_address=ep.get("ip_address"),
+            vlan_id=ep.get("vlan_id", 1),
+            switch_id=ep["switch_id"],
+            port=ep["port"]
+        )
+        db.add(new_ep)
+        
     db.commit()
     print("[DISCOVERY] Discovery sync completed successfully.")

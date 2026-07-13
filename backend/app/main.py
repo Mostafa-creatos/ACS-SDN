@@ -1387,8 +1387,41 @@ def get_discovered_endpoints(db: Session = Depends(get_db), claims: dict = Depen
         query = query.filter(models.DiscoveredEndpoint.switch_id.in_(allowed_switch_ids))
         
     endpoints = query.order_by(models.DiscoveredEndpoint.last_seen.desc()).all()
+
+    def _is_real_host_mac(mac: str) -> bool:
+        """Filter out multicast, broadcast, all-zero MACs and known internal
+        Nokia control-plane MACs.
+        We do NOT filter locally-administered bit because Containerlab assigns
+        those to real client containers.
+        NOTE: Containerlab uses aa:c1:ab prefix for ALL device MACs including
+        real client containers, so we do NOT filter it."""
+        try:
+            parts = mac.replace('-', ':').replace('.', ':').lower().strip().split(':')
+            if len(parts) != 6:
+                return False
+            first = int(parts[0], 16)
+            # Standard multicast (LSB of first byte = 1)
+            if first & 0x01:
+                return False
+            # All zeros
+            if all(p == '00' for p in parts):
+                return False
+            # Broadcast
+            if all(p == 'ff' for p in parts):
+                return False
+            # Nokia internal control-plane pattern: last 3 octets are ff:00:01 or ff:00:02
+            if parts[3] == 'ff' and parts[4] == '00' and parts[5] in ('01', '02'):
+                return False
+            return True
+        except Exception:
+            return False
+
     res = []
     for ep in endpoints:
+        if not _is_real_host_mac(ep.mac_address):
+            continue
+        if not ep.ip_address:
+            continue
         sw = db.query(models.Switch).filter(models.Switch.switch_id == ep.switch_id).first()
         res.append({
             "endpoint_id": str(ep.endpoint_id),

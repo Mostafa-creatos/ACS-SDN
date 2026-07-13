@@ -48,8 +48,21 @@ topology:
       mgmt-ipv4: 172.20.20.17
 
     # ==========================================
-    # 3. Border/Edge (Arista cEOS) - Removed due to missing image
+    # 3. End Hosts (Lightweight Alpine Linux)
     # ==========================================
+    client-01:
+      kind: linux
+      image: alpine:latest
+      exec:
+        - ip addr add 10.1.10.10/24 dev eth1
+        - ip route add default via 10.1.10.1
+        
+    client-02:
+      kind: linux
+      image: alpine:latest
+      exec:
+        - ip addr add 10.1.20.10/24 dev eth1
+        - ip route add default via 10.1.20.1
 
   # ==========================================
   # 4. Network Link Mappings
@@ -78,3 +91,7 @@ topology:
     # leaf-06 links to Spines
     - endpoints: ["leaf-06:ethernet-1/1", "spine-01:eth6"]
     - endpoints: ["leaf-06:ethernet-1/2", "spine-02:eth6"]
+
+    # Client links to Leaf switches
+    - endpoints: ["client-01:eth1", "leaf-01:ethernet-1/3"]
+    - endpoints: ["client-02:eth1", "leaf-02:ethernet-1/3"]

@@ -32,6 +32,15 @@ interface EdgeData {
   label?: string;
 }
 
+interface EndpointData {
+  endpoint_id: string;
+  mac_address: string;
+  ip_address: string | null;
+  vlan_id: number;
+  port: string;
+  switch_hostname: string;
+}
+
 // URL-encoded SVG asset templates for dynamic multi-vendor icons
 const VENDOR_ICONS: Record<string, string> = {
   dell: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#007db8" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="20" fill="#ffffff" font-size="8" font-family="Arial, Helvetica, sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">DELL</text></svg>')}`,
@@ -45,6 +54,9 @@ const VENDOR_ICONS: Record<string, string> = {
   generic: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#34495e" stroke="#ffffff" stroke-width="1.5"/><path d="M12 16h16M12 24h16M16 12l-4 4 4 4M24 20l4 4-4 4" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>')}`
 };
 
+// Host node SVG icon
+const HOST_ICON = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect x="4" y="6" width="32" height="22" rx="3" fill="#16a34a" stroke="#ffffff" stroke-width="1.5"/><rect x="14" y="28" width="12" height="5" fill="#15803d"/><rect x="10" y="33" width="20" height="2" rx="1" fill="#ffffff" opacity="0.6"/><rect x="7" y="9" width="26" height="16" rx="2" fill="#0f172a" opacity="0.4"/><circle cx="20" cy="17" r="3" fill="#4ade80"/></svg>')}`;
+
 export const Topology: React.FC = () => {
   const navigate = useNavigate();
   const { token, selectedTenant } = useAuth();
@@ -54,6 +66,7 @@ export const Topology: React.FC = () => {
   
   const [nodes, setNodes] = useState<NodeData[]>([]);
   const [edges, setEdges] = useState<EdgeData[]>([]);
+  const [endpoints, setEndpoints] = useState<EndpointData[]>([]);
   const [filterState, setFilterState] = useState<string>('ALL');
   const [layoutName, setLayoutName] = useState<string>('fcose');
   const [loading, setLoading] = useState(true);
@@ -64,6 +77,10 @@ export const Topology: React.FC = () => {
   const [showMgmtLinks, setShowMgmtLinks] = useState<boolean>(() => {
     const saved = localStorage.getItem('atlas_topo_show_mgmt');
     return saved !== null ? JSON.parse(saved) : false;
+  });
+  const [showEndpoints, setShowEndpoints] = useState<boolean>(() => {
+    const saved = localStorage.getItem('atlas_topo_show_endpoints');
+    return saved !== null ? JSON.parse(saved) : true;
   });
 
   // Multiple selection state & Drawer Tab
@@ -102,13 +119,17 @@ export const Topology: React.FC = () => {
       if (selectedTenant) {
         headers['X-Tenant-ID'] = selectedTenant;
       }
-      const response = await fetch('/api/v5/topology/graph', { headers });
+
+      const [topoRes, epRes] = await Promise.all([
+        fetch('/api/v5/topology/graph', { headers }),
+        fetch('/api/v5/visibility/endpoints', { headers }),
+      ]);
       
       let fetchedNodes: NodeData[] = [];
       let fetchedEdges: EdgeData[] = [];
 
-      if (response.ok) {
-        const data = await response.json();
+      if (topoRes.ok) {
+        const data = await topoRes.json();
         fetchedNodes = data.nodes || [];
         fetchedEdges = data.edges || [];
       } else {
@@ -116,11 +137,15 @@ export const Topology: React.FC = () => {
         fetchedEdges = getMockEdges();
       }
 
+      const fetchedEndpoints: EndpointData[] = epRes.ok ? await epRes.json() : [];
+
       setNodes(fetchedNodes);
       setEdges(fetchedEdges);
+      setEndpoints(fetchedEndpoints);
     } catch (e) {
       setNodes(getMockNodes());
       setEdges(getMockEdges());
+      setEndpoints([]);
     } finally {
       setLoading(false);
     }
@@ -129,6 +154,11 @@ export const Topology: React.FC = () => {
   useEffect(() => {
     loadGraphData();
   }, [token, selectedTenant]);
+
+  // Persist showEndpoints preference
+  useEffect(() => {
+    localStorage.setItem('atlas_topo_show_endpoints', JSON.stringify(showEndpoints));
+  }, [showEndpoints]);
 
   // Persist showInterfaces preference
   useEffect(() => {
@@ -260,7 +290,56 @@ export const Topology: React.FC = () => {
             color
           }
         };
-      })
+      }),
+      // Endpoint host nodes (shown only when showEndpoints is enabled)
+      ...(showEndpoints ? endpoints.map(ep => ({
+        data: {
+          id: `host-${ep.endpoint_id}`,
+          label: ep.ip_address || ep.mac_address.slice(-8),
+          name: ep.ip_address || ep.mac_address.slice(-8),
+          mac: ep.mac_address,
+          ip: ep.ip_address,
+          vlan: ep.vlan_id,
+          port: ep.port,
+          parentSwitch: ep.switch_hostname,
+          nodeType: 'host',
+          color: '#16a34a',
+          icon: HOST_ICON,
+          raw: {
+            id: `host-${ep.endpoint_id}`,
+            label: ep.ip_address || ep.mac_address.slice(-8),
+            ip: ep.ip_address || '',
+            status: 'host',
+            role: 'host',
+            model: 'End Host',
+            vendor: 'linux',
+            interfacesCount: 1
+          }
+        }
+      })) : []),
+      // Endpoint host edges (dashed lines to parent switch)
+      ...(showEndpoints ? (() => {
+        // Build hostname -> node ID map (topology nodes use UUID as ID but have hostname as label)
+        const hostnameToNodeId = new Map<string, string>();
+        activeNodes.forEach(n => {
+          hostnameToNodeId.set(n.label, n.id);
+          hostnameToNodeId.set(n.id, n.id);
+        });
+        return endpoints
+          .filter(ep => hostnameToNodeId.has(ep.switch_hostname) || activeNodeIds.has(ep.switch_hostname))
+          .map(ep => ({
+            data: {
+              id: `host-edge-${ep.endpoint_id}`,
+              source: `host-${ep.endpoint_id}`,
+              target: hostnameToNodeId.get(ep.switch_hostname) || ep.switch_hostname,
+              sourcePort: 'eth0',
+              targetPort: ep.port,
+              protocol: 'HOST',
+              color: '#4ade80',
+              edgeType: 'host-link'
+            }
+          }));
+      })() : [])
     ];
 
     // Destroy previous instance
@@ -344,6 +423,53 @@ export const Topology: React.FC = () => {
             'text-background-padding': '3px',
             'text-background-shape': 'roundrectangle',
           }
+        },
+        // Host node style
+        {
+          selector: 'node[nodeType = "host"]',
+          style: {
+            'shape': 'rectangle',
+            'width': 34,
+            'height': 28,
+            'background-image': HOST_ICON,
+            'background-fit': 'cover',
+            'border-color': '#16a34a',
+            'border-width': '2px',
+            'label': 'data(name)',
+            'color': '#4ade80',
+            'font-size': '8px',
+            'font-weight': 'bold',
+            'text-valign': 'bottom',
+            'text-margin-y': 4,
+            'shadow-blur': 10,
+            'shadow-color': '#16a34a',
+            'shadow-opacity': 0.5,
+            'shadow-offset-y': 0,
+          }
+        },
+        // Host link edge style
+        {
+          selector: 'edge[edgeType = "host-link"]',
+          style: {
+            'width': 1,
+            'line-style': 'dashed',
+            'line-dash-pattern': [6, 3],
+            'line-color': '#4ade80',
+            'opacity': 0.5,
+            'target-arrow-shape': 'none',
+          }
+        },
+        {
+          selector: 'edge[edgeType = "host-link"]:hover',
+          style: {
+            'width': 2,
+            'opacity': 0.9,
+            'target-label': showInterfaces ? 'data(targetPort)' : '',
+            'text-background-opacity': 0.85,
+            'text-background-color': '#0f172a',
+            'text-background-padding': '3px',
+            'text-background-shape': 'roundrectangle',
+          }
         }
       ] as any,
       layout: {
@@ -412,7 +538,7 @@ export const Topology: React.FC = () => {
     return () => {
       cy.destroy();
     };
-  }, [nodes, edges, filterState, layoutName, loading, isSmallScreen, showMgmtLinks]);
+  }, [nodes, edges, endpoints, filterState, layoutName, loading, isSmallScreen, showMgmtLinks, showEndpoints]);
 
   const handleSaveLayout = () => {
     if (!cyRef.current) return;
@@ -508,6 +634,24 @@ export const Topology: React.FC = () => {
           <span>OOB Mgmt</span>
         </button>
 
+        {/* Endpoints Toggle */}
+        <button
+          onClick={() => setShowEndpoints(!showEndpoints)}
+          className={`p-1.5 border rounded-lg transition-all flex items-center gap-1.5 text-xs font-semibold ${
+            showEndpoints 
+              ? 'bg-emerald-700 border-emerald-600 text-white' 
+              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+          }`}
+          title={showEndpoints ? "Hide Discovered Endpoints (Hosts)" : "Show Discovered Endpoints (Hosts)"}
+        >
+          <span>🖥 Hosts</span>
+          {endpoints.length > 0 && (
+            <span className="bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+              {endpoints.length}
+            </span>
+          )}
+        </button>
+
         {/* Actions */}
         <button 
           onClick={handleResetLayout}
@@ -562,6 +706,15 @@ export const Topology: React.FC = () => {
           <span className="w-2.5 h-2.5 rounded-full border border-atlas-primary shadow-lg shadow-atlas-primary/50 animate-pulse bg-atlas-primary/20" />
           <span>Multi-Vendor Discovery</span>
         </div>
+        {showEndpoints && endpoints.length > 0 && (
+          <>
+            <div className="h-4 w-px bg-slate-800" />
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-2.5 rounded-sm border border-emerald-500 bg-emerald-900/50 shadow-lg shadow-emerald-500/30" />
+              <span className="text-emerald-400">Hosts ({endpoints.length})</span>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Hover Tooltip Overlay (Absolute Position) */}

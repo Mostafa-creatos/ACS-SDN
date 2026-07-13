@@ -39,8 +39,8 @@
 - [x] POST /api/v5/visibility/accept-drift
 - [x] POST /api/v5/visibility/compliance/run
 - [x] GET /api/v5/visibility/compliance/latest
-- [ ] GET /api/v5/visibility/endpoints
-- [ ] GET /api/v5/visibility/telemetry
+- [x] GET /api/v5/visibility/endpoints
+- [x] GET /api/v5/visibility/telemetry
 - [ ] GET /api/v5/visibility/inventory
 - [ ] GET /api/v5/visibility/stp
 - [ ] GET /api/v5/visibility/reports/csv

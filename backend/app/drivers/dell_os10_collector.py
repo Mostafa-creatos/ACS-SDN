@@ -415,55 +415,129 @@ class DellOS10Collector:
             stripped = line.strip()
             if not stripped:
                 continue
-            # Skip the dashed separator line
-            if re.match(r"^[-]+\s+[-]+\s+[-]+\s+[-]+\s+[-]+\s+[-]+$", stripped):
+            # Skip the dashed separator line (both OS10 and FTOS formats)
+            if re.match(r"^[-]{10,}$", stripped):
                 header_passed = True
                 continue
 
             if not header_passed:
                 continue
 
-            # OS10 format: ethernet1/1/1  desc  up  40G  full  9217
-            # Also handle OS9 format: Eth 1/1/1  ...
-            intf_match = re.match(
-                r"^(?:Eth\s+)?(\S+)\s+(.*?)\s+(up|down)\s+(\S+)\s+(\S+)\s+(\S+)\s*$",
-                stripped,
-            )
-            if intf_match:
-                name = intf_match.group(1).lower()
-                # Normalize OS9 "Eth 1/1/1" -> "ethernet1/1/1"
-                if not name.startswith("ethernet") and not name.startswith("port-channel"):
-                    name = f"ethernet{name}"
-                desc = intf_match.group(2).strip()
-                status = intf_match.group(3)
-                speed = intf_match.group(4)
-                duplex = intf_match.group(5)
-                mtu_str = intf_match.group(6)
+            # Skip header column text
+            if stripped.startswith("Port") or stripped.startswith("Loc PortID"):
+                continue
 
-                mtu = 9216
-                if mtu_str.isdigit():
-                    mtu = int(mtu_str)
+            # Strip leading/trailing pipes (FTOS format)
+            stripped = stripped.strip("|")
 
-                interfaces.append({
-                    "name": name,
-                    "status": status,
-                    "speed_duplex": f"{speed} / {duplex.capitalize()}",
-                    "vlan": "",
-                    "description": desc,
-                    "switchport_mode": "trunk",
-                    "transceiver_type": None,
-                    "transceiver_serial": None,
-                    "transceiver_qualified": None,
-                    "mtu": mtu,
-                    "neighbor": None,
-                    "errors_in": 0,
-                    "errors_out": 0,
-                    "discards_in": 0,
-                    "discards_out": 0,
-                    "mac_address": None,
-                })
+            # FTOS pipe-delimited format: Eth 1/1/1  desc  up  40G  full  A  1  -
+            # OS10 whitespace format:    ethernet1/1/1  desc  up  40G  full  9217
+            # Both can be parsed by splitting on whitespace
+            parts = stripped.split()
+
+            if len(parts) < 5:
+                continue
+
+            # Normalize port name
+            name_parts = []
+            if parts[0].lower() == "eth":
+                name_parts = parts[1:]
+            elif parts[0].lower().startswith("ethernet"):
+                name_parts = parts
+            else:
+                name_parts = parts
+
+            port_field = name_parts[0]
+            if not port_field.startswith("ethernet") and not port_field.startswith("port-channel"):
+                port_field = f"ethernet{port_field}"
+
+            name = port_field.lower()
+
+            # For FTOS: Eth 1/1/1  ""  up  40G  full  A  1  -
+            # parts: ['Eth', '1/1/1', 'up', '40G', 'full', 'A', '1', '-']
+            # or OS10: ethernet1/1/1  desc  up  40G  full  9217
+            desc_offset = 1 if parts[0].lower() == "eth" else 0
+            # In OS10 format: parts[1] is desc, parts[2] is status, etc.
+            # In FTOS: after Eth 1/1/1, parts[2] (index 2) is status
+
+            # Determine position offset based on whether "Eth" prefix is present
+            if parts[0].lower() == "eth":
+                # FTOS format with description: Eth 1/1/1  desc  up  40G  full  A  Vlan  -
+                # FTOS format without desc:    Eth 1/1/1         up  40G  full  A  1    -
+                if len(parts) >= 9:
+                    desc = parts[2]
+                    status_idx = 3
+                    speed_idx = 4
+                    duplex_idx = 5
+                    vlan_idx = 7
+                else:
+                    desc = ""
+                    status_idx = 2
+                    speed_idx = 3
+                    duplex_idx = 4
+                    vlan_idx = -1
+            else:
+                # OS10 format: ethernet1/1/1  desc  up  40G  full  mtu
+                desc = parts[1] if len(parts) > 1 else ""
+                status_idx = 2
+                speed_idx = 3
+                duplex_idx = 4
+                vlan_idx = -1
+
+            if status_idx >= len(parts):
+                continue
+
+            status = parts[status_idx].lower() if status_idx < len(parts) else "down"
+            speed = parts[speed_idx] if speed_idx < len(parts) else "0"
+            duplex = parts[duplex_idx] if duplex_idx < len(parts) else "full"
+
+            mtu = 9216
+            vlan = parts[vlan_idx] if vlan_idx >= 0 and vlan_idx < len(parts) else ""
+
+            interfaces.append({
+                "name": name,
+                "status": status,
+                "speed_duplex": f"{speed} / {duplex.capitalize()}",
+                "vlan": vlan,
+                "description": desc,
+                "switchport_mode": "trunk",
+                "transceiver_type": None,
+                "transceiver_serial": None,
+                "transceiver_qualified": None,
+                "mtu": mtu,
+                "neighbor": None,
+                "errors_in": 0,
+                "errors_out": 0,
+                "discards_in": 0,
+                "discards_out": 0,
+                "mac_address": None,
+            })
 
         return interfaces
+
+    def collect_mac_table(self) -> List[Dict[str, Any]]:
+        """Parse `show mac address-table` into list of {mac, interface} dicts."""
+        raw = self._send_command("show mac address-table")
+        entries = []
+        header_passed = False
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("VlanId") or stripped.startswith("Codes"):
+                header_passed = True
+                continue
+            if stripped.startswith("spine") or stripped.startswith("Loc Port"):
+                continue
+            if not header_passed:
+                continue
+            parts = stripped.split()
+            if len(parts) >= 4:
+                mac = parts[1]
+                intf = parts[3]
+                if mac.count(":") == 5:
+                    entries.append({"mac_address": mac.lower(), "interface": intf.lower()})
+        return entries
 
     def collect_transceivers(self) -> Dict[str, Dict[str, Any]]:
         """Parse `show interface transceiver` into {port_name: info} dict."""
@@ -603,21 +677,26 @@ class DellOS10Collector:
             stripped = line.strip()
             if not stripped:
                 continue
-            if re.match(r"^[-]+\s+[-]+\s+[-]+\s+[-]+$", stripped):
+            # Skip dashed separator lines (both OS10 and FTOS formats)
+            if re.match(r"^[-]{10,}$", stripped):
                 header_passed = True
                 continue
             if not header_passed:
                 continue
+            # Skip the header column text
+            if stripped.startswith("Loc PortID") or stripped.startswith("Port"):
+                continue
 
-            # ethernet1/1/1  Ethernet1/1/1  spine-1  00:11:22:33:44:55
+            # FTOS: ethernet1/1/1       leaf-01              ethernet-1/2                  1a:ff:02:ff:00:00
+            # OS10: ethernet1/1/1  Ethernet1/1/1  spine-1  00:11:22:33:44:55
             lldp_match = re.match(
-                r"^(\S+)\s+(\S+)\s+(\S+?)\s*(\S*)\s*$",
+                r"^(\S+)\s+(\S+)\s+(\S+?)\s+(\S+)\s*$",
                 stripped,
             )
             if lldp_match:
                 local = lldp_match.group(1).lower()
-                remote_port = lldp_match.group(2)
-                remote_host = lldp_match.group(3)
+                remote_host = lldp_match.group(2)
+                remote_port = lldp_match.group(3)
                 remote_chassis = lldp_match.group(4) or ""
 
                 links.append({
@@ -759,13 +838,28 @@ class DellOS10Collector:
             if name in transceivers:
                 intf.update(transceivers[name])
 
+        # Parse MAC address table for per-port MACs
+        mac_table = self.collect_mac_table()
+        port_macs: Dict[str, List[str]] = {}
+        for entry in mac_table:
+            port = entry["interface"]
+            mac = entry["mac_address"]
+            if port not in port_macs:
+                port_macs[port] = []
+            if len(port_macs[port]) < 2:
+                port_macs[port].append(mac)
+
         # Merge LLDP neighbor info into interfaces
         lldp_by_port: Dict[str, Dict] = {}
         for entry in lldp:
             lldp_by_port[entry["port"]] = entry
         for intf in interfaces:
-            if intf["name"] in lldp_by_port:
-                intf["neighbor"] = lldp_by_port[intf["name"]]["remote_name"]
+            name = intf["name"]
+            if name in lldp_by_port:
+                intf["neighbor"] = lldp_by_port[name]["remote_name"]
+            # Populate MAC address from first learned entry on this port
+            if name in port_macs and port_macs[name]:
+                intf["mac_address"] = port_macs[name][0]
 
         # Compute aggregate health from environment
         temperature = "Normal"
