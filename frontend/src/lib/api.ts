@@ -95,3 +95,105 @@ export const deleteTenant = async (tenantId: string): Promise<void> => {
     });
     if (!res.ok) throw new Error('Failed to delete tenant');
 };
+
+export interface VrfCreate {
+    tenant_id: string;
+    vrf_name: string;
+    layer3_vni: number;
+    route_distinguisher?: string;
+    route_target?: string;
+}
+
+export interface VrfUpdate {
+    layer3_vni?: number;
+    route_distinguisher?: string;
+    route_target?: string;
+}
+
+export interface SubnetCreate {
+    fabric_id: string;
+    vlan_id: number;
+    layer2_vni: number;
+    subnet_cidr: string;
+    anycast_gateway_ip: string;
+}
+
+export const fetchFabrics = async (): Promise<any[]> => {
+    const res = await fetch('/api/v5/admin/fabrics', { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch fabrics');
+    return res.json();
+};
+
+export const fetchVrfs = async (tenantId?: string): Promise<any[]> => {
+    const url = tenantId ? `/api/v5/admin/vrfs?tenant_id=${tenantId}` : '/api/v5/admin/vrfs';
+    const res = await fetch(url, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch VRFs');
+    return res.json();
+};
+
+export const createVrf = async (data: VrfCreate): Promise<any> => {
+    const res = await fetch('/api/v5/admin/vrfs', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to create VRF');
+    }
+    return res.json();
+};
+
+export const updateVrf = async (vrfId: string, data: VrfUpdate): Promise<any> => {
+    const res = await fetch(`/api/v5/admin/vrfs/${vrfId}`, {
+        method: 'PUT',
+        headers: getHeaders(),
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to update VRF');
+    }
+    return res.json();
+};
+
+export const deleteVrf = async (vrfId: string): Promise<void> => {
+    const res = await fetch(`/api/v5/admin/vrfs/${vrfId}`, {
+        method: 'DELETE',
+        headers: getHeaders()
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to delete VRF');
+    }
+};
+
+export const fetchSubnets = async (vrfId: string): Promise<any[]> => {
+    const res = await fetch(`/api/v5/admin/vrfs/${vrfId}/subnets`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch subnets');
+    return res.json();
+};
+
+export const createSubnet = async (vrfId: string, data: SubnetCreate): Promise<any> => {
+    const res = await fetch(`/api/v5/admin/vrfs/${vrfId}/subnets`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to create subnet');
+    }
+    return res.json();
+};
+
+export const deleteSubnet = async (subnetId: string): Promise<void> => {
+    const res = await fetch(`/api/v5/admin/subnets/${subnetId}`, {
+        method: 'DELETE',
+        headers: getHeaders()
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to delete subnet');
+    }
+};

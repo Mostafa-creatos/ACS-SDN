@@ -56,6 +56,7 @@ topology:
       exec:
         - ip addr add 10.1.10.10/24 dev eth1
         - ip route add default via 10.1.10.1
+        - "nohup sh -c 'while true; do ping -I eth1 -c 1 10.1.10.1; sleep 10; done' >/dev/null 2>&1 &"
         
     client-02:
       kind: linux
@@ -63,6 +64,7 @@ topology:
       exec:
         - ip addr add 10.1.20.10/24 dev eth1
         - ip route add default via 10.1.20.1
+        - "nohup sh -c 'while true; do ping -I eth1 -c 1 10.1.20.1; sleep 10; done' >/dev/null 2>&1 &"
 
   # ==========================================
   # 4. Network Link Mappings

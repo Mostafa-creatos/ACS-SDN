@@ -14,7 +14,10 @@ import {
   User as UserIcon,
   PlugZap,
   Users,
-  Building2
+  Building2,
+  Cpu,
+  GitBranch,
+  FileSpreadsheet
 } from 'lucide-react';
 
 export const AppShell: React.FC = () => {
@@ -33,8 +36,11 @@ export const AppShell: React.FC = () => {
   const navItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
     { name: 'Switches', path: '/switches', icon: Network },
+    { name: 'Inventory', path: '/inventory', icon: Cpu },
+    { name: 'Spanning Tree (STP)', path: '/stp', icon: GitBranch },
+    { name: 'Reports', path: '/reports', icon: FileSpreadsheet },
     { name: 'Topology', path: '/topology', icon: Binary },
-    { name: 'IP Management', path: '/ipam', icon: Network }, // we will use Network icon or another
+    { name: 'IP Management', path: '/ipam', icon: Network }, 
     { name: 'Compliance', path: '/compliance', icon: ShieldCheck },
     { name: 'ZTP Console', path: '/ztp', icon: PlugZap },
   ];

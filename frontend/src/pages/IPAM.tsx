@@ -7,12 +7,12 @@ import {
   Plus, 
   CheckCircle, 
   XCircle, 
-  Database,
-  Hash,
   AlertTriangle
 } from 'lucide-react';
+import { fetchFabrics, fetchVrfs, createSubnet } from '../lib/api';
 
 interface Subnet {
+  subnet_id: string;
   vrf_name: string;
   subnet_cidr: string;
   anycast_gateway_ip: string;
@@ -24,18 +24,19 @@ interface Subnet {
 
 interface IPResult {
   ip: string;
-  switch_name: string;
-  interface_name: string;
-  vlan: number;
-  vrf: string;
-  last_seen: string;
-  status: 'assigned' | 'reserved' | 'unassigned';
+  switch_name?: string;
+  interface_name?: string;
+  vlan?: number;
+  vrf?: string;
+  last_seen?: string;
+  status: 'assigned' | 'unassigned' | string;
 }
 
 export const IPAM: React.FC = () => {
   const { token } = useAuth();
   
   const [subnets, setSubnets] = useState<Subnet[]>([]);
+  const [loading, setLoading] = useState(false);
   const [searchIP, setSearchIP] = useState('');
   const [searchResult, setSearchResult] = useState<IPResult | null>(null);
   const [searchTriggered, setSearchTriggered] = useState(false);
@@ -43,18 +44,24 @@ export const IPAM: React.FC = () => {
 
   // Add Subnet Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
+  
+  // Lists for dropdowns
+  const [fabrics, setFabrics] = useState<any[]>([]);
+  const [vrfs, setVrfs] = useState<any[]>([]);
+  const [dropdownLoading, setDropdownLoading] = useState(false);
+
   const [newSubnet, setNewSubnet] = useState({
-    vrf_name: 'VRF-Production',
+    vrf_id: '',
+    fabric_id: '',
     subnet_cidr: '',
     anycast_gateway_ip: '',
-    vlan_id: '100'
+    vlan_id: '100',
+    layer2_vni: '10100'
   });
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // Tab explorer
-  const [explorerTab, setExplorerTab] = useState<'ipv4' | 'ipv6'>('ipv4');
-
-  const fetchSubnets = async () => {
+  const fetchSubnetsData = async () => {
+    setLoading(true);
     try {
       const headers = { 'Authorization': `Bearer ${token}` };
       const response = await fetch('/api/v5/admin/subnets', { headers });
@@ -62,29 +69,58 @@ export const IPAM: React.FC = () => {
         const data = await response.json();
         // Map backend properties to dashboard schema
         const mapped = data.map((s: any) => ({
-          vrf_name: s.vrf_name || 'VRF-Production',
+          subnet_id: s.subnet_id,
+          vrf_name: s.vrf_name || 'N/A',
           subnet_cidr: s.subnet_cidr,
           anycast_gateway_ip: s.anycast_gateway_ip,
           vlan_id: s.vlan_id,
           total_ips: s.total_ips || 254,
-          used_ips: s.used_ips || Math.floor(Math.random() * 150) + 10,
-          available_ips: 0
+          used_ips: s.used_ips || 0,
+          available_ips: (s.total_ips || 254) - (s.used_ips || 0)
         }));
-        mapped.forEach((s: any) => {
-          s.available_ips = s.total_ips - s.used_ips;
-        });
         setSubnets(mapped);
       } else {
-        setSubnets(getMockSubnets());
+        setSubnets([]);
       }
     } catch (e) {
-      setSubnets(getMockSubnets());
+      setSubnets([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadDropdowns = async () => {
+    setDropdownLoading(true);
+    try {
+      const [fabList, vrfList] = await Promise.all([
+        fetchFabrics(),
+        fetchVrfs()
+      ]);
+      setFabrics(fabList);
+      setVrfs(vrfList);
+      
+      // Auto-select first elements
+      setNewSubnet(prev => ({
+        ...prev,
+        fabric_id: fabList[0]?.fabric_id || '',
+        vrf_id: vrfList[0]?.vrf_id || ''
+      }));
+    } catch (err) {
+      console.error("Failed to load fabrics or VRFs", err);
+    } finally {
+      setDropdownLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchSubnets();
+    fetchSubnetsData();
   }, [token]);
+
+  useEffect(() => {
+    if (isModalOpen) {
+      loadDropdowns();
+    }
+  }, [isModalOpen]);
 
   // Handle IP Finder
   const handleIPSearch = async (e: React.FormEvent) => {
@@ -104,45 +140,26 @@ export const IPAM: React.FC = () => {
         const data = await response.json();
         setSearchResult(data);
       } else {
-        // Fallback simulate finding or not
-        simulateOfflineIPSearch();
+        setSearchResult(null);
       }
     } catch (err) {
-      simulateOfflineIPSearch();
+      setSearchResult(null);
     } finally {
       setSearchLoading(false);
     }
   };
 
-  const simulateOfflineIPSearch = () => {
-    // Basic IPv4 regex validation check
-    const ipv4Regex = /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-    if (!ipv4Regex.test(searchIP)) {
-      setSearchResult(null); // not found
-      return;
-    }
-
-    if (searchIP.endsWith('.1') || searchIP.endsWith('.10') || searchIP.endsWith('.254')) {
-      setSearchResult({
-        ip: searchIP,
-        switch_name: 'leaf-switch-01',
-        interface_name: 'ethernet1/4',
-        vlan: 100,
-        vrf: 'VRF-Production',
-        last_seen: 'Active now',
-        status: 'assigned'
-      });
-    } else {
-      setSearchResult(null); // unassigned
-    }
-  };
-
   // Add Subnet action with validation
-  const handleAddSubnet = (e: React.FormEvent) => {
+  const handleAddSubnet = async (e: React.FormEvent) => {
     e.preventDefault();
     setValidationError(null);
 
-    // CIDR Validation regex: matches standard network formats e.g. 10.0.0.0/24, 192.168.1.0/22
+    if (!newSubnet.vrf_id || !newSubnet.fabric_id) {
+      setValidationError('Please select a valid VRF and Fabric.');
+      return;
+    }
+
+    // CIDR Validation regex
     const cidrRegex = /^([0-9]{1,3}\.){3}[0-9]{1,3}\/([0-9]|[1-2][0-9]|3[0-2])$/;
     if (!cidrRegex.test(newSubnet.subnet_cidr)) {
       setValidationError('Invalid Subnet CIDR format. Must match standard format e.g. 10.0.1.0/24');
@@ -156,25 +173,43 @@ export const IPAM: React.FC = () => {
       return;
     }
 
-    const created: Subnet = {
-      vrf_name: newSubnet.vrf_name,
-      subnet_cidr: newSubnet.subnet_cidr,
-      anycast_gateway_ip: newSubnet.anycast_gateway_ip,
-      vlan_id: Number(newSubnet.vlan_id),
-      total_ips: 254,
-      used_ips: 0,
-      available_ips: 254
-    };
+    const vlanNum = Number(newSubnet.vlan_id);
+    if (isNaN(vlanNum) || vlanNum < 2 || vlanNum > 4094) {
+      setValidationError('VLAN ID must be an integer between 2 and 4094.');
+      return;
+    }
 
-    setSubnets(prev => [...prev, created]);
-    setIsModalOpen(false);
-    // Reset form
-    setNewSubnet({
-      vrf_name: 'VRF-Production',
-      subnet_cidr: '',
-      anycast_gateway_ip: '',
-      vlan_id: '100'
-    });
+    const l2VniNum = Number(newSubnet.layer2_vni);
+    if (isNaN(l2VniNum) || l2VniNum < 10000 || l2VniNum > 16777214) {
+      setValidationError('L2 VNI must be an integer between 10000 and 16777214.');
+      return;
+    }
+
+    try {
+      await createSubnet(newSubnet.vrf_id, {
+        fabric_id: newSubnet.fabric_id,
+        vlan_id: vlanNum,
+        layer2_vni: l2VniNum,
+        subnet_cidr: newSubnet.subnet_cidr,
+        anycast_gateway_ip: newSubnet.anycast_gateway_ip
+      });
+      
+      setIsModalOpen(false);
+      
+      // Reset form
+      setNewSubnet({
+        vrf_id: vrfs[0]?.vrf_id || '',
+        fabric_id: fabrics[0]?.fabric_id || '',
+        subnet_cidr: '',
+        anycast_gateway_ip: '',
+        vlan_id: '100',
+        layer2_vni: '10100'
+      });
+      
+      fetchSubnetsData();
+    } catch (err: any) {
+      setValidationError(err.message || 'Failed to deploy subnet segment.');
+    }
   };
 
   return (
@@ -195,7 +230,7 @@ export const IPAM: React.FC = () => {
         </button>
       </div>
 
-      {/* 1. IP Finder Search Bar (Top of page, prominent search) */}
+      {/* 1. IP Finder Search Bar */}
       <Card className="p-5 border-atlas-primary/20 bg-gradient-to-r from-slate-50 to-white">
         <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Prominent IP Finder</span>
         <form onSubmit={handleIPSearch} className="flex gap-2">
@@ -220,13 +255,13 @@ export const IPAM: React.FC = () => {
         {/* IP Search Results Card */}
         {searchTriggered && (
           <div className="mt-4 pt-4 border-t border-slate-100">
-            {searchResult ? (
+            {searchResult && searchResult.status === 'assigned' ? (
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-emerald-50/50 border border-emerald-100 rounded-lg p-4">
                 <div className="flex gap-3 items-center">
                   <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
                   <div className="text-xs">
                     <span className="font-mono font-bold text-emerald-800 text-sm">{searchResult.ip}</span>
-                    <span className="text-slate-500 ml-2">allocated on VRF <span className="font-semibold text-slate-700">{searchResult.vrf}</span></span>
+                    <span className="text-slate-500 ml-2">allocated on VRF <span className="font-semibold text-slate-700">{searchResult.vrf || 'N/A'}</span></span>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 sm:flex gap-4 sm:gap-6 text-[11px]">
@@ -243,8 +278,8 @@ export const IPAM: React.FC = () => {
                     <span className="font-semibold text-slate-700">VLAN {searchResult.vlan}</span>
                   </div>
                   <div className="space-y-0.5">
-                    <span className="text-slate-400 block font-medium">Last Seen</span>
-                    <span className="text-slate-500">{searchResult.last_seen}</span>
+                    <span className="text-slate-400 block font-medium">Last Seen / Status</span>
+                    <span className="text-slate-500">{searchResult.last_seen || 'Active'}</span>
                   </div>
                 </div>
               </div>
@@ -260,38 +295,7 @@ export const IPAM: React.FC = () => {
         )}
       </Card>
 
-      {/* 2. Stats strip */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card className="flex items-center gap-4">
-          <div className="p-3 bg-slate-100 text-slate-500 rounded-xl">
-            <Database className="w-6 h-6" />
-          </div>
-          <div>
-            <span className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Total Address Pool</span>
-            <span className="text-xl font-bold font-display text-slate-800 leading-tight">1,024 IPs</span>
-          </div>
-        </Card>
-        <Card className="flex items-center gap-4">
-          <div className="p-3 bg-atlas-teal/10 text-atlas-teal rounded-xl">
-            <CheckCircle className="w-6 h-6" />
-          </div>
-          <div>
-            <span className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Allocated/Active</span>
-            <span className="text-xl font-bold font-display text-atlas-teal leading-tight">412 IPs</span>
-          </div>
-        </Card>
-        <Card className="flex items-center gap-4">
-          <div className="p-3 bg-atlas-primary/10 text-atlas-primary rounded-xl">
-            <Hash className="w-6 h-6" />
-          </div>
-          <div>
-            <span className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Available Pool</span>
-            <span className="text-xl font-bold font-display text-atlas-primary leading-tight">612 IPs</span>
-          </div>
-        </Card>
-      </div>
-
-      {/* 3. Subnets Table */}
+      {/* 2. Subnets Table */}
       <Card>
         <h3 className="text-base font-bold font-display text-atlas-ink mb-4">VRF Subnet Configurations</h3>
         
@@ -308,128 +312,37 @@ export const IPAM: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {subnets.map((sub, idx) => {
-                const percent = (sub.used_ips / sub.total_ips) * 100;
-                return (
-                  <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="py-3 font-semibold text-slate-800 text-xs">{sub.vrf_name}</td>
-                    <td className="py-3 font-mono text-[11px] text-atlas-primary font-semibold">{sub.subnet_cidr}</td>
-                    <td className="py-3 font-mono text-[11px] text-slate-500">{sub.anycast_gateway_ip}</td>
-                    <td className="py-3 text-xs text-slate-600">VLAN {sub.vlan_id}</td>
-                    <td className="py-3 text-xs text-slate-600">
-                      <strong>{sub.used_ips}</strong> / {sub.total_ips}
-                    </td>
-                    <td className="py-3 w-48">
-                      <ProgressBar value={percent} showLabel={false} />
-                    </td>
-                  </tr>
-                );
-              })}
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="p-6 text-center text-slate-500">Loading subnets...</td>
+                </tr>
+              ) : subnets.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="p-6 text-center text-slate-500">No subnets found.</td>
+                </tr>
+              ) : (
+                subnets.map((sub, idx) => {
+                  const percent = sub.total_ips > 0 ? (sub.used_ips / sub.total_ips) * 100 : 0;
+                  return (
+                    <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="py-3 font-semibold text-slate-800 text-xs">{sub.vrf_name}</td>
+                      <td className="py-3 font-mono text-[11px] text-atlas-primary font-semibold">{sub.subnet_cidr}</td>
+                      <td className="py-3 font-mono text-[11px] text-slate-500">{sub.anycast_gateway_ip}</td>
+                      <td className="py-3 text-xs text-slate-600">VLAN {sub.vlan_id}</td>
+                      <td className="py-3 text-xs text-slate-600">
+                        <strong>{sub.used_ips}</strong> / {sub.total_ips}
+                      </td>
+                      <td className="py-3 w-48">
+                        <ProgressBar value={percent} showLabel={false} />
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
       </Card>
-
-      {/* 4. Explorer Section (IPv4/IPv6 Tabs) */}
-      <div className="space-y-4">
-        <div className="flex border-b border-slate-200">
-          <button 
-            onClick={() => setExplorerTab('ipv4')}
-            className={`py-2 px-4 font-bold text-xs border-b-2 transition-colors ${
-              explorerTab === 'ipv4' ? 'border-atlas-primary text-atlas-primary' : 'border-transparent text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            IPv4 Address Explorer
-          </button>
-          <button 
-            onClick={() => setExplorerTab('ipv6')}
-            className={`py-2 px-4 font-bold text-xs border-b-2 transition-colors ${
-              explorerTab === 'ipv6' ? 'border-atlas-primary text-atlas-primary' : 'border-transparent text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            IPv6 Address Explorer (Dual-Stack)
-          </button>
-        </div>
-
-        {explorerTab === 'ipv4' ? (
-          <Card>
-            <div className="flex justify-between items-center mb-4">
-              <h4 className="text-sm font-bold font-display text-atlas-ink">IPv4 Allocation Matrix</h4>
-              <div className="flex gap-2">
-                <input 
-                  type="text" 
-                  placeholder="Filter subnet or status..."
-                  className="bg-slate-50 border border-slate-200 text-xs py-1 px-3 rounded-lg outline-none w-48"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-8 sm:grid-cols-16 gap-1 bg-slate-50 p-4 rounded-xl border border-slate-100 max-h-40 overflow-y-auto">
-              {/* Generate 64 little grid blocks representing IP allocations */}
-              {[...Array(64)].map((_, i) => {
-                const state = i % 7 === 0 ? 'reserved' : i % 5 === 0 ? 'drifted' : 'assigned';
-                const colors = {
-                  assigned: 'bg-atlas-teal hover:scale-110',
-                  reserved: 'bg-atlas-violet hover:scale-110',
-                  drifted: 'bg-slate-200 hover:scale-110'
-                };
-                return (
-                  <div 
-                    key={i} 
-                    className={`h-4 rounded-sm cursor-pointer transition-transform ${colors[state]}`}
-                    title={`Host ID .${i + 1} (${state})`}
-                  />
-                );
-              })}
-            </div>
-            <div className="flex gap-4 mt-3 text-[10px] text-slate-400 font-semibold justify-center">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded bg-atlas-teal" />
-                <span>Assigned IP</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded bg-atlas-violet" />
-                <span>Reserved/Gateway</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded bg-slate-200" />
-                <span>Unallocated</span>
-              </div>
-            </div>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Gap Analysis Panel */}
-            <Card className="flex flex-col justify-between">
-              <div>
-                <h4 className="text-sm font-bold font-display text-atlas-ink mb-2">IPv6 Gap Analysis</h4>
-                <p className="text-[11px] text-slate-500 mb-4">Identified contiguous unallocated sub-prefixes inside block `2001:db8:acad::/48`</p>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  <div className="p-2 bg-slate-50 rounded-lg flex justify-between text-xs font-mono">
-                    <span className="text-slate-600">2001:db8:acad:0004::/64</span>
-                    <span className="text-atlas-teal font-semibold">1,024 subnets free</span>
-                  </div>
-                  <div className="p-2 bg-slate-50 rounded-lg flex justify-between text-xs font-mono">
-                    <span className="text-slate-600">2001:db8:acad:0100::/56</span>
-                    <span className="text-atlas-teal font-semibold">256 subnets free</span>
-                  </div>
-                </div>
-              </div>
-            </Card>
-
-            {/* Duplicate Detection Panel */}
-            <Card className="flex flex-col justify-between">
-              <div>
-                <h4 className="text-sm font-bold font-display text-atlas-ink mb-2">IPv6 Conflict Detection</h4>
-                <p className="text-[11px] text-slate-500 mb-4">Scans network NDP tables for overlap prefix mappings</p>
-                <div className="flex gap-2 items-center bg-emerald-50 border border-emerald-100 rounded-lg p-3 text-xs text-emerald-800">
-                  <CheckCircle className="w-4.5 h-4.5 text-emerald-600 shrink-0" />
-                  <span>No duplicate mappings or overlapped prefix allocations found across active fabric nodes.</span>
-                </div>
-              </div>
-            </Card>
-          </div>
-        )}
-      </div>
 
       {/* Add Subnet Modal */}
       {isModalOpen && (
@@ -448,15 +361,36 @@ export const IPAM: React.FC = () => {
             <form onSubmit={handleAddSubnet} className="space-y-4">
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">VRF Context</label>
-                <select 
-                  value={newSubnet.vrf_name}
-                  onChange={(e) => setNewSubnet({...newSubnet, vrf_name: e.target.value})}
-                  className="w-full bg-slate-50 border text-xs p-2 rounded-lg outline-none cursor-pointer"
-                >
-                  <option value="VRF-Production">VRF-Production (L3)</option>
-                  <option value="VRF-Management">VRF-Management (OOB)</option>
-                  <option value="VRF-Transit">VRF-Transit</option>
-                </select>
+                {dropdownLoading ? (
+                  <div className="text-xs text-slate-500">Loading VRFs...</div>
+                ) : (
+                  <select 
+                    value={newSubnet.vrf_id}
+                    onChange={(e) => setNewSubnet({...newSubnet, vrf_id: e.target.value})}
+                    className="w-full bg-slate-50 border text-xs p-2 rounded-lg outline-none cursor-pointer"
+                  >
+                    {vrfs.map((vrf) => (
+                      <option key={vrf.vrf_id} value={vrf.vrf_id}>{vrf.vrf_name} (L3 VNI {vrf.layer3_vni})</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Fabric Context</label>
+                {dropdownLoading ? (
+                  <div className="text-xs text-slate-500">Loading Fabrics...</div>
+                ) : (
+                  <select 
+                    value={newSubnet.fabric_id}
+                    onChange={(e) => setNewSubnet({...newSubnet, fabric_id: e.target.value})}
+                    className="w-full bg-slate-50 border text-xs p-2 rounded-lg outline-none cursor-pointer"
+                  >
+                    {fabrics.map((f) => (
+                      <option key={f.fabric_id} value={f.fabric_id}>{f.fabric_name} (ASN {f.global_bgp_asn})</option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <div>
@@ -483,16 +417,29 @@ export const IPAM: React.FC = () => {
                 />
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">VLAN ID Segment</label>
-                <input 
-                  type="number" 
-                  required
-                  placeholder="e.g. 100"
-                  value={newSubnet.vlan_id}
-                  onChange={(e) => setNewSubnet({...newSubnet, vlan_id: e.target.value})}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-atlas-primary text-slate-700"
-                />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">VLAN ID Segment</label>
+                  <input 
+                    type="number" 
+                    required
+                    placeholder="e.g. 100"
+                    value={newSubnet.vlan_id}
+                    onChange={(e) => setNewSubnet({...newSubnet, vlan_id: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-atlas-primary text-slate-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">L2 VNI Segment</label>
+                  <input 
+                    type="number" 
+                    required
+                    placeholder="e.g. 10100"
+                    value={newSubnet.layer2_vni}
+                    onChange={(e) => setNewSubnet({...newSubnet, layer2_vni: e.target.value})}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-atlas-primary text-slate-700"
+                  />
+                </div>
               </div>
 
               <div className="flex gap-3 justify-end pt-2">
@@ -519,12 +466,4 @@ export const IPAM: React.FC = () => {
   );
 };
 
-// Seed fallback data
-function getMockSubnets(): Subnet[] {
-  return [
-    { vrf_name: 'VRF-Production', subnet_cidr: '10.250.60.0/24', anycast_gateway_ip: '10.250.60.1', vlan_id: 100, total_ips: 254, used_ips: 142, available_ips: 112 },
-    { vrf_name: 'VRF-Production', subnet_cidr: '172.20.20.0/24', anycast_gateway_ip: '172.20.20.1', vlan_id: 150, total_ips: 254, used_ips: 232, available_ips: 22 }, // High usage >90% -> should render coral
-    { vrf_name: 'VRF-Management', subnet_cidr: '10.250.10.0/24', anycast_gateway_ip: '10.250.10.1', vlan_id: 10, total_ips: 254, used_ips: 38, available_ips: 216 }
-  ];
-}
 export default IPAM;

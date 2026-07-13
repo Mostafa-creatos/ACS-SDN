@@ -767,19 +767,59 @@ class DellOS10Collector:
             "enabled": False,
             "protocol": "RSTP",
             "root_bridge": False,
+            "bridge_priority": 32768,
             "blocked_ports": [],
+            "port_states": []
         }
 
-        if "Spanning tree enabled" in raw or "rstp" in raw.lower():
+        # Check if enabled
+        if "Spanning tree enabled" in raw or "rstp" in raw.lower() or "rapid-pvst" in raw.lower():
             result["enabled"] = True
-        if "this bridge is the root" in raw.lower() or "is root" in raw.lower():
+        if "this bridge is the root" in raw.lower() or "is root" in raw.lower() or "we are the root" in raw.lower():
             result["root_bridge"] = True
 
-        for line in raw.splitlines():
-            if "BLK" in line or "Blocking" in line:
-                parts = line.split()
-                if parts:
-                    result["blocked_ports"].append(parts[0])
+        # Parse priority: "Bridge ID    Priority 32769,"
+        priority_match = re.search(r'Bridge ID\s+Priority\s+(\d+)', raw, re.IGNORECASE)
+        if priority_match:
+            result["bridge_priority"] = int(priority_match.group(1))
+
+        # Parse ports
+        # Match lines like: ethernet1/1/1     Desg    128.8     128       500       FWD
+        port_pattern = re.compile(
+            r'^\s*(ethernet\d+(?:/\d+)*)\s+([a-zA-Z]+)\s+\d+(?:\.\d+)?\s+\d+\s+\d+\s+([a-zA-Z]+)',
+            re.MULTILINE
+        )
+        for m in port_pattern.finditer(raw):
+            port_name = m.group(1)
+            role_raw = m.group(2)
+            state_raw = m.group(3)
+            
+            # Map roles
+            role_map = {
+                "desg": "designated",
+                "root": "root",
+                "altn": "alternate",
+                "disb": "disabled"
+            }
+            role = role_map.get(role_raw.lower(), role_raw.lower())
+            
+            # Map states
+            state_map = {
+                "fwd": "forwarding",
+                "blk": "blocking",
+                "lrn": "learning",
+                "dis": "disabled"
+            }
+            state = state_map.get(state_raw.lower(), state_raw.lower())
+            
+            if state == "blocking":
+                result["blocked_ports"].append(port_name)
+                
+            result["port_states"].append({
+                "port": port_name,
+                "role": role,
+                "state": state
+            })
 
         return result
 

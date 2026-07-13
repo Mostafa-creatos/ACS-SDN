@@ -249,7 +249,7 @@ def get_inventory_details(
     requested_tenant = claims.get("requested_tenant_name")
     
     # Tenant isolation: apply filter only when user is not a Platform Admin viewing the Global view
-    if not (user_role in ["Platform Admin", "platform_admin"] and requested_tenant in (None, "")):
+    if not (user_role in ["Platform Admin", "platform_admin"] and requested_tenant in (None, "", "AtlasWave Maroc Demo")):
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
         query = query.join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
             models.TenantVrf.tenant_id == t_uuid

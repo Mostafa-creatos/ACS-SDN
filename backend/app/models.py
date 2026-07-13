@@ -113,6 +113,7 @@ class Switch(Base):
     hardware_components = relationship("HardwareComponent", back_populates="switch", cascade="all, delete-orphan")
     vlans = relationship("SwitchVlan", back_populates="switch", cascade="all, delete-orphan")
     lags = relationship("SwitchLag", back_populates="switch", cascade="all, delete-orphan")
+    stp_state = relationship("SwitchSTPState", back_populates="switch", uselist=False, cascade="all, delete-orphan")
 
 class DeviceInterface(Base):
     __tablename__ = "device_interfaces"
@@ -450,3 +451,20 @@ class PolicyApproval(Base):
     diff_payload = Column(String, nullable=True)
 
     tenant = relationship("Tenant")
+
+
+class SwitchSTPState(Base):
+    __tablename__ = "switch_stp_states"
+
+    stp_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="CASCADE"), unique=True)
+    hostname = Column(String(255))
+    stp_enabled = Column(Boolean, default=False)
+    stp_mode = Column(String(32), default="RSTP")
+    bridge_priority = Column(Integer, default=32768)
+    is_root_bridge = Column(Boolean, default=False)
+    port_states = Column(JSON, default=list) # [{port, role, state}, ...]
+    raw_output = Column(Text, default="")
+    collected_at = Column(DateTime, default=datetime.utcnow)
+
+    switch = relationship("Switch", back_populates="stp_state")

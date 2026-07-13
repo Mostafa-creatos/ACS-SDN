@@ -15,6 +15,10 @@ import { ZtpConsolePage } from './pages/ZtpConsolePage';
 import { UsersPage } from './pages/UsersPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { TenantsPage } from './pages/TenantsPage';
+import { TenantFabricMapping } from './pages/TenantFabricMapping';
+import { Inventory } from './pages/Inventory';
+import { STPPage } from './pages/STPPage';
+import { ReportsPage } from './pages/ReportsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -57,6 +61,9 @@ export const App: React.FC = () => {
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
               <Route path="switches" element={<Switches />} />
+              <Route path="inventory" element={<Inventory />} />
+              <Route path="stp" element={<STPPage />} />
+              <Route path="reports" element={<ReportsPage />} />
               <Route path="topology" element={<Topology />} />
               <Route path="ipam" element={<IPAM />} />
               <Route path="compliance" element={<Compliance />} />
@@ -64,6 +71,7 @@ export const App: React.FC = () => {
               <Route path="ztp" element={<ZtpConsolePage />} />
               <Route path="users" element={<UsersPage />} />
               <Route path="tenants" element={<TenantsPage />} />
+              <Route path="tenants/:tenantId/mapping" element={<TenantFabricMapping />} />
             </Route>
 
             {/* Catch-all fallback */}

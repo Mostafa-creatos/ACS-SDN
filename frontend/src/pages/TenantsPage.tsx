@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { fetchTenants, createTenant, deleteTenant } from '../lib/api';
-import { Building2, Plus, Trash2 } from 'lucide-react';
+import { Building2, Plus, Trash2, Network } from 'lucide-react';
 
 export const TenantsPage: React.FC = () => {
     const { user } = useAuth();
@@ -102,10 +103,17 @@ export const TenantsPage: React.FC = () => {
                                 <td className="px-6 py-4 font-mono text-xs text-slate-400">
                                     {t.tenant_id}
                                 </td>
-                                <td className="px-6 py-4 text-right">
+                                <td className="px-6 py-4 text-right space-x-2">
+                                    <Link 
+                                        to={`/tenants/${t.tenant_id}/mapping`}
+                                        className="text-slate-400 hover:text-atlas-primary transition-colors p-2 rounded-lg hover:bg-slate-50 inline-block align-middle"
+                                        title="Manage VRF and Fabric Mapping"
+                                    >
+                                        <Network className="w-5 h-5" />
+                                    </Link>
                                     <button 
                                         onClick={() => handleDelete(t.tenant_id, t.tenant_name)}
-                                        className="text-slate-400 hover:text-red-500 transition-colors p-2 rounded-lg hover:bg-red-50"
+                                        className="text-slate-400 hover:text-red-500 transition-colors p-2 rounded-lg hover:bg-red-50 inline-block align-middle"
                                         title="Delete Tenant"
                                     >
                                         <Trash2 className="w-5 h-5" />

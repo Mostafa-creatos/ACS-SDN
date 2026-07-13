@@ -16,7 +16,7 @@ from . import models, schemas
 from .drivers.dell_os10 import DellOS10Driver
 from .drivers.arista_eos import AristaEosDriver
 from .admin_ui import ADMIN_HTML
-from .routers import inventory, discovery, auth, users, tenants
+from .routers import inventory, discovery, auth, users, tenants, vrfs
 from .auth import security, get_current_user_claims, verify_switch_access
 from .auth_permissions import require_permission
 
@@ -28,6 +28,7 @@ app.include_router(discovery.router)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(tenants.router)
+app.include_router(vrfs.router)
 
 def migrate_db_columns(engine):
     from sqlalchemy import inspect
@@ -979,7 +980,7 @@ def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(req
 def get_admin_subnets(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    if user_role == "Platform Admin":
+    if user_role in ["Platform Admin", "platform_admin"]:
         subnets = db.query(models.IpamSubnet).all()
     else:
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
@@ -987,6 +988,15 @@ def get_admin_subnets(db: Session = Depends(get_db), claims: dict = Depends(requ
     res = []
     for s in subnets:
         vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == s.vrf_id).first()
+        # Calculate real dynamic stats
+        try:
+            net = ipaddress.ip_network(s.subnet_cidr)
+            total_ips = net.num_addresses - 2 if net.version == 4 else 254
+            if total_ips < 1: total_ips = 1
+        except Exception:
+            total_ips = 254
+            
+        used_ips = db.query(models.IpamIpAllocation).filter(models.IpamIpAllocation.subnet_id == s.subnet_id).count()
         res.append({
             "subnet_id": str(s.subnet_id),
             "vrf_name": vrf.vrf_name if vrf else "N/A",
@@ -996,8 +1006,54 @@ def get_admin_subnets(db: Session = Depends(get_db), claims: dict = Depends(requ
             "layer3_vni": vrf.layer3_vni if vrf else 0,
             "subnet_cidr": s.subnet_cidr,
             "anycast_gateway_ip": s.anycast_gateway_ip,
+            "total_ips": total_ips,
+            "used_ips": used_ips
         })
     return res
+
+
+@app.get("/api/v5/ipam/search")
+def search_ipam_ip(ip: str, db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
+    """Search for an IP address in discovered endpoints and static reservations."""
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid IP address format.")
+
+    # 1. Search in discovered endpoints (live/active state)
+    discovered_ep = db.query(models.DiscoveredEndpoint).filter(models.DiscoveredEndpoint.ip_address == ip).first()
+    if discovered_ep:
+        sw = db.query(models.Switch).filter(models.Switch.switch_id == discovered_ep.switch_id).first()
+        return {
+            "ip": ip,
+            "switch_name": sw.hostname if sw else "unknown",
+            "interface_name": discovered_ep.port,
+            "vlan": discovered_ep.vlan_id,
+            "vrf": "L2 Bridged Network",
+            "last_seen": discovered_ep.last_seen.isoformat(),
+            "status": "assigned"
+        }
+
+    # 2. Search in IPAM IP allocations (static/dynamic reservations)
+    allocation = db.query(models.IpamIpAllocation).filter(models.IpamIpAllocation.ip_address == ip).first()
+    if allocation:
+        subnet = db.query(models.IpamSubnet).filter(models.IpamSubnet.subnet_id == allocation.subnet_id).first()
+        vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == subnet.vrf_id).first() if subnet else None
+        return {
+            "ip": ip,
+            "switch_name": "IPAM Controller Pool",
+            "interface_name": "logical",
+            "vlan": subnet.vlan_id if subnet else 1,
+            "vrf": vrf.vrf_name if vrf else "unknown",
+            "last_seen": allocation.allocated_at.isoformat(),
+            "status": "assigned"
+        }
+
+    # 3. Otherwise return unassigned structure
+    return {
+        "ip": ip,
+        "status": "unassigned"
+    }
 
 
 @app.get("/api/v5/admin/topology")
@@ -1379,7 +1435,7 @@ def get_discovered_endpoints(db: Session = Depends(get_db), claims: dict = Depen
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
     query = db.query(models.DiscoveredEndpoint)
-    if user_role != "Platform Admin":
+    if user_role not in ["Platform Admin", "platform_admin"]:
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
         allowed_switch_ids = db.query(models.Switch.switch_id).join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
             models.TenantVrf.tenant_id == t_uuid
@@ -1420,8 +1476,7 @@ def get_discovered_endpoints(db: Session = Depends(get_db), claims: dict = Depen
     for ep in endpoints:
         if not _is_real_host_mac(ep.mac_address):
             continue
-        if not ep.ip_address:
-            continue
+        # Allow endpoints without IP address (frontend displays MAC suffix as fallback)
         sw = db.query(models.Switch).filter(models.Switch.switch_id == ep.switch_id).first()
         res.append({
             "endpoint_id": str(ep.endpoint_id),
@@ -1526,11 +1581,14 @@ def get_inventory_details(db: Session = Depends(get_db), claims: dict = Depends(
 
 @app.get("/api/v5/visibility/stp")
 def get_stp_states(db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
-    
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
     query = db.query(models.Switch)
-    if user_role != "Platform Admin":
+    requested_tenant = claims.get("requested_tenant_name")
+    
+    if user_role in ["Platform Admin", "platform_admin"] and requested_tenant == "AtlasWave Maroc Demo":
+        pass
+    elif user_tenant_id and str(user_tenant_id) != "00000000-0000-0000-0000-000000000000":
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
         query = query.join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
             models.TenantVrf.tenant_id == t_uuid
@@ -1539,24 +1597,32 @@ def get_stp_states(db: Session = Depends(get_db), claims: dict = Depends(require
     
     res = []
     for sw in switches:
-        if sw.role == "leaf":
-            port_states = [
-                {"port": "ethernet-1/1", "role": "root", "state": "forwarding"},
-                {"port": "ethernet-1/2", "role": "alternate", "state": "blocking"}
-            ]
+        stp_record = db.query(models.SwitchSTPState).filter(
+            models.SwitchSTPState.switch_id == sw.switch_id
+        ).first()
+        
+        if stp_record:
+            res.append({
+                "hostname": sw.hostname,
+                "ip": sw.management_ip,
+                "stp_enabled": stp_record.stp_enabled,
+                "stp_mode": stp_record.stp_mode,
+                "bridge_priority": stp_record.bridge_priority,
+                "is_root_bridge": stp_record.is_root_bridge,
+                "port_states": stp_record.port_states or [],
+                "collected_at": stp_record.collected_at.isoformat() if stp_record.collected_at else None
+            })
         else:
-            port_states = [
-                {"port": "eth1", "role": "designated", "state": "forwarding"},
-                {"port": "eth2", "role": "designated", "state": "forwarding"}
-            ]
-        res.append({
-            "hostname": sw.hostname,
-            "ip": sw.management_ip,
-            "stp_enabled": True,
-            "stp_mode": "RSTP",
-            "bridge_priority": 32768 if sw.role == "leaf" else 4096,
-            "port_states": port_states
-        })
+            res.append({
+                "hostname": sw.hostname,
+                "ip": sw.management_ip,
+                "stp_enabled": False,
+                "stp_mode": "not_applicable",
+                "bridge_priority": None,
+                "is_root_bridge": False,
+                "port_states": [],
+                "collected_at": None
+            })
     return res
 
 
