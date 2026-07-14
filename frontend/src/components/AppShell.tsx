@@ -36,6 +36,7 @@ export const AppShell: React.FC = () => {
   const navItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
     { name: 'Switches', path: '/switches', icon: Network },
+    { name: 'Switches (New)', path: '/switches-new', icon: Network },
     { name: 'Inventory', path: '/inventory', icon: Cpu },
     { name: 'Spanning Tree (STP)', path: '/stp', icon: GitBranch },
     { name: 'Reports', path: '/reports', icon: FileSpreadsheet },

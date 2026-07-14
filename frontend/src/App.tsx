@@ -19,6 +19,7 @@ import { TenantFabricMapping } from './pages/TenantFabricMapping';
 import { Inventory } from './pages/Inventory';
 import { STPPage } from './pages/STPPage';
 import { ReportsPage } from './pages/ReportsPage';
+import { SwitchesNew } from './pages/SwitchesNew';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -61,6 +62,7 @@ export const App: React.FC = () => {
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
               <Route path="switches" element={<Switches />} />
+              <Route path="switches-new" element={<SwitchesNew />} />
               <Route path="inventory" element={<Inventory />} />
               <Route path="stp" element={<STPPage />} />
               <Route path="reports" element={<ReportsPage />} />
