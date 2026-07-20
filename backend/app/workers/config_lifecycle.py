@@ -332,7 +332,7 @@ def config_compliance_mgr():
     from ..db import SessionLocal
     db = SessionLocal()
     try:
-        switches = db.query(models.Switch).filter(models.Switch.lifecycle_status == "CompliantActive").all()
+        switches = db.query(models.Switch).filter(models.Switch.lifecycle_status == "compliant_active").all()
         for switch in switches:
             # 1. Fetch latest baseline snapshot
             baseline_snapshot = db.query(models.ConfigSnapshot).filter(

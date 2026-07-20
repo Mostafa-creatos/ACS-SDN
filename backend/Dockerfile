@@ -26,5 +26,8 @@ COPY . .
 # Copy the built frontend dist folder from Stage 1
 COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
+# Generate self-signed SSL certs for uvicorn
+RUN openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 365 -nodes -subj "/CN=localhost"
+
 # Default command launches FastAPI via uvicorn with SSL keys if they exist
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--ssl-keyfile", "key.pem", "--ssl-certfile", "cert.pem"]

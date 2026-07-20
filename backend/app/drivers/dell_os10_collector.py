@@ -8,6 +8,8 @@ import re
 import time
 import socket
 import logging
+import uuid
+import sys
 from typing import Optional, Dict, Any, List, Tuple
 
 logger = logging.getLogger(__name__)
@@ -26,8 +28,8 @@ class DellOS10Collector:
         host: str,
         username: str = "admin",
         password: str = "admin",
-        port: int = 22,
-        use_ssh: bool = True,
+        port: int = 5000,
+        use_ssh: bool = False,
         connect_timeout: int = 10,
         command_timeout: int = 15,
     ):
@@ -83,15 +85,79 @@ class DellOS10Collector:
         try:
             self._client.connect((self.host, self.port))
             self._client.settimeout(self.command_timeout)
-            time.sleep(0.3)
+            
+            # Send Ctrl+C and Enter to break out of any stuck state or pager
             self._client.send(b"\x03\r\n")
             time.sleep(0.5)
-            self._flush_until_prompt()
-            self._send_command("terminal length 0")
+            
+            # Read initial buffer to detect login prompt
+            buf = ""
+            start_time = time.time()
+            while time.time() - start_time < 3:
+                try:
+                    chunk = self._recv(4096)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    if "login:" in buf or "Password:" in buf or "spine-" in buf or "#" in buf or ">" in buf:
+                        break
+                except socket.timeout:
+                    break
+                    
+            # Send Enter to provoke prompt if empty
+            if not buf.strip():
+                self._client.send(b"\r\n")
+                time.sleep(0.5)
+                while time.time() - start_time < 3:
+                    try:
+                        chunk = self._recv(4096)
+                        buf += chunk
+                        if "login:" in buf or "Password:" in buf or "spine-" in buf or "#" in buf or ">" in buf:
+                            break
+                    except socket.timeout:
+                        break
+
+            # Handle login prompts if they appear
+            if "login:" in buf:
+                # Send username
+                self._client.send(f"{self.username}\n".encode("utf-8"))
+                time.sleep(0.5)
+                # Read until password prompt
+                p_buf = ""
+                p_start = time.time()
+                while time.time() - p_start < 2:
+                    try:
+                        chunk = self._recv(4096)
+                        p_buf += chunk
+                        if "Password:" in p_buf:
+                            break
+                    except socket.timeout:
+                        break
+                # Send password
+                self._client.send(f"{self.password}\n".encode("utf-8"))
+                time.sleep(1.0)
+                
+            # Send end to make sure we are in exec mode and not config mode
+            self._client.send(b"end\n")
+            time.sleep(0.5)
+            # Send terminal length 0 to prevent --More-- pagination
+            self._client.send(b"terminal length 0\n")
+            time.sleep(0.5)
+            
+            # Flush the buffer
+            try:
+                self._client.settimeout(0.1)
+                while self._recv(8192):
+                    pass
+            except socket.timeout:
+                pass
+                
+            self._client.settimeout(self.command_timeout)
         except Exception as exc:
             raise DellOS10CollectorError(
                 f"Console connection failed to {self.host}:{self.port}: {exc}"
             ) from exc
+
 
     def _flush_until_prompt(self, timeout: float = 2) -> str:
         """Read until the channel goes silent (up to *timeout* seconds)."""
@@ -240,9 +306,67 @@ class DellOS10Collector:
         """Parse `show inventory` into hardware components list."""
         raw = self._send_command("show inventory")
         components: List[Dict[str, Any]] = []
-        current: Optional[Dict[str, Any]] = None
-        inventory_section = False
 
+        # Check if we have the tabular format
+        if "Unit Type" in raw and "Piece Part ID" in raw:
+            table_started = False
+            for line in raw.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if "Unit Type" in line and "Piece Part ID" in line:
+                    table_started = True
+                    continue
+                if table_started and line.startswith("---"):
+                    continue
+                if table_started:
+                    line_clean = line
+                    if line_clean.strip().startswith("*"):
+                        line_clean = line_clean.replace("*", " ", 1)
+                        
+                    match = re.match(r'^\s*(\d+)\s+(\S+)(.*)$', line_clean)
+                    if match:
+                        unit_id = match.group(1)
+                        unit_type_raw = match.group(2)
+                        rest = match.group(3).strip()
+                        
+                        ppid = ""
+                        svc_tag = ""
+                        
+                        ppid_match = re.search(r'([A-Z0-9]{2}-[A-Z0-9]{6}-\d{5}-[A-Z0-9]{3}-[A-Z0-9]{4})', rest)
+                        if ppid_match:
+                            ppid = ppid_match.group(1)
+                            
+                        fields = [f.strip() for f in rest.split() if f.strip()]
+                        for f in fields:
+                            if f != ppid and len(f) == 7 and f.isalnum():
+                                svc_tag = f
+                                break
+                                
+                        ut_lower = unit_type_raw.lower()
+                        if "pwr" in ut_lower or "power" in ut_lower:
+                            comp_type = "psu"
+                        elif "fan" in ut_lower:
+                            comp_type = "fan"
+                        elif "chassis" in ut_lower or "vm" in ut_lower:
+                            comp_type = "chassis"
+                        else:
+                            comp_type = "chassis"
+                            
+                        components.append({
+                            "component_id": str(uuid.uuid4()) if 'uuid' in sys.modules else "",
+                            "component_type": comp_type,
+                            "slot_label": f"Unit {unit_id} - {unit_type_raw}",
+                            "part_number": unit_type_raw,
+                            "ppid": ppid,
+                            "service_tag": svc_tag,
+                            "status": "ok",
+                            "detail": f"Dell OS10 System Component: {unit_type_raw}",
+                            "numeric_value": None
+                        })
+            return components
+
+        current: Optional[Dict[str, Any]] = None
         for line in raw.splitlines():
             stripped = line.strip()
             if not stripped:
@@ -251,7 +375,6 @@ class DellOS10Collector:
                     current = None
                 continue
 
-            # Detect section headers like "Chassis:", "Slot 1:", "Slot 2:", etc.
             header_match = re.match(
                 r"^(Chassis|Slot\s+\d+|Expansion\s+\S+|Module\s+\S+)\s*:*\s*$",
                 stripped,
@@ -277,13 +400,13 @@ class DellOS10Collector:
             if current is None:
                 continue
 
-            # Parse key: value pairs
             if ":" in stripped:
                 k, _, v = stripped.partition(":")
                 k = k.strip().lower().replace(" ", "_")
                 v = v.strip()
                 if k == "part_number":
                     current["part_number"] = v
+
                 elif k == "ppid":
                     current["ppid"] = v
                 elif k == "service_tag":
@@ -577,54 +700,90 @@ class DellOS10Collector:
             stripped = line.strip()
             if not stripped:
                 continue
-            # Skip codes legend
-            if stripped.startswith("Codes"):
+            if stripped.startswith("Codes") or "Q:" in stripped:
                 continue
-            if re.match(r"^[-]+\s+[-]+\s+[-]+\s+[-]+$", stripped):
+            if "NUM" in stripped and "Status" in stripped:
                 header_passed = True
                 continue
             if not header_passed:
                 continue
-
-            # Format: 100   Uplink-Fabric   ethernet1/1/1-4   Static
-            vlan_match = re.match(
-                r"^(\d+)\s+(.*?)\s+(\S+(?:[-,]\S+)*)?\s+(\S+)\s*$",
-                stripped,
-            )
-            if vlan_match:
-                vlan_id = int(vlan_match.group(1))
-                name = vlan_match.group(2).strip()
-                ports_raw = vlan_match.group(3) or ""
-                vlan_type = vlan_match.group(4)
-
-                # Expand port ranges like "ethernet1/1/1-4" and split commas
-                member_ports: List[str] = []
-                if ports_raw:
-                    for part in ports_raw.split(","):
+            
+            line_clean = stripped
+            if line_clean.startswith("*") or line_clean.startswith("M"):
+                line_clean = line_clean[1:].strip()
+                
+            parts = [p.strip() for p in re.split(r'\s{2,}', line_clean) if p.strip()]
+            if parts and parts[0].isdigit():
+                vlan_id = int(parts[0])
+                status = "active"
+                name = ""
+                member_ports = []
+                
+                if len(parts) >= 2:
+                    status_candidate = parts[1].lower()
+                    if "active" in status_candidate:
+                        status = "active"
+                    elif "suspended" in status_candidate:
+                        status = "suspended"
+                        
+                ports_field = ""
+                if len(parts) >= 3:
+                    last_part = parts[-1]
+                    if any(x in last_part for x in ["Eth", "port-channel", "Gigabit", "TenGigabit", "fortyGigabit"]):
+                        ports_field = last_part
+                        if len(parts) == 4:
+                            name = parts[2]
+                    else:
+                        name = parts[2]
+                elif len(parts) == 2 and any(x in parts[1] for x in ["Eth", "port-channel"]):
+                    ports_field = parts[1]
+                    
+                if ports_field.startswith("A ") or ports_field.startswith("T "):
+                    ports_field = ports_field[2:].strip()
+                    
+                if ports_field:
+                    for part in ports_field.split(","):
                         part = part.strip()
-                        range_match = re.match(r"^(.*?)(\d+)-(\d+)$", part)
-                        if range_match:
-                            prefix = range_match.group(1)
-                            start = int(range_match.group(2))
-                            end = int(range_match.group(3))
-                            for i in range(start, end + 1):
-                                member_ports.append(f"{prefix}{i}")
+                        full_range_match = re.match(r"^(.*?)([0-9/]+)-([0-9/]+)$", part)
+                        if full_range_match:
+                            prefix = full_range_match.group(1)
+                            start_str = full_range_match.group(2)
+                            end_str = full_range_match.group(3)
+                            if "/" in start_str and "/" in end_str:
+                                s_parts = start_str.split("/")
+                                e_parts = end_str.split("/")
+                                if len(s_parts) == 3 and len(e_parts) == 3:
+                                    start_num = int(s_parts[-1])
+                                    end_num = int(e_parts[-1])
+                                    base_prefix = f"{prefix}{s_parts[0]}/{s_parts[1]}/"
+                                    for i in range(start_num, end_num + 1):
+                                        member_ports.append(f"{base_prefix}{i}")
+                            else:
+                                try:
+                                    start_num = int(start_str.split("/")[-1])
+                                    end_num = int(end_str)
+                                    base_prefix = part.split("-")[0]
+                                    base_prefix = re.sub(r'\d+$', '', base_prefix)
+                                    for i in range(start_num, end_num + 1):
+                                        member_ports.append(f"{base_prefix}{i}")
+                                except:
+                                    member_ports.append(part)
                         else:
                             member_ports.append(part)
-
-                status = "active" if vlan_type.lower() != "suspended" else "suspended"
+                            
                 vlans.append({
                     "vlan_id": vlan_id,
-                    "name": name,
+                    "name": name or f"VLAN_{vlan_id}",
                     "status": status,
                     "member_ports": member_ports,
                 })
 
         return vlans
 
+
     def collect_lags(self) -> List[Dict[str, Any]]:
-        """Parse `show port-channel summary` into LAG list."""
-        raw = self._send_command("show port-channel summary")
+        """Parse `show interface port-channel summary` into LAG list."""
+        raw = self._send_command("show interface port-channel summary")
         lags: List[Dict[str, Any]] = []
         header_passed = False
 
@@ -632,40 +791,43 @@ class DellOS10Collector:
             stripped = line.strip()
             if not stripped:
                 continue
-            if re.match(r"^[-]+\s+[-]+\s+[-]+\s+[-]+$", stripped):
+            if "LAG" in stripped and "Mode" in stripped and "Status" in stripped:
                 header_passed = True
+                continue
+            if stripped.startswith("---"):
                 continue
             if not header_passed:
                 continue
 
-            # 128   LACP   ethernet1/1/1(Up),ethernet1/1/2(Up)   LACP
-            lag_match = re.match(
-                r"^(\d+)\s+(\S+)\s+(.*?)\s+(\S+)\s*$",
-                stripped,
-            )
-            if lag_match:
-                lag_num = lag_match.group(1)
-                mode = lag_match.group(2).lower()
-                ports_raw = lag_match.group(3)
-                protocol = lag_match.group(4)
-
-                # Extract port names from "ethernet1/1/1(Up),ethernet1/1/2(Up)" format
-                member_ports: List[str] = []
-                for p in re.findall(r"(\S+?)\([^)]*\)", ports_raw):
-                    member_ports.append(p.strip(","))
-
-                status = "up" if any("(Up)" in p for p in ports_raw.split(",")) else "down"
-                lag_type = "lacp" if mode == "lacp" else "static"
-
+            parts = [p.strip() for p in re.split(r'\s{2,}', stripped) if p.strip()]
+            if parts and parts[0].isdigit():
+                lag_num = parts[0]
+                mode = parts[1].lower() if len(parts) > 1 else "lacp"
+                status = parts[2].lower() if len(parts) > 2 else "up"
+                
+                ports_raw = ""
+                if len(parts) >= 5:
+                    ports_raw = parts[4]
+                elif len(parts) == 4 and any(x in parts[3] for x in ["Eth", "port-channel"]):
+                    ports_raw = parts[3]
+                    
+                member_ports = []
+                if ports_raw:
+                    for p in re.findall(r'([a-zA-Z0-9/]+)(?:\(.*?\))?', ports_raw):
+                        if p.strip():
+                            member_ports.append(p.strip())
+                            
                 lags.append({
+                    "lag_id": str(uuid.uuid4()) if 'uuid' in sys.modules else "",
                     "lag_name": f"port-channel{lag_num}",
-                    "lag_type": lag_type,
+                    "lag_type": "lacp" if "lacp" in mode else "static",
                     "member_ports": member_ports,
                     "status": status,
-                    "protocol": protocol.strip(),
+                    "protocol": "lacp" if "lacp" in mode else "static",
                 })
 
         return lags
+
 
     def collect_lldp(self) -> List[Dict[str, Any]]:
         """Parse `show lldp neighbors` into LLDP link list."""

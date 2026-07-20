@@ -12,7 +12,7 @@ import {
   Search, Filter, RotateCw, ChevronDown, ChevronUp,
   CheckCircle2, Hash, Network,
   Plus, Edit3, Trash2, Camera, RotateCcw, Check,
-  AlertCircle, ListFilter
+  AlertCircle, ListFilter, ShieldCheck
 } from 'lucide-react';
 
 interface ConfigSnapshot {
@@ -52,6 +52,9 @@ export const SwitchesNew: React.FC = () => {
   const [selectedSnap1, setSelectedSnap1] = useState('');
   const [selectedSnap2, setSelectedSnap2] = useState('');
   const [interfaceFilter, setInterfaceFilter] = useState<'all' | 'up' | 'down'>('all');
+
+  // Compliance state
+  const [complianceFindings, setComplianceFindings] = useState<Record<string, any[]>>({});
 
   // CRUD modal state
   const [showAddModal, setShowAddModal] = useState(false);
@@ -126,6 +129,24 @@ export const SwitchesNew: React.FC = () => {
     }
   }, [token]);
 
+  // ── Fetch compliance findings for a switch ──────────────────────────────────
+  const fetchCompliance = useCallback(async (switchId: string) => {
+    try {
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
+      const res = await fetch('/api/v5/visibility/compliance/latest', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        const filtered = (data.findings || []).filter((f: any) => f.switch_id === switchId);
+        setComplianceFindings(prev => ({ ...prev, [switchId]: filtered }));
+      } else {
+        setComplianceFindings(prev => ({ ...prev, [switchId]: [] }));
+      }
+    } catch {
+      setComplianceFindings(prev => ({ ...prev, [switchId]: [] }));
+    }
+  }, [token, selectedTenant]);
+
   // ── Expand row ───────────────────────────────────────────────────────────────
   const toggleExpand = (id: string) => {
     if (expandedId === id) {
@@ -134,6 +155,7 @@ export const SwitchesNew: React.FC = () => {
       setExpandedId(id);
       if (!tabMap[id]) setTabMap(prev => ({ ...prev, [id]: 'overview' }));
       fetchSnapshots(id);
+      fetchCompliance(id);
     }
   };
 
@@ -167,12 +189,19 @@ export const SwitchesNew: React.FC = () => {
         body: JSON.stringify({ snapshot_id: snapId, dry_run: activeSwitch.role === 'spine' })
       });
       if (res.ok) {
-        if (activeSwitch.role === 'spine') showToast('Pending Four-Eyes Approval — queued, not executed.', 'warning');
-        else { showToast(`Rollback triggered on ${activeSwitch.hostname}`, 'success'); fetchSwitches(); }
-      } else { const e = await res.json(); showToast(e.detail || 'Rollback failed', 'warning'); }
+        const body = await res.json().catch(() => ({}));
+        if (activeSwitch.role === 'spine' || body.status === 'APPROVAL_REQUIRED') {
+          showToast(body.message || 'Pending Four-Eyes Approval — queued, not executed.', 'warning');
+        } else {
+          showToast(`Rollback triggered on ${activeSwitch.hostname}`, 'success');
+          fetchSwitches();
+        }
+      } else {
+        const e = await res.json().catch(() => ({}));
+        showToast(e.detail || 'Rollback failed', 'warning');
+      }
     } catch {
-      if (activeSwitch.role === 'spine') showToast('Pending Four-Eyes Approval — queued, not executed.', 'warning');
-      else { showToast(`Rollback triggered on ${activeSwitch.hostname}`, 'success'); fetchSwitches(); }
+      showToast('Network error — rollback request could not be sent.', 'warning');
     }
   };
 
@@ -346,7 +375,7 @@ export const SwitchesNew: React.FC = () => {
                   const hwStatus = sw.hardware_components?.some(c => c.status === 'critical') ? 'critical'
                     : sw.hardware_components?.some(c => c.status === 'warning') ? 'warning' : 'ok';
 
-                  const TABS = ['overview', 'interfaces', 'vlans', 'lags', 'snapshots', 'fabric', 'hardware', 'config'];
+                  const TABS = ['overview', 'interfaces', 'vlans', 'lags', 'snapshots', 'fabric', 'hardware', 'config', 'compliance'];
 
                   return (
                     <React.Fragment key={sw.switch_id}>
@@ -434,6 +463,7 @@ export const SwitchesNew: React.FC = () => {
                                   {tab === 'fabric' && 'Fabric / VLT'}
                                   {tab === 'hardware' && `Hardware (${sw.hardware_components?.length || 0})`}
                                   {tab === 'config' && 'Running Config'}
+                                  {tab === 'compliance' && `Compliance${complianceFindings[sw.switch_id]?.length ? ` (${complianceFindings[sw.switch_id].length})` : ''}`}
                                   {activeTab === tab && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-atlas-primary rounded-full" />}
                                 </button>
                               ))}
@@ -454,6 +484,7 @@ export const SwitchesNew: React.FC = () => {
                                   ['Ports', `${sw.ports_up ?? '-'} / ${sw.ports_all ?? '-'} up`],
                                   ['Temperature', sw.temperature || 'Normal'],
                                   ['Chassis', sw.chassis_status || 'Ready'],
+                                  ['Status', sw.status || 'Unknown'],
                                   ['Last Discovery', sw.last_collection_timestamp ? new Date(sw.last_collection_timestamp).toLocaleString() : 'Never'],
                                 ].map(([label, val]) => (
                                   <div key={label} className="space-y-0.5">
@@ -665,6 +696,63 @@ export const SwitchesNew: React.FC = () => {
                                 ) : (
                                   <p className="text-xs text-slate-400">No configuration snapshot taken yet.</p>
                                 )}
+                              </div>
+                            )}
+
+                            {/* ── Compliance ── */}
+                            {activeTab === 'compliance' && (
+                              <div className="space-y-3">
+                                {(() => {
+                                  const findings = complianceFindings[sw.switch_id] || [];
+                                  if (findings.length === 0) {
+                                    return (
+                                      <div className="text-center py-8">
+                                        <ShieldCheck className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
+                                        <p className="text-sm text-slate-500 font-medium">No compliance findings for this switch.</p>
+                                        <p className="text-xs text-slate-400 mt-1">Run a compliance audit to check for configuration drift.</p>
+                                      </div>
+                                    );
+                                  }
+                                  const criticals = findings.filter((f: any) => f.severity === 'critical').length;
+                                  const warnings = findings.filter((f: any) => f.severity === 'warning').length;
+                                  const others = findings.length - criticals - warnings;
+                                  return (
+                                    <>
+                                      <div className="flex items-center gap-3 text-[10px] font-bold">
+                                        <span className="text-slate-500">{findings.length} finding{findings.length !== 1 ? 's' : ''}</span>
+                                        {criticals > 0 && <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-700">{criticals} Critical</span>}
+                                        {warnings > 0 && <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-700">{warnings} Warning</span>}
+                                        {others > 0 && <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600">{others} Low</span>}
+                                      </div>
+                                      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white max-h-72 overflow-y-auto shadow-sm">
+                                        <table className="w-full text-left text-xs">
+                                          <thead>
+                                            <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                                              <th className="px-4 py-3">Rule</th>
+                                              <th className="px-4 py-3">Severity</th>
+                                              <th className="px-4 py-3">Detail</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-slate-50">
+                                            {findings.map((f: any) => (
+                                              <tr key={f.finding_id} className="hover:bg-slate-50/50">
+                                                <td className="px-4 py-2.5 font-semibold text-atlas-ink text-[11px]">{f.rule_name}</td>
+                                                <td className="px-4 py-2.5">
+                                                  <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
+                                                    f.severity === 'critical' ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                                                    : f.severity === 'warning' ? 'bg-amber-100 text-amber-700 border border-amber-200'
+                                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                                  }`}>{f.severity}</span>
+                                                </td>
+                                                <td className="px-4 py-2.5 text-slate-500 text-[11px]">{f.detail}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    </>
+                                  );
+                                })()}
                               </div>
                             )}
 

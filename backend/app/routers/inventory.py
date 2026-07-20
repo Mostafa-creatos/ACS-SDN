@@ -250,10 +250,13 @@ def get_inventory_details(
     
     # Tenant isolation: apply filter only when user is not a Platform Admin viewing the Global view
     if not (user_role in ["Platform Admin", "platform_admin"] and requested_tenant in (None, "", "AtlasWave Maroc Demo")):
-        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        query = query.join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
-            models.TenantVrf.tenant_id == t_uuid
-        ).distinct()
+        if requested_tenant:
+            query = query.filter(models.Switch.client_tenant == requested_tenant)
+        else:
+            t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+            tenant = db.query(models.Tenant).filter(models.Tenant.tenant_id == t_uuid).first()
+            if tenant:
+                query = query.filter(models.Switch.client_tenant == tenant.tenant_name)
 
     # Server-side search
     if search:
@@ -472,8 +475,8 @@ def delete_switch(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: d
     db.commit()
     return {"status": "DEVICE_DELETED", "switch_id": str(switch_id)}
 
-@router.post("/api/v5/switches/{id}/rollback", status_code=status.HTTP_202_ACCEPTED)
-def rollback_switch(id: uuid.UUID, db: Session = Depends(get_db)):
+@router.post("/switches/{id}/rollback", status_code=status.HTTP_202_ACCEPTED)
+def rollback_switch(id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     """
     Triggers a compliance rollback to re-apply the Ansible baseline.
     Requires approval if blast radius is high (spine).

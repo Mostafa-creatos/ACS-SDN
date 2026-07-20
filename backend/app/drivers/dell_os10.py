@@ -68,8 +68,8 @@ class DellOS10Driver(SouthboundNetworkDriver):
                 host=host,
                 username=username or "admin",
                 password=password or "admin",
-                port=port,
-                use_ssh=True,
+                port=5000,
+                use_ssh=False,
             ) as collector:
                 return collector.collect_all()
 

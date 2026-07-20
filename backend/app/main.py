@@ -13,6 +13,8 @@ from sqlalchemy import text
 from .config import settings
 from .db import get_db, Base, engine, SessionLocal
 from . import models, schemas
+
+LIFECYCLE_COMPLIANT = "compliant_active"
 from .drivers.dell_os10 import DellOS10Driver
 from .drivers.arista_eos import AristaEosDriver
 from .admin_ui import ADMIN_HTML
@@ -732,6 +734,12 @@ def create_tenant(
     db: Session = Depends(get_db),
     claims: dict = Depends(get_current_user_claims)
 ):
+    user_role = claims.get("role")
+    if user_role not in ["Platform Admin", "platform_admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Only Platform Admins can create tenants."
+        )
     
     # Check if tenant name already exists
     existing = db.query(models.Tenant).filter(models.Tenant.tenant_name == payload.tenant_name).first()
@@ -780,7 +788,7 @@ def get_pending_approvals(
 def approve_policy_intent(
     approval_id: uuid.UUID,
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(require_permission("global:manage"))
 ):
 
     approval = db.query(models.PolicyApproval).filter(
@@ -860,7 +868,7 @@ def approve_policy_intent(
 def reject_policy_intent(
     approval_id: uuid.UUID,
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(require_permission("global:manage"))
 ):
 
     approval = db.query(models.PolicyApproval).filter(
@@ -1058,6 +1066,8 @@ def search_ipam_ip(ip: str, db: Session = Depends(get_db), claims: dict = Depend
 
 @app.get("/api/v5/admin/topology")
 async def get_admin_topology(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
     try:
         edges = db.query(models.TopologyEdge).filter(models.TopologyEdge.state == "up").all()
         if not edges:
@@ -1353,13 +1363,14 @@ def accept_switch_drift(
         taken_at=datetime.datetime.utcnow(),
         raw_config=raw_config,
         config_hash=config_hash,
+        is_baseline=True,
         taken_by=claims.get("username") or claims.get("email") or "operator"
     )
     db.add(snapshot)
     
     # Update switch status
     switch.configuration_checksum = config_hash
-    switch.lifecycle_status = "compliant_active"
+    switch.lifecycle_status = LIFECYCLE_COMPLIANT
     db.commit()
     
     return {
@@ -1416,6 +1427,7 @@ def get_latest_compliance(db: Session = Depends(get_db), claims: dict = Depends(
         sw = db.query(models.Switch).filter(models.Switch.switch_id == f.switch_id).first()
         res.append({
             "finding_id": str(f.finding_id),
+            "switch_id": str(f.switch_id),
             "switch_hostname": sw.hostname if sw else "unknown",
             "rule_name": f.rule_name,
             "severity": f.severity,

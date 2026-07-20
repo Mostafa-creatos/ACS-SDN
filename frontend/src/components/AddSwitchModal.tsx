@@ -105,6 +105,7 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
 
     if (!form.hostname.trim()) { setError('Hostname is required.'); return; }
     if (!form.management_ip.trim()) { setError('Management IP is required.'); return; }
+    if (saving) return;
 
     setSaving(true);
     try {

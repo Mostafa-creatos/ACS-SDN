@@ -86,7 +86,7 @@ export const PendingApprovals: React.FC = () => {
         headers
       });
 
-      if (response.ok || true) {
+      if (response.ok) {
         // Remove from list
         setRequests(prev => prev.filter(r => r.id !== activeRequest.id));
         setIsConfirmOpen(false);

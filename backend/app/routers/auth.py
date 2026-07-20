@@ -31,13 +31,17 @@ class ResetPasswordPayload(BaseModel):
     new_password: str
 
 def generate_jwt_for_user(user: models.User, tenant_id: str, role: str, tenants: list = None) -> str:
+    now = datetime.datetime.utcnow()
     token_payload = {
         "sub": user.username,
         "user_id": str(user.user_id),
         "username": user.username,
         "role": role,
         "tenant_id": tenant_id,
-        "tenants": tenants or []
+        "tenants": tenants or [],
+        "iat": now,
+        "nbf": now,
+        "exp": now + datetime.timedelta(hours=settings.JWT_EXPIRY_HOURS),
     }
     return jwt.encode(token_payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 

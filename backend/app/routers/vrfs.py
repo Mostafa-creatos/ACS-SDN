@@ -352,6 +352,14 @@ def delete_subnet(
     subnet = db.query(models.IpamSubnet).filter(models.IpamSubnet.subnet_id == s_uuid).first()
     if not subnet:
         raise HTTPException(status_code=404, detail="Subnet not found")
-        
+    
+    # Safety: block deletion if child IP allocations exist
+    child_count = db.query(models.IpamIpAllocation).filter(models.IpamIpAllocation.subnet_id == s_uuid).count()
+    if child_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete subnet: {child_count} host reservation(s) still reference it. Remove reservations first."
+        )
+    
     db.delete(subnet)
     db.commit()

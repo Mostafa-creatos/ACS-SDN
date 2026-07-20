@@ -77,7 +77,7 @@ async def ingest_ztp_signal(
             vendor=payload.vendor,
             role="leaf",
             local_bgp_asn=65000,
-            loopback_0_ip=f"10.255.0.{hash(payload.serial_number) % 254 + 1}",
+            loopback_0_ip=f"10.255.0.{int(payload.serial_number[-4:], 16) % 254 + 1}",
             serial_number=payload.serial_number,
             lifecycle_status="DiscoveredRaw"
         )

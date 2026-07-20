@@ -244,7 +244,7 @@ export const Compliance: React.FC = () => {
           <Card className="flex items-center justify-between py-4 px-5">
             <div>
               <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Compliant Switches</span>
-              <span className="text-xl font-bold font-display text-slate-800">{findings.filter(f => f.status === 'resolved').length + 3} Devices</span>
+              <span className="text-xl font-bold font-display text-slate-800">{findings.filter(f => f.status === 'resolved').length} Devices</span>
             </div>
             <ShieldCheck className="w-8 h-8 text-atlas-teal" />
           </Card>

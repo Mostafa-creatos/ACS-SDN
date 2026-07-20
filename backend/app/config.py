@@ -12,6 +12,7 @@ class Settings:
     REDIS_SENTINEL_MASTER: str = os.getenv("REDIS_SENTINEL_MASTER", "mymaster")
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "sdn_super_secret_jwt_key_change_me_in_production")
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
+    JWT_EXPIRY_HOURS: int = int(os.getenv("JWT_EXPIRY_HOURS", "8"))
     VAULT_URL: str = os.getenv("VAULT_URL", "http://localhost:8200")
     VAULT_TOKEN: str = os.getenv("VAULT_TOKEN", "sdn_vault_dev_token")
 

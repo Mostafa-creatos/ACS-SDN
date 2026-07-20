@@ -1,11 +1,10 @@
 import json
 import uuid
 import datetime
-_original_print = print
-def print(*args, **kwargs):
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    _original_print(f"[{timestamp}]", *args, **kwargs)
+import logging
 import socket
+
+logger = logging.getLogger(__name__)
 import time
 import re
 from sqlalchemy.orm import Session
@@ -123,7 +122,7 @@ def clean_and_login_dell_console(ip, port=5000):
         s.settimeout(5)
         return s
     except Exception as e:
-        print(f"[Dell Console] Connection/Login failed for {ip}: {e}")
+        logger.info(f"[Dell Console] Connection/Login failed for {ip}: {e}")
         s.close()
         return None
 
@@ -153,7 +152,7 @@ def discover_dell_switch(sw, db: Session):
     and updates the database.
     """
     import os
-    print(f"[Dell Discovery] Connecting to {sw.hostname} at {sw.management_ip} via SSH...")
+    logger.info(f"[Dell Discovery] Connecting to {sw.hostname} at {sw.management_ip} via SSH...")
     
     from ..drivers.dell_os10_collector import DellOS10Collector
     
@@ -215,6 +214,45 @@ def discover_dell_switch(sw, db: Session):
             else:
                 sw.lifecycle_status = "compliant_active"
                 
+        # Store VLANs, LAGs, and Hardware Components in DB
+        db.query(models.SwitchVlan).filter(models.SwitchVlan.switch_id == sw.switch_id).delete()
+        db.query(models.SwitchLag).filter(models.SwitchLag.switch_id == sw.switch_id).delete()
+        db.query(models.HardwareComponent).filter(models.HardwareComponent.switch_id == sw.switch_id).delete()
+
+        for vl in vlans:
+            db.add(models.SwitchVlan(
+                vlan_id=vl["vlan_id"],
+                switch_id=sw.switch_id,
+                name=vl.get("name", f"VLAN_{vl['vlan_id']}"),
+                status=vl.get("status", "active"),
+                member_ports=vl.get("member_ports", []),
+            ))
+
+        for lag in lags:
+            db.add(models.SwitchLag(
+                lag_id=lag.get("lag_id") or str(uuid.uuid4()),
+                switch_id=sw.switch_id,
+                lag_name=lag.get("lag_name", ""),
+                lag_type=lag.get("lag_type", "lacp"),
+                member_ports=lag.get("member_ports", []),
+                status=lag.get("status", "up"),
+                protocol=lag.get("protocol", "lacp"),
+            ))
+
+        for inv in inventory:
+            db.add(models.HardwareComponent(
+                component_id=uuid.uuid4(),
+                switch_id=sw.switch_id,
+                component_type=inv.get("component_type", "unknown"),
+                slot_label=inv.get("slot_label", ""),
+                part_number=inv.get("part_number", ""),
+                ppid=inv.get("ppid", ""),
+                service_tag=inv.get("service_tag", ""),
+                status=inv.get("status", "ok"),
+                detail=inv.get("detail", ""),
+                numeric_value=inv.get("numeric_value"),
+            ))
+
         db.commit()
         
         # 4. Map interfaces for returning to caller
@@ -296,9 +334,9 @@ def discover_dell_switch(sw, db: Session):
                             "port": port_name,
                             "switch_id": sw.switch_id
                         })
-                print(f"[Dell Discovery] {sw.hostname}: {raw_count} raw, {filtered_mac} filtered by MAC, {filtered_lldp} filtered by LLDP, {len(endpoints)} valid")
+                logger.info(f"[Dell Discovery] {sw.hostname}: {raw_count} raw, {filtered_mac} filtered by MAC, {filtered_lldp} filtered by LLDP, {len(endpoints)} valid")
         except Exception as e:
-            print(f"[Dell Discovery] Endpoints CLI parsing failed for {sw.hostname}: {e}")
+            logger.info(f"[Dell Discovery] Endpoints CLI parsing failed for {sw.hostname}: {e}")
             
         # Store STP state from collect_stp() result
         if stp:
@@ -326,10 +364,10 @@ def discover_dell_switch(sw, db: Session):
                 db.commit()
             except Exception as stp_err:
                 db.rollback()
-                print(f"[Dell Discovery] Failed to save STP state: {stp_err}")
+                logger.info(f"[Dell Discovery] Failed to save STP state: {stp_err}")
 
     except Exception as e:
-        print(f"[Dell Discovery] SSH discovery failed for {sw.hostname}: {e}")
+        logger.info(f"[Dell Discovery] SSH discovery failed for {sw.hostname}: {e}")
         sw.status = "Down"
         db.commit()
         endpoints = []
@@ -342,7 +380,7 @@ def discover_nokia_switch(sw, db: Session):
     Connects to a Nokia switch via gNMI, retrieves interface configurations,
     states, and LLDP neighbors, and updates the database.
     """
-    print(f"[Nokia Discovery] Connecting to {sw.hostname} at {sw.management_ip}...")
+    logger.info(f"[Nokia Discovery] Connecting to {sw.hostname} at {sw.management_ip}...")
     
     interfaces = []
     lldp_links = []
@@ -510,12 +548,12 @@ def discover_nokia_switch(sw, db: Session):
             try:
                 mac_table_data = gc.get(path=['/network-instance/bridge-table/mac-learning/learnt-entries'])
             except Exception as ex:
-                print(f"[Nokia Discovery] MAC table query failed for {sw.hostname}: {ex}")
+                logger.info(f"[Nokia Discovery] MAC table query failed for {sw.hostname}: {ex}")
 
             try:
                 arp_table_data = gc.get(path=['/interface/subinterface/ipv4/arp/neighbor'])
             except Exception as ex:
-                print(f"[Nokia Discovery] ARP neighbor query failed for {sw.hostname}: {ex}")
+                logger.info(f"[Nokia Discovery] ARP neighbor query failed for {sw.hostname}: {ex}")
 
             # 1. Parse ARP table to map MAC -> IP and extract standalone ARP entries
             mac_to_ip = {}
@@ -598,14 +636,14 @@ def discover_nokia_switch(sw, db: Session):
 
             # 3. Associate IP and filter out LLDP ports
             lldp_ports = {l["port"] for l in lldp_links}
-            print(f"[Nokia Discovery] {sw.hostname}: {len(mac_entries)} raw MAC entries, {len(arp_endpoints)} raw ARP entries, {len(lldp_ports)} LLDP ports")
+            logger.info(f"[Nokia Discovery] {sw.hostname}: {len(mac_entries)} raw MAC entries, {len(arp_endpoints)} raw ARP entries, {len(lldp_ports)} LLDP ports")
 
             # Source A: MAC table entries (L2 learned)
             for entry in mac_entries:
                 if entry["port"] in lldp_ports:
                     continue
                 if not is_valid_host_mac(entry["mac_address"]):
-                    print(f"[Nokia Discovery] {sw.hostname}: filtered MAC {entry['mac_address']} port={entry['port']}")
+                    logger.info(f"[Nokia Discovery] {sw.hostname}: filtered MAC {entry['mac_address']} port={entry['port']}")
                     continue
                 endpoints.append({
                     "mac_address": entry["mac_address"],
@@ -627,14 +665,14 @@ def discover_nokia_switch(sw, db: Session):
                 if already_have:
                     continue
                 if not is_valid_host_mac(entry["mac_address"]):
-                    print(f"[Nokia Discovery] {sw.hostname}: filtered ARP MAC {entry['mac_address']} port={entry['port']}")
+                    logger.info(f"[Nokia Discovery] {sw.hostname}: filtered ARP MAC {entry['mac_address']} port={entry['port']}")
                     continue
                 endpoints.append(entry)
 
-            print(f"[Nokia Discovery] {sw.hostname}: {len(endpoints)} valid endpoints found")
+            logger.info(f"[Nokia Discovery] {sw.hostname}: {len(endpoints)} valid endpoints found")
 
     except Exception as e:
-        print(f"[Nokia Discovery] gNMI discovery failed for {sw.hostname}: {e}")
+        logger.info(f"[Nokia Discovery] gNMI discovery failed for {sw.hostname}: {e}")
         sw.status = "Down"
         db.commit()
         endpoints = []
@@ -647,7 +685,7 @@ def run_gnmi_discovery(db: Session):
     Connects to all switches in the inventory using native protocols (gNMI or Console socket),
     discovers topological edges (LLDP), updates switch and interface tables, and commits.
     """
-    print("[DISCOVERY] Starting live topology and interface discovery...")
+    logger.info("[DISCOVERY] Starting live topology and interface discovery...")
     switches = db.query(models.Switch).all()
     
     # 1. Update Topology Nodes
@@ -752,7 +790,7 @@ def run_gnmi_discovery(db: Session):
             # Auto-create switch record if discovered via LLDP but not yet in DB
             if remote_sw is None and remote_name:
                 remote_ip = l.get("remote_ip", "")
-                print(f"[DISCOVERY] Auto-creating new switch from LLDP: {remote_name} (ip={remote_ip})")
+                logger.info(f"[DISCOVERY] Auto-creating new switch from LLDP: {remote_name} (ip={remote_ip})")
                 import uuid as _uuid
                 # Determine vendor from remote system description if available
                 remote_desc = l.get("remote_desc", "").lower()
@@ -813,10 +851,10 @@ def run_gnmi_discovery(db: Session):
                         remote_sw = new_sw
                         host_to_sw[remote_name] = remote_sw
                         ip_to_sw[new_sw.management_ip] = remote_sw
-                        print(f"[DISCOVERY] Auto-created switch: {remote_name}")
+                        logger.info(f"[DISCOVERY] Auto-created switch: {remote_name}")
                     except Exception as e:
                         db.rollback()
-                        print(f"[DISCOVERY] Failed to auto-create {remote_name}: {e}")
+                        logger.info(f"[DISCOVERY] Failed to auto-create {remote_name}: {e}")
             
         if local_sw and remote_sw:
             # Format a sorted key to identify unique edge
@@ -881,4 +919,4 @@ def run_gnmi_discovery(db: Session):
         db.add(new_ep)
         
     db.commit()
-    print("[DISCOVERY] Discovery sync completed successfully.")
+    logger.info("[DISCOVERY] Discovery sync completed successfully.")

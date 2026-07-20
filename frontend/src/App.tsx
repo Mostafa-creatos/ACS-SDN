@@ -6,7 +6,7 @@ import { AppShell } from './components/AppShell';
 import { Login } from './pages/Login';
 import { Styleguide } from './pages/Styleguide';
 import { Dashboard } from './pages/Dashboard';
-import { Switches } from './pages/Switches';
+import { SwitchesNew } from './pages/SwitchesNew';
 import { Topology } from './pages/Topology';
 import { IPAM } from './pages/IPAM';
 import { Compliance } from './pages/Compliance';
@@ -16,10 +16,8 @@ import { UsersPage } from './pages/UsersPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { TenantsPage } from './pages/TenantsPage';
 import { TenantFabricMapping } from './pages/TenantFabricMapping';
-import { Inventory } from './pages/Inventory';
 import { STPPage } from './pages/STPPage';
 import { ReportsPage } from './pages/ReportsPage';
-import { SwitchesNew } from './pages/SwitchesNew';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -61,9 +59,7 @@ export const App: React.FC = () => {
             >
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
-              <Route path="switches" element={<Switches />} />
-              <Route path="switches-new" element={<SwitchesNew />} />
-              <Route path="inventory" element={<Inventory />} />
+              <Route path="switches" element={<SwitchesNew />} />
               <Route path="stp" element={<STPPage />} />
               <Route path="reports" element={<ReportsPage />} />
               <Route path="topology" element={<Topology />} />

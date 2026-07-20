@@ -5,6 +5,7 @@ import subprocess
 import os
 import json
 import uuid
+import hashlib
 
 @shared_task(bind=True, max_retries=3)
 def apply_baseline_template(self, switch_id: str):
@@ -37,7 +38,7 @@ def apply_baseline_template(self, switch_id: str):
         if result.returncode != 0:
             raise Exception(f"Ansible failed: {result.stderr or result.stdout}")
 
-        switch.lifecycle_status = "CompliantActive"
+        switch.lifecycle_status = "compliant_active"
         
         if discovery_record:
             discovery_record.onboarding_status = "provisioned"
@@ -126,7 +127,7 @@ def trigger_rollback(self, switch_id: str):
             raise Exception(f"Ansible failed: {result.stderr or result.stdout}")
 
         # Simulate rollback success
-        switch.lifecycle_status = "CompliantActive"
+        switch.lifecycle_status = "compliant_active"
         switch.configuration_drift_category = None
         
         from app.drivers.dell_os10_collector import DellOS10Collector

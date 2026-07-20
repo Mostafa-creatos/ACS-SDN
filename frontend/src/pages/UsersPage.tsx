@@ -215,7 +215,10 @@ export const UsersPage: React.FC = () => {
                                 <span className="font-medium text-sm">Current Context</span>
                                 <button 
                                     className="text-red-500 text-sm hover:underline"
-                                    onClick={() => handleRevokeAccess(manageUser.user_id, 'CURRENT_TENANT_ID')} // We'd need actual context
+                                    onClick={() => {
+                                        const tenantId = manageUser.tenantMemberships?.[0]?.tenantId;
+                                        if (tenantId) handleRevokeAccess(manageUser.user_id, tenantId);
+                                    }}
                                 >Revoke</button>
                             </div>
                             <div className="text-xs text-slate-500">Role: {manageUser.role_in_tenant}</div>

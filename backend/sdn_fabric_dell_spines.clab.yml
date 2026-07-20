@@ -46,6 +46,19 @@ topology:
       kind: nokia_srlinux
       mgmt-ipv4: 172.20.20.17
 
+    # ==========================================
+    # 3. Hosts (Linux)
+    # ==========================================
+    client-1:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      mgmt-ipv4: 172.20.20.51
+
+    server-1:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool
+      mgmt-ipv4: 172.20.20.52
+
   # ==========================================
   # 4. Network Link Mappings
   # ==========================================
@@ -73,3 +86,9 @@ topology:
     # leaf-06 links to Spines
     - endpoints: ["leaf-06:ethernet-1/1", "spine-01:eth6"]
     - endpoints: ["leaf-06:ethernet-1/2", "spine-02:eth6"]
+
+    # ==========================================
+    # 5. Host Links
+    # ==========================================
+    - endpoints: ["client-1:eth1", "leaf-01:ethernet-1/10"]
+    - endpoints: ["server-1:eth1", "leaf-03:ethernet-1/10"]
