@@ -372,9 +372,13 @@ def startup_db_configure():
 
         if db.query(models.User).count() == 0:
             print("[SDN SEED] Seeding default users (admin, operator, auditor)...")
-            admin_pwd = bcrypt.hashpw("admin_password_123!".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            operator_pwd = bcrypt.hashpw("operator_password_123!".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            auditor_pwd = bcrypt.hashpw("auditor_password_123!".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            import secrets
+            admin_pwd_str = os.getenv("SEED_ADMIN_PASSWORD", secrets.token_urlsafe(24))
+            operator_pwd_str = os.getenv("SEED_OPERATOR_PASSWORD", secrets.token_urlsafe(24))
+            auditor_pwd_str = os.getenv("SEED_AUDITOR_PASSWORD", secrets.token_urlsafe(24))
+            admin_pwd = bcrypt.hashpw(admin_pwd_str.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            operator_pwd = bcrypt.hashpw(operator_pwd_str.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            auditor_pwd = bcrypt.hashpw(auditor_pwd_str.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
             # Try to get the Acme-Enterprise tenant
             acme_tenant = db.query(models.Tenant).filter(models.Tenant.tenant_name == "Acme-Enterprise").first()
@@ -402,7 +406,10 @@ def startup_db_configure():
             db.add(operator_user)
             db.add(auditor_user)
             db.commit()
-            print("[SDN SEED] Users seeding completed.")
+            print(f"[SDN SEED] Users seeding completed.")
+            print(f"[SDN SEED] Generated admin password: {admin_pwd_str}")
+            print(f"[SDN SEED] Generated operator password: {operator_pwd_str}")
+            print(f"[SDN SEED] Generated auditor password: {auditor_pwd_str}")
     except Exception as e:
         db.rollback()
         print(f"[SDN SEED] Failed to seed database: {e}")
@@ -435,7 +442,7 @@ def resolve_southbound_driver(vendor: str):
 async def process_policy_intent_pipeline(
     payload: schemas.PolicyIntentSubmission,
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(require_permission("policy:submit_live"))
 ):
     """
     Performs multi-tenant schema verification, runs dry-run calculations, 
@@ -555,7 +562,7 @@ async def process_policy_intent_pipeline(
     blast_radius = 6 if "spine" in switch_roles else 1
 
     # Blast-Radius Approval Guard: suspend if blast_radius > 2 and user is NOT Platform Admin
-    if not payload.dry_run and blast_radius > 2 and user_role != "Platform Admin":
+    if not payload.dry_run and blast_radius > 2 and claims.get("role") != "platform_admin":
         import json
         diff_payload_json = json.dumps(pre_calculated_diff_matrix)
         
@@ -732,15 +739,8 @@ async def process_policy_reconciliation(
 def create_tenant(
     payload: schemas.TenantCreate,
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(require_permission("tenants:create"))
 ):
-    user_role = claims.get("role")
-    if user_role not in ["Platform Admin", "platform_admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins can create tenants."
-        )
-    
     # Check if tenant name already exists
     existing = db.query(models.Tenant).filter(models.Tenant.tenant_name == payload.tenant_name).first()
     if existing:
@@ -759,14 +759,15 @@ def create_tenant(
 @app.get("/api/v5/orchestrator/approvals")
 def get_pending_approvals(
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(require_permission("policy:read"))
 ):
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
 
     query = db.query(models.PolicyApproval).filter(models.PolicyApproval.status == "pending")
-    if user_role == "Tenant Operator":
-        query = query.filter(models.PolicyApproval.tenant_id == uuid.UUID(user_tenant_id))
+    if user_role != "platform_admin":
+        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+        query = query.filter(models.PolicyApproval.tenant_id == t_uuid)
 
     approvals = query.all()
     
@@ -903,12 +904,33 @@ from fastapi.staticfiles import StaticFiles
 if os.path.exists("frontend/dist"):
     app.mount("/assets", StaticFiles(directory="frontend/dist/assets"), name="assets")
 
+@app.get("/api/v5/admin/audit-logs")
+def get_audit_logs(
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("audit:read"))
+):
+    logs = db.query(models.AuditLog).order_by(models.AuditLog.timestamp.desc()).limit(limit).all()
+    return [
+        {
+            "audit_id": str(l.audit_id),
+            "timestamp": l.timestamp.isoformat() if l.timestamp else None,
+            "user_id": str(l.user_id) if l.user_id else None,
+            "tenant_id": str(l.tenant_id) if l.tenant_id else None,
+            "action": l.action,
+            "resource": l.resource,
+            "status": l.status,
+            "detail": l.detail,
+        }
+        for l in logs
+    ]
+
 
 @app.get("/api/v5/admin/stats")
 def get_admin_stats(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    if user_role == "Platform Admin":
+    if user_role == "platform_admin":
         return {
             "tenants_count": db.query(models.Tenant).count(),
             "fabrics_count": db.query(models.Fabric).count(),
@@ -932,25 +954,13 @@ def get_admin_stats(db: Session = Depends(get_db), claims: dict = Depends(requir
 
 @app.get("/api/v5/admin/tenants")
 def get_admin_tenants(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
-    if user_role == "Platform Admin":
-        tenants = db.query(models.Tenant).all()
-    else:
-        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        tenants = db.query(models.Tenant).filter(models.Tenant.tenant_id == t_uuid).all()
+    tenants = db.query(models.Tenant).all()
     return [{"tenant_id": str(t.tenant_id), "tenant_name": t.tenant_name} for t in tenants]
 
 
 @app.get("/api/v5/admin/switches")
 def get_admin_switches(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
-    if user_role == "Platform Admin":
-        switches = db.query(models.Switch).all()
-    else:
-        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        switches = db.query(models.Switch).join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(models.TenantVrf.tenant_id == t_uuid).distinct().all()
+    switches = db.query(models.Switch).all()
     return [
         {
             "switch_id": str(s.switch_id),
@@ -968,8 +978,6 @@ def get_admin_switches(db: Session = Depends(get_db), claims: dict = Depends(req
 
 @app.get("/api/v5/admin/ztp-pool")
 def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
     ztp_devices = db.query(models.ZtpDiscoveryPool).all()
     return [
         {
@@ -986,13 +994,7 @@ def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(req
 
 @app.get("/api/v5/admin/subnets")
 def get_admin_subnets(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
-    if user_role in ["Platform Admin", "platform_admin"]:
-        subnets = db.query(models.IpamSubnet).all()
-    else:
-        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        subnets = db.query(models.IpamSubnet).join(models.TenantVrf).filter(models.TenantVrf.tenant_id == t_uuid).all()
+    subnets = db.query(models.IpamSubnet).all()
     res = []
     for s in subnets:
         vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == s.vrf_id).first()
@@ -1066,8 +1068,6 @@ def search_ipam_ip(ip: str, db: Session = Depends(get_db), claims: dict = Depend
 
 @app.get("/api/v5/admin/topology")
 async def get_admin_topology(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
     try:
         edges = db.query(models.TopologyEdge).filter(models.TopologyEdge.state == "up").all()
         if not edges:
@@ -1085,17 +1085,6 @@ async def get_admin_topology(db: Session = Depends(get_db), claims: dict = Depen
             local_sw = db.query(models.Switch).filter(models.Switch.hostname == e.local_switch).first()
             remote_sw = db.query(models.Switch).filter(models.Switch.hostname == e.remote_switch).first()
             if local_sw and remote_sw:
-                # Filter if tenant user: only show if tenant has subnets on these switches/fabrics
-                if user_role != "Platform Admin":
-                    t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-                    local_has = db.query(models.IpamSubnet).join(models.TenantVrf).filter(
-                        models.TenantVrf.tenant_id == t_uuid, models.IpamSubnet.fabric_id == local_sw.fabric_id
-                    ).count() > 0
-                    remote_has = db.query(models.IpamSubnet).join(models.TenantVrf).filter(
-                        models.TenantVrf.tenant_id == t_uuid, models.IpamSubnet.fabric_id == remote_sw.fabric_id
-                    ).count() > 0
-                    if not (local_has or remote_has):
-                        continue
                 res.append({
                     "ip": local_sw.management_ip,
                     "port": e.local_port,
@@ -1240,15 +1229,8 @@ async def trigger_admin_discover(payload: DiscoverPayload, db: Session = Depends
 def create_snapshot(
     switch_id: str,
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(require_permission("inventory:write"))
 ):
-    user_role = claims.get("role")
-    if user_role not in ["Platform Admin", "Tenant Operator"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins and Tenant Operators can take config snapshots."
-        )
-    
     sw_uuid = uuid.UUID(switch_id)
     verify_switch_access(db, sw_uuid, claims)
     
@@ -1263,19 +1245,11 @@ def create_snapshot(
 @app.get("/api/v5/visibility/snapshots")
 def list_snapshots(switch_id: Optional[str] = None, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
     
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
     query = db.query(models.ConfigSnapshot)
     if switch_id:
         sw_uuid = uuid.UUID(switch_id)
         verify_switch_access(db, sw_uuid, claims)
         query = query.filter(models.ConfigSnapshot.switch_id == sw_uuid)
-    elif user_role != "Platform Admin":
-        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        allowed_switch_ids = db.query(models.Switch.switch_id).join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
-            models.TenantVrf.tenant_id == t_uuid
-        ).subquery()
-        query = query.filter(models.ConfigSnapshot.switch_id.in_(allowed_switch_ids))
         
     snaps = query.order_by(models.ConfigSnapshot.taken_at.desc()).all()
     res = []
@@ -1300,15 +1274,9 @@ class RollbackRequest(BaseModel):
 def trigger_rollback(
     payload: RollbackRequest,
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(require_permission("rollback:run"))
 ):
     from .workers.config_lifecycle import restore_config_snapshot
-    user_role = claims.get("role")
-    if user_role not in ["Platform Admin", "Tenant Operator"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins and Tenant Operators can initiate rollback."
-        )
         
     snap = db.query(models.ConfigSnapshot).filter(models.ConfigSnapshot.snapshot_id == uuid.UUID(payload.snapshot_id)).first()
     if not snap:
@@ -1331,15 +1299,8 @@ class AcceptDriftPayload(BaseModel):
 def accept_switch_drift(
     payload: AcceptDriftPayload,
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(require_permission("rollback:run"))
 ):
-    user_role = claims.get("role")
-    if user_role not in ["Platform Admin", "Tenant Operator"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins and Tenant Operators can accept configuration drift."
-        )
-    
     sw_uuid = uuid.UUID(payload.switch_id)
     verify_switch_access(db, sw_uuid, claims)
     
@@ -1381,14 +1342,7 @@ def accept_switch_drift(
 
 @app.post("/api/v5/visibility/compliance/run")
 def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends(require_permission("compliance:run"))):
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
     from .workers.config_lifecycle import run_compliance_check
-    if claims.get("role") not in ["Platform Admin", "Tenant Operator"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only Platform Admins and Tenant Operators can trigger compliance run."
-        )
     run = run_compliance_check(db)
     import json
     return {
@@ -1401,26 +1355,12 @@ def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends
 @app.get("/api/v5/visibility/compliance/latest")
 def get_latest_compliance(db: Session = Depends(get_db), claims: dict = Depends(require_permission("compliance:run"))):
     
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
     run = db.query(models.ComplianceRun).order_by(models.ComplianceRun.started_at.desc()).first()
     if not run:
         return {"status": "NO_RUNS_EVALUATED"}
     import json
     
     query = db.query(models.ComplianceFinding).filter(models.ComplianceFinding.compliance_run_id == run.run_id)
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
-    requested_tenant = claims.get("requested_tenant_name")
-    if user_role in ["Platform Admin", "platform_admin"] and requested_tenant == "AtlasWave Maroc Demo":
-        pass
-    elif user_tenant_id and str(user_tenant_id) != "00000000-0000-0000-0000-000000000000":
-        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        allowed_switch_ids = db.query(models.Switch.switch_id).join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
-            models.TenantVrf.tenant_id == t_uuid
-        ).subquery()
-        query = query.filter(models.ComplianceFinding.switch_id.in_(allowed_switch_ids))
-        
     findings = query.all()
     res = []
     for f in findings:
@@ -1444,17 +1384,7 @@ def get_latest_compliance(db: Session = Depends(get_db), claims: dict = Depends(
 @app.get("/api/v5/visibility/endpoints")
 def get_discovered_endpoints(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
-    query = db.query(models.DiscoveredEndpoint)
-    if user_role not in ["Platform Admin", "platform_admin"]:
-        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        allowed_switch_ids = db.query(models.Switch.switch_id).join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
-            models.TenantVrf.tenant_id == t_uuid
-        ).subquery()
-        query = query.filter(models.DiscoveredEndpoint.switch_id.in_(allowed_switch_ids))
-        
-    endpoints = query.order_by(models.DiscoveredEndpoint.last_seen.desc()).all()
+    endpoints = db.query(models.DiscoveredEndpoint).order_by(models.DiscoveredEndpoint.last_seen.desc()).all()
 
     def _is_real_host_mac(mac: str) -> bool:
         """Filter out multicast, broadcast, all-zero MACs and known internal
@@ -1507,23 +1437,27 @@ def get_telemetry_metrics(
     switch_id: Optional[str] = None,
     metric_name: Optional[str] = None,
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(require_permission("inventory:read"))
 ):
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    
+
     query = db.query(models.TelemetryMetric)
     if switch_id:
         sw_uuid = uuid.UUID(switch_id)
         verify_switch_access(db, sw_uuid, claims)
         query = query.filter(models.TelemetryMetric.switch_id == sw_uuid)
-    elif user_role != "Platform Admin":
+    elif user_role != "platform_admin":
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        allowed_switch_ids = db.query(models.Switch.switch_id).join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
-            models.TenantVrf.tenant_id == t_uuid
-        ).subquery()
-        query = query.filter(models.TelemetryMetric.switch_id.in_(allowed_switch_ids))
-        
+        allowed_switch_ids = db.query(models.Switch.switch_id).join(
+            models.Fabric, models.Switch.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.IpamSubnet, models.IpamSubnet.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+        ).filter(models.TenantVrf.tenant_id == t_uuid).subquery()
+        query = query.filter(models.TelemetryMetric.switch_id.in_(db.query(allowed_switch_ids.c.switch_id)))
+
     if metric_name:
         query = query.filter(models.TelemetryMetric.metric_name == metric_name)
     metrics = query.order_by(models.TelemetryMetric.timestamp.desc()).limit(100).all()
@@ -1541,71 +1475,22 @@ def get_telemetry_metrics(
     return res
 
 
-@app.get("/api/v5/visibility/inventory")
-def get_inventory_details(db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
-    
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
-    query = db.query(models.Switch)
-    requested_tenant = claims.get("requested_tenant_name")
-    if user_role in ["Platform Admin", "platform_admin"] and requested_tenant == "AtlasWave Maroc Demo":
-        pass # Allow Platform Admin to see all switches when on the default Global view
-    elif user_tenant_id and str(user_tenant_id) != "00000000-0000-0000-0000-000000000000":
-        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        query = query.join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
-            models.TenantVrf.tenant_id == t_uuid
-        )
-    switches = query.all()
-    
-    res = []
-    for sw in switches:
-        if sw.vendor == "nokia":
-            interfaces = [
-                {"name": "ethernet-1/1", "state": "up", "vlan": 10},
-                {"name": "ethernet-1/2", "state": "up", "vlan": 20},
-                {"name": "ethernet-1/30", "state": "down", "vlan": 100}
-            ]
-            vlans = [10, 20, 100]
-            modules = [{"slot": "1", "type": "LineCard", "status": "active"}]
-        else:
-            interfaces = [
-                {"name": "vlan10", "state": "up", "vlan": 10},
-                {"name": "vlan20", "state": "up", "vlan": 20},
-                {"name": "ethernet1/1", "state": "up", "vlan": 10}
-            ]
-            vlans = [10, 20]
-            modules = [{"slot": "1", "type": "Supervisor", "status": "active"}]
-            
-        res.append({
-            "switch_id": str(sw.switch_id),
-            "hostname": sw.hostname,
-            "management_ip": sw.management_ip,
-            "vendor": sw.vendor,
-            "role": sw.role,
-            "serial_number": f"SN-{sw.vendor.upper()}-{sw.hostname.upper()}",
-            "lifecycle_status": sw.lifecycle_status,
-            "interfaces": interfaces,
-            "vlans": vlans,
-            "modules": modules
-        })
-    return res
-
-
 @app.get("/api/v5/visibility/stp")
 def get_stp_states(db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    query = db.query(models.Switch)
-    requested_tenant = claims.get("requested_tenant_name")
-    
-    if user_role in ["Platform Admin", "platform_admin"] and requested_tenant == "AtlasWave Maroc Demo":
-        pass
-    elif user_tenant_id and str(user_tenant_id) != "00000000-0000-0000-0000-000000000000":
+
+    if user_role == "platform_admin":
+        switches = db.query(models.Switch).all()
+    else:
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        query = query.join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
-            models.TenantVrf.tenant_id == t_uuid
-        )
-    switches = query.all()
+        switches = db.query(models.Switch).join(
+            models.Fabric, models.Switch.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.IpamSubnet, models.IpamSubnet.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+        ).filter(models.TenantVrf.tenant_id == t_uuid).distinct().all()
     
     res = []
     for sw in switches:
@@ -1646,23 +1531,27 @@ import csv
 def export_reports_csv(
     report_type: str = "inventory",
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(require_permission("inventory:read"))
 ):
     output = io.StringIO()
     writer = csv.writer(output)
-    
+
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
-    
+
     if report_type == "inventory":
         writer.writerow(["Hostname", "Management IP", "Vendor", "Role", "Serial Number", "Status"])
-        query = db.query(models.Switch)
-        if user_role not in ["Platform Admin", "platform_admin"]:
+        if user_role == "platform_admin":
+            switches = db.query(models.Switch).all()
+        else:
             t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-            query = query.join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
-                models.TenantVrf.tenant_id == t_uuid
-            )
-        switches = query.all()
+            switches = db.query(models.Switch).join(
+                models.Fabric, models.Switch.fabric_id == models.Fabric.fabric_id
+            ).join(
+                models.IpamSubnet, models.IpamSubnet.fabric_id == models.Fabric.fabric_id
+            ).join(
+                models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+            ).filter(models.TenantVrf.tenant_id == t_uuid).distinct().all()
         for sw in switches:
             writer.writerow([
                 sw.hostname,
@@ -1675,11 +1564,13 @@ def export_reports_csv(
             
     elif report_type == "ipam":
         writer.writerow(["Subnet CIDR", "Gateway IP", "VLAN ID", "VRF Name", "Description"])
-        query = db.query(models.IpamSubnet)
-        if user_role != "Platform Admin":
+        if user_role == "platform_admin":
+            subnets = db.query(models.IpamSubnet).all()
+        else:
             t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-            query = query.join(models.TenantVrf).filter(models.TenantVrf.tenant_id == t_uuid)
-        subnets = query.all()
+            subnets = db.query(models.IpamSubnet).join(
+                models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+            ).filter(models.TenantVrf.tenant_id == t_uuid).all()
         for sub in subnets:
             vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == sub.vrf_id).first()
             writer.writerow([
@@ -1694,14 +1585,7 @@ def export_reports_csv(
         writer.writerow(["Hostname", "Rule Name", "Severity", "Detail"])
         run = db.query(models.ComplianceRun).order_by(models.ComplianceRun.started_at.desc()).first()
         if run:
-            query = db.query(models.ComplianceFinding).filter(models.ComplianceFinding.compliance_run_id == run.run_id)
-            if user_role != "Platform Admin":
-                t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-                allowed_switch_ids = db.query(models.Switch.switch_id).join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(
-                    models.TenantVrf.tenant_id == t_uuid
-                ).subquery()
-                query = query.filter(models.ComplianceFinding.switch_id.in_(allowed_switch_ids))
-            findings = query.all()
+            findings = db.query(models.ComplianceFinding).filter(models.ComplianceFinding.compliance_run_id == run.run_id).all()
             for f in findings:
                 sw = db.query(models.Switch).filter(models.Switch.switch_id == f.switch_id).first()
                 writer.writerow([
@@ -1728,9 +1612,13 @@ class ConfigPushRequest(BaseModel):
 @app.post("/api/v5/orchestrator/async-config-push")
 def enqueue_config_push(
     payload: ConfigPushRequest,
-    claims: dict = Depends(get_current_user_claims)
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("inventory:write"))
 ):
+    from .auth import verify_switch_access
     from .workers.sync_tasks import sync_switch_config_task
+    sw_uuid = uuid.UUID(payload.switch_id)
+    verify_switch_access(db, sw_uuid, claims)
     task = sync_switch_config_task.delay(payload.switch_id, payload.config_data)
     return {"status": "ENQUEUED", "task_id": task.id}
 

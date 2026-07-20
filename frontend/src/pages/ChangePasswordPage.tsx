@@ -1,19 +1,38 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { changePassword } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 import { Key } from 'lucide-react';
 
 export const ChangePasswordPage: React.FC = () => {
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
+    const { logout } = useAuth();
     const navigate = useNavigate();
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
             await changePassword({ current_password: currentPassword, new_password: newPassword });
-            alert("Password updated successfully!");
-            navigate('/dashboard');
+            // Refresh the token to get updated must_change_password=false
+            const refreshToken = localStorage.getItem('atlas_refresh');
+            if (refreshToken) {
+                const res = await fetch('/api/v5/auth/refresh', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refresh_token: refreshToken })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    localStorage.setItem('atlas_jwt', data.access_token);
+                    if (data.refresh_token) localStorage.setItem('atlas_refresh', data.refresh_token);
+                    window.location.href = '/dashboard';
+                    return;
+                }
+            }
+            // Fallback: logout and let them re-login
+            logout();
+            navigate('/login');
         } catch (err) {
             alert("Failed to change password. Please check your current password.");
         }

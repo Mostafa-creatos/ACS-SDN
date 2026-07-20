@@ -1,5 +1,59 @@
 import type { User } from './types';
 
+const decodeJwt = (token: string): any => {
+    try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(
+            window.atob(base64).split('').map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+        );
+        return JSON.parse(jsonPayload);
+    } catch {
+        return null;
+    }
+};
+
+const isTokenExpired = (token: string): boolean => {
+    const decoded = decodeJwt(token);
+    if (!decoded || !decoded.exp) return true;
+    return Date.now() >= decoded.exp * 1000;
+};
+
+const tryRefreshToken = async (): Promise<string | null> => {
+    const refreshToken = localStorage.getItem('atlas_refresh');
+    if (!refreshToken) return null;
+    try {
+        const res = await fetch('/api/v5/auth/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: refreshToken })
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        localStorage.setItem('atlas_jwt', data.access_token);
+        if (data.refresh_token) {
+            localStorage.setItem('atlas_refresh', data.refresh_token);
+        }
+        return data.access_token;
+    } catch {
+        return null;
+    }
+};
+
+export const getValidToken = async (): Promise<string | null> => {
+    let token = localStorage.getItem('atlas_jwt');
+    if (token && isTokenExpired(token)) {
+        token = await tryRefreshToken();
+        if (!token) {
+            localStorage.removeItem('atlas_jwt');
+            localStorage.removeItem('atlas_refresh');
+            window.location.href = '/login';
+            return null;
+        }
+    }
+    return token;
+};
+
 const getHeaders = () => {
     const headers: Record<string, string> = {
         'Authorization': `Bearer ${localStorage.getItem('atlas_jwt')}`,

@@ -30,9 +30,12 @@ const queryClient = new QueryClient({
 
 // Protected Route Wrapper (Auth Guard)
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   if (!token) {
     return <Navigate to="/login" replace />;
+  }
+  if (user?.must_change_password) {
+    return <Navigate to="/change-password" replace />;
   }
   return <>{children}</>;
 };

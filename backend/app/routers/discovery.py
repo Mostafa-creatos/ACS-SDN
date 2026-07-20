@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Request, status, HTTPException
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app import models, schemas
+from app.auth_permissions import require_permission
 from pydantic import BaseModel, Field
 from typing import Optional
 
@@ -97,8 +98,8 @@ async def ingest_ztp_signal(
 
 @router.get("/pool", status_code=status.HTTP_200_OK)
 async def get_discovery_pool(
-    db: Session = Depends(get_db)
-    # claims: dict = Depends(get_current_user_claims) # platform_admin only (ignoring auth for mockup or relying on gateway)
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("global:manage"))
 ):
     """
     Get the onboarding queue status (pending/provisioned/failed) per entry.

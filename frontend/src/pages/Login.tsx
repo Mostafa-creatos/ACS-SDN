@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Card } from '../components/Card';
 import logo from '../assets/atlas-logo.svg';
-import { ShieldAlert, Info } from 'lucide-react';
+import { ShieldAlert, Info, Key } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const { login } = useAuth();
@@ -12,6 +12,12 @@ export const Login: React.FC = () => {
   const [password, setPassword] = useState('admin_password_123!');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Must-change-password state
+  const [showChangePw, setShowChangePw] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [pwLoading, setPwLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,9 +33,16 @@ export const Login: React.FC = () => {
 
       if (response.ok) {
         const data = await response.json();
-        // Standard JWT in access_token
-        login(data.access_token);
-        navigate('/dashboard');
+        // Standard JWT in access_token, optional refresh_token
+        login(data.access_token, data.refresh_token);
+
+        // Decode token to check must_change_password
+        const decoded = decodeToken(data.access_token);
+        if (decoded.must_change_password) {
+          setShowChangePw(true);
+        } else {
+          navigate('/dashboard');
+        }
       } else {
         if (response.status === 502 || response.status === 503 || response.status === 504) {
           throw new Error("Backend is offline. Falling back to mock login.");
@@ -49,6 +62,41 @@ export const Login: React.FC = () => {
       navigate('/dashboard');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwLoading(true);
+    try {
+      const res = await fetch('/api/v5/auth/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('atlas_jwt')}`
+        },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+      });
+      if (!res.ok) throw new Error('Failed to change password');
+      setShowChangePw(false);
+      navigate('/dashboard');
+    } catch (err: any) {
+      setError(err.message || 'Failed to change password');
+    } finally {
+      setPwLoading(false);
+    }
+  };
+
+  const decodeToken = (token: string): any => {
+    try {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(
+        window.atob(base64).split('').map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+      );
+      return JSON.parse(jsonPayload);
+    } catch {
+      return {};
     }
   };
 
@@ -86,43 +134,71 @@ export const Login: React.FC = () => {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                Username / Email
-              </label>
-              <input 
-                type="text" 
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-100 text-sm outline-none focus:border-atlas-primary placeholder-slate-600 transition-colors"
-                placeholder="e.g. admin"
-              />
-            </div>
+          {showChangePw ? (
+            <form onSubmit={handleChangePassword} className="space-y-4">
+              <div className="flex flex-col items-center mb-4">
+                <div className="w-12 h-12 bg-atlas-teal/10 rounded-full flex items-center justify-center text-atlas-teal mb-2">
+                  <Key className="w-6 h-6" />
+                </div>
+                <h3 className="text-md font-bold text-white">Change Required</h3>
+                <p className="text-xs text-slate-400 text-center mt-1">You must change your password before continuing.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Current Password</label>
+                <input type="password" required value={currentPassword}
+                  onChange={e => setCurrentPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-100 text-sm outline-none focus:border-atlas-primary placeholder-slate-600 transition-colors" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">New Password</label>
+                <input type="password" required value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-100 text-sm outline-none focus:border-atlas-primary placeholder-slate-600 transition-colors" />
+              </div>
+              <button type="submit" disabled={pwLoading}
+                className="w-full btn-primary bg-atlas-teal py-3 rounded-lg font-semibold text-sm hover:bg-teal-600 text-white transition-all disabled:opacity-50 mt-2">
+                {pwLoading ? 'Updating...' : 'Update Password'}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Username / Email
+                </label>
+                <input 
+                  type="text" 
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-100 text-sm outline-none focus:border-atlas-primary placeholder-slate-600 transition-colors"
+                  placeholder="e.g. admin"
+                />
+              </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                Password
-              </label>
-              <input 
-                type="password" 
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-100 text-sm outline-none focus:border-atlas-primary placeholder-slate-600 transition-colors"
-                placeholder="••••••••••••"
-              />
-            </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Password
+                </label>
+                <input 
+                  type="password" 
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-100 text-sm outline-none focus:border-atlas-primary placeholder-slate-600 transition-colors"
+                  placeholder="••••••••••••"
+                />
+              </div>
 
-            <button 
-              type="submit" 
-              disabled={loading}
-              className="w-full btn-primary bg-atlas-primary py-3 rounded-lg font-semibold text-sm hover:bg-atlas-primary/90 text-white transition-all disabled:opacity-50 mt-2"
-            >
-              {loading ? 'Authenticating...' : 'Sign In'}
-            </button>
-          </form>
+              <button 
+                type="submit" 
+                disabled={loading}
+                className="w-full btn-primary bg-atlas-primary py-3 rounded-lg font-semibold text-sm hover:bg-atlas-primary/90 text-white transition-all disabled:opacity-50 mt-2"
+              >
+                {loading ? 'Authenticating...' : 'Sign In'}
+              </button>
+            </form>
+          )}
 
           {/* Quick SSO role-swappers */}
           <div className="mt-8 pt-6 border-t border-slate-800/80">

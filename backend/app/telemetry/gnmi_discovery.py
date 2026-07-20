@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 import datetime
 import logging
@@ -392,7 +393,7 @@ def discover_nokia_switch(sw, db: Session):
             lldp_links = parse_lldp_neighbors(lldp_data, sw.management_ip)
             
         # 2. Fetch System Metadata and Interface details via gNMI
-        with gNMIclient(target=(sw.management_ip, 57400), username="admin", password="NokiaSrl1!", skip_verify=True, gnmi_timeout=2) as gc:
+        with gNMIclient(target=(sw.management_ip, 57400), username="admin", password=os.getenv("GNMI_DEFAULT_PASSWORD", ""), skip_verify=True, gnmi_timeout=2) as gc:
             # Query /system for version and uptime
             sys_data = gc.get(path=['/system'])
             os_version = sw.os_version or "23.10.1"

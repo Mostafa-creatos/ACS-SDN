@@ -15,11 +15,13 @@ PERMISSION_MATRIX = {
     "users:read": ["tenant_admin", "platform_admin"],
     "users:write": ["tenant_admin", "platform_admin"],
     "users:grant_cross_tenant": ["platform_admin"],
+    "tenants:create": ["platform_admin"],
 
     # IPAM
     "ipam:write": ["tenant_admin", "platform_admin"],
 
     # Policy intents
+    "policy:read": ["operator", "tenant_admin", "platform_admin"],
     "policy:submit_dry_run": ["operator", "tenant_admin", "platform_admin"],
     "policy:submit_live": ["tenant_admin", "platform_admin"],
     "policy:approve_spine": ["platform_admin"],
@@ -34,6 +36,9 @@ PERMISSION_MATRIX = {
     # Inventory
     "inventory:read": ["readonly", "operator", "tenant_admin", "platform_admin"],
     "inventory:write": ["operator", "tenant_admin", "platform_admin"],
+
+    # Audit
+    "audit:read": ["platform_admin"],
 }
 
 # Add a catch-all mapping for any readonly operation

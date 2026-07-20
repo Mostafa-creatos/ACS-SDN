@@ -2,15 +2,39 @@ import datetime
 import uuid
 import jwt
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, status
+import logging
+import time
+from collections import defaultdict
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from ..db import get_db
 from .. import models
 from ..config import settings
-from ..auth import get_current_user_claims
+from ..auth import get_current_user_claims, validate_password_complexity
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v5/auth", tags=["auth"])
+
+# Simple in-memory rate limiter for login attempts (IP -> [timestamps])
+_login_attempts: dict = list(defaultdict(list).items()) if False else defaultdict(list)
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 300  # 5 minutes
+
+def _check_login_rate_limit(ip: str) -> None:
+    """Raises 429 if IP has exceeded login attempt threshold."""
+    now = time.time()
+    # Purge old entries
+    _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < LOGIN_LOCKOUT_SECONDS]
+    if len(_login_attempts[ip]) >= MAX_LOGIN_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed login attempts. Try again in {LOGIN_LOCKOUT_SECONDS // 60} minutes."
+        )
+
+def _record_login_failure(ip: str) -> None:
+    _login_attempts[ip].append(time.time())
 
 class LoginPayload(BaseModel):
     username: str
@@ -30,6 +54,9 @@ class ResetPasswordPayload(BaseModel):
     token: str
     new_password: str
 
+class RefreshTokenPayload(BaseModel):
+    refresh_token: str
+
 def generate_jwt_for_user(user: models.User, tenant_id: str, role: str, tenants: list = None) -> str:
     now = datetime.datetime.utcnow()
     token_payload = {
@@ -42,17 +69,39 @@ def generate_jwt_for_user(user: models.User, tenant_id: str, role: str, tenants:
         "iat": now,
         "nbf": now,
         "exp": now + datetime.timedelta(hours=settings.JWT_EXPIRY_HOURS),
+        "jti": str(uuid.uuid4()),
     }
     return jwt.encode(token_payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
+def create_refresh_token(user_id: str, role: str, tenant_id: str) -> str:
+    now = datetime.datetime.utcnow()
+    payload = {
+        "sub": str(user_id),
+        "role": role,
+        "tenant_id": tenant_id,
+        "user_id": str(user_id),
+        "exp": now + datetime.timedelta(days=settings.JWT_REFRESH_EXPIRY_DAYS),
+        "iat": now,
+        "nbf": now,
+        "jti": str(uuid.uuid4()),
+        "type": "refresh"
+    }
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
 @router.post("/login")
-def login(payload: LoginPayload, db: Session = Depends(get_db)):
+def login(payload: LoginPayload, request: Request, db: Session = Depends(get_db)):
+    client_ip = request.client.host if request.client else "unknown"
+    _check_login_rate_limit(client_ip)
+
     user = db.query(models.User).filter(models.User.username == payload.username).first()
     if not user or not user.is_active:
+        _record_login_failure(client_ip)
         raise HTTPException(status_code=401, detail="Invalid username or password (or inactive account)")
     
     if not bcrypt.checkpw(payload.password.encode("utf-8"), user.hashed_password.encode("utf-8")):
+        _record_login_failure(client_ip)
         raise HTTPException(status_code=401, detail="Invalid username or password")
     
     user.last_login_at = datetime.datetime.utcnow()
@@ -93,8 +142,10 @@ def login(payload: LoginPayload, db: Session = Depends(get_db)):
         tenant_names = [m.tenant.tenant_name for m in memberships if m.tenant]
 
     token = generate_jwt_for_user(user, tenant_id, role, tenant_names)
+    refresh_token = create_refresh_token(str(user.user_id), role, tenant_id)
     return {
         "access_token": token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
         "must_change_password": user.must_change_password
     }
@@ -138,6 +189,8 @@ def change_password(payload: ChangePasswordPayload, db: Session = Depends(get_db
         
     if not bcrypt.checkpw(payload.current_password.encode("utf-8"), user.hashed_password.encode("utf-8")):
         raise HTTPException(status_code=400, detail="Incorrect current password")
+
+    validate_password_complexity(payload.new_password)
         
     user.hashed_password = bcrypt.hashpw(payload.new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     user.must_change_password = False
@@ -158,7 +211,7 @@ def forgot_password(payload: ForgotPasswordPayload, db: Session = Depends(get_db
         )
         db.add(prt)
         db.commit()
-        print(f"[AUTH] Password reset requested for {user.username}. Token: {token_str}")
+        logger.info("Password reset requested for %s", user.username)
         
     return {"status": "If the username exists, a reset link has been generated."}
 
@@ -179,8 +232,28 @@ def reset_password(payload: ResetPasswordPayload, db: Session = Depends(get_db))
         raise HTTPException(status_code=400, detail="Invalid or expired token")
         
     user = db.query(models.User).filter(models.User.user_id == matched_token.user_id).first()
+    validate_password_complexity(payload.new_password)
     user.hashed_password = bcrypt.hashpw(payload.new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     user.must_change_password = False
     matched_token.used_at = datetime.datetime.utcnow()
     db.commit()
     return {"status": "Password reset successfully"}
+
+@router.post("/refresh")
+def refresh_token(payload: RefreshTokenPayload, db: Session = Depends(get_db)):
+    try:
+        decoded = jwt.decode(payload.refresh_token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token has expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    if decoded.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Not a refresh token")
+
+    user = db.query(models.User).filter(models.User.user_id == decoded.get("user_id")).first()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+
+    new_access = generate_jwt_for_user(user, decoded.get("tenant_id"), decoded.get("role"))
+    return {"access_token": new_access, "token_type": "bearer"}

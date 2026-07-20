@@ -13,7 +13,7 @@ from sqlalchemy import or_
 
 from ..db import get_db
 from .. import models
-from ..auth import get_current_user_claims, verify_switch_access
+from ..auth import verify_switch_access
 from ..auth_permissions import require_permission
 
 logger = logging.getLogger(__name__)
@@ -232,7 +232,7 @@ def _serialize_switch(db: Session, sw: models.Switch) -> dict:
 @router.get("/visibility/inventory")
 def get_inventory_details(
     db: Session = Depends(get_db),
-    claims: dict = Depends(get_current_user_claims),
+    claims: dict = Depends(require_permission("inventory:read")),
     search: Optional[str] = Query(None, description="Search hostname, mgmt_ip, serial, service_tag"),
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by lifecycle_status"),
     vendor: Optional[str] = Query(None, description="Filter by vendor"),
@@ -245,18 +245,17 @@ def get_inventory_details(
     user_tenant_id = claims.get("tenant_id")
 
     query = db.query(models.Switch)
-    
-    requested_tenant = claims.get("requested_tenant_name")
-    
-    # Tenant isolation: apply filter only when user is not a Platform Admin viewing the Global view
-    if not (user_role in ["Platform Admin", "platform_admin"] and requested_tenant in (None, "", "AtlasWave Maroc Demo")):
-        if requested_tenant:
-            query = query.filter(models.Switch.client_tenant == requested_tenant)
-        else:
-            t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-            tenant = db.query(models.Tenant).filter(models.Tenant.tenant_id == t_uuid).first()
-            if tenant:
-                query = query.filter(models.Switch.client_tenant == tenant.tenant_name)
+
+    if user_role != "platform_admin":
+        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+        allowed_switch_ids = db.query(models.Switch.switch_id).join(
+            models.Fabric, models.Switch.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.IpamSubnet, models.IpamSubnet.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+        ).filter(models.TenantVrf.tenant_id == t_uuid).subquery()
+        query = query.filter(models.Switch.switch_id.in_(db.query(allowed_switch_ids.c.switch_id)))
 
     # Server-side search
     if search:
@@ -466,6 +465,8 @@ def update_switch(switch_id: uuid.UUID, payload: SwitchUpdate, db: Session = Dep
 # Delete Switch
 @router.delete("/admin/switches/{switch_id}")
 def delete_switch(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
+    from ..auth import verify_switch_access
+    verify_switch_access(db, switch_id, claims)
         
     sw = db.query(models.Switch).filter(models.Switch.switch_id == switch_id).first()
     if not sw:
