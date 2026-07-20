@@ -277,7 +277,7 @@ def restore_config_snapshot(db: Session, snapshot_id: uuid.UUID, operator_claims
         }
 
     # Perform actual commit (dry_run = False)
-    if four_eyes_approval_required and operator_claims.get("role") != "Platform Admin":
+    if four_eyes_approval_required and operator_claims.get("role") != "platform_admin":
         raise PermissionError("Approval Exception: High blast radius rollback requires Platform Admin authorization.")
 
     # Apply configuration commands (simulate write paths or trigger drivers)

@@ -453,10 +453,10 @@ async def process_policy_intent_pipeline(
     user_tenant_id = claims.get("tenant_id")
         
     # If the user is a Tenant Operator, verify they only provision within their tenant boundary
-    if user_role == "Tenant Operator" and str(user_tenant_id) != payload.tenant_id:
+    if user_role in ("operator", "readonly") and str(user_tenant_id) != payload.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Unauthorized: Tenant Operator scope restricts operations to their own tenant context."
+            detail="Unauthorized: Operator scope restricts operations to their own tenant context."
         )
 
     # ==========================================
@@ -663,10 +663,10 @@ async def process_policy_reconciliation(
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
 
-    if user_role == "Tenant Operator" and str(user_tenant_id) != payload.tenant_id:
+    if user_role in ("operator", "readonly") and str(user_tenant_id) != payload.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Unauthorized: Tenant Operator scope restricts operations to their own tenant context."
+            detail="Unauthorized: Operator scope restricts operations to their own tenant context."
         )
 
     # Find the TenantVrf

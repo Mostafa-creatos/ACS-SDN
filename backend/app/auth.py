@@ -82,14 +82,9 @@ def get_current_user_claims(
                     payload["tenant_id"] = str(tenant.tenant_id)
                     payload["tenant_name"] = tenant.tenant_name
                 
-        # Normalize roles to legacy format to support legacy endpoint role checks
-        role = payload.get("role")
-        if role == "platform_admin":
-            payload["role"] = "Platform Admin"
-        elif role == "operator":
-            payload["role"] = "Tenant Operator"
-        elif role == "readonly":
-            payload["role"] = "Tenant Auditor"
+        # NOTE: Role normalization removed — all endpoints now use snake_case
+        # (platform_admin, operator, readonly) consistently via require_permission.
+        # The require_permission class handles its own normalization internally.
             
         return payload
     except jwt.ExpiredSignatureError:
