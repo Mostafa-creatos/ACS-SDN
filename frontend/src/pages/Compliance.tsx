@@ -27,11 +27,12 @@ interface Finding {
 export const Compliance: React.FC = () => {
   const { token, selectedTenant } = useAuth();
   
-  const [score, setScore] = useState(94);
+  const [score, setScore] = useState(0);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [severityFilter, setSeverityFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('open');
   const [error, setError] = useState('');
+  const [trendData, setTrendData] = useState<{ name: string; score: number }[]>([]);
 
   // Run audit modal states
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
@@ -96,6 +97,24 @@ export const Compliance: React.FC = () => {
         setScore(0);
         setFindings([]);
         setError('API unavailable — no compliance data.');
+      }
+
+      // Fetch compliance history for trend chart
+      try {
+        const histRes = await fetch('/api/v5/visibility/compliance/history', { headers });
+        if (histRes.ok) {
+          const histData = await histRes.json();
+          if (Array.isArray(histData) && histData.length > 0) {
+            setTrendData(histData.map((h: any) => ({
+              name: new Date(h.recorded_at).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' }),
+              score: h.compliance_score_pct || 0
+            })));
+          } else {
+            setTrendData(score > 0 ? [{ name: 'Today', score }] : []);
+          }
+        }
+      } catch {
+        setTrendData(score > 0 ? [{ name: 'Today', score }] : []);
       }
     } catch (e) {
       setScore(0);
@@ -176,14 +195,6 @@ export const Compliance: React.FC = () => {
   // Highlight coral color if score < 80
   const isHealthy = score >= 80;
   const gaugeColor = isHealthy ? '#42CCB2' : '#E26C48';
-
-  const trendData = [
-    { name: '06/01', score: 85 },
-    { name: '06/07', score: 88 },
-    { name: '06/14', score: 92 },
-    { name: '06/21', score: score - 5 },
-    { name: 'Today', score: score },
-  ];
 
   return (
     <div className="space-y-6 font-sans">
@@ -439,39 +450,4 @@ export const Compliance: React.FC = () => {
   );
 };
 
-// Seed mock data
-function getMockFindings(): Finding[] {
-  return [
-    {
-      id: 'find-1',
-      switch_name: 'spine-switch-03',
-      vector: 'NTP',
-      expected: 'ntp server 192.168.100.1',
-      actual: 'ntp server 10.250.10.1',
-      severity: 'Critical',
-      remediation: 'Trigger a snapshot rollback to the baseline config, or run manual CLI scripts to update the NTP sync server parameters.',
-      status: 'open'
-    },
-    {
-      id: 'find-2',
-      switch_name: 'leaf-switch-02',
-      vector: 'DNS',
-      expected: 'dns server 8.8.8.8',
-      actual: 'dns server 1.1.1.1',
-      severity: 'High',
-      remediation: 'Configure DNS nameserver parameters to point to the primary network domain servers (8.8.8.8).',
-      status: 'open'
-    },
-    {
-      id: 'find-3',
-      switch_name: 'leaf-switch-02',
-      vector: 'AAA',
-      expected: 'aaa authentication login default local',
-      actual: 'aaa authentication login default none',
-      severity: 'Critical',
-      remediation: 'Enforce local fallback database login controls by updating AAA validation schemas.',
-      status: 'open'
-    }
-  ];
-}
 export default Compliance;

@@ -18,6 +18,8 @@ import { TenantsPage } from './pages/TenantsPage';
 import { TenantFabricMapping } from './pages/TenantFabricMapping';
 import { STPPage } from './pages/STPPage';
 import { ReportsPage } from './pages/ReportsPage';
+import { ConfigPushPage } from './pages/ConfigPushPage';
+import { AuditLogsPage } from './pages/AuditLogsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -73,6 +75,8 @@ export const App: React.FC = () => {
               <Route path="users" element={<UsersPage />} />
               <Route path="tenants" element={<TenantsPage />} />
               <Route path="tenants/:tenantId/mapping" element={<TenantFabricMapping />} />
+              <Route path="config-push" element={<ConfigPushPage />} />
+              <Route path="audit-logs" element={<AuditLogsPage />} />
             </Route>
 
             {/* Catch-all fallback */}

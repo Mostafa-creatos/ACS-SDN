@@ -1868,3 +1868,79 @@ async def push_switch_config(
             task_ids.append({"switch_id": sid, "task_id": task.id})
         return {"status": "PUSH_QUEUED", "task_ids": task_ids, "blast_radius": blast}
 
+
+@app.get("/api/v5/switch-config/history")
+def get_config_push_history(
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("inventory:read"))
+):
+    """Return recent config push attempts (from PolicyApproval records and AuditLog)."""
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
+
+    query = db.query(models.PolicyApproval).order_by(models.PolicyApproval.created_at.desc())
+
+    if user_role != "platform_admin" and user_tenant_id:
+        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+        query = query.filter(models.PolicyApproval.tenant_id == t_uuid)
+
+    approvals = query.limit(limit).all()
+
+    results = []
+    for a in approvals:
+        tenant = db.query(models.Tenant).filter(models.Tenant.tenant_id == a.tenant_id).first() if a.tenant_id else None
+        results.append({
+            "id": str(a.approval_id),
+            "tenant": tenant.tenant_name if tenant else "unknown",
+            "summary": f"Config push to {len(a.target_switch_serials.split(','))} switch(es)" if a.vrf_name == "config_push" else f"VRF {a.vrf_name} VLAN {a.vlan_id}",
+            "target_switches": a.target_switch_serials,
+            "blast_radius": a.blast_radius,
+            "status": a.status,
+            "diff": a.diff_payload or "",
+            "created_at": a.created_at.isoformat() if a.created_at else None
+        })
+
+    return results
+
+
+@app.get("/api/v5/visibility/compliance/history")
+def get_compliance_history(
+    limit: int = 30,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("inventory:read"))
+):
+    """Return historical compliance run scores for trend charts."""
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
+
+    query = db.query(models.ComplianceRun).filter(
+        models.ComplianceRun.status == "completed"
+    ).order_by(models.ComplianceRun.started_at.desc())
+
+    if user_role != "platform_admin" and user_tenant_id:
+        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+        query = query.filter(models.ComplianceRun.tenant_id == t_uuid)
+
+    runs = query.limit(limit).all()
+
+    results = []
+    for r in runs:
+        score_pct = 0
+        if r.summary:
+            try:
+                import json
+                summary_data = json.loads(r.summary)
+                score_pct = summary_data.get("compliance_score_pct", 0)
+            except (json.JSONDecodeError, AttributeError):
+                pass
+        results.append({
+            "run_id": str(r.run_id),
+            "recorded_at": r.started_at.isoformat() if r.started_at else None,
+            "compliance_score_pct": score_pct,
+            "status": r.status
+        })
+
+    results.reverse()  # oldest first for chart rendering
+    return results
+

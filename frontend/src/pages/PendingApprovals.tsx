@@ -40,10 +40,10 @@ export const PendingApprovals: React.FC = () => {
       if (response.ok) {
         setRequests(await response.json());
       } else {
-        setRequests(getMockRequests());
+        setRequests([]);
       }
     } catch (e) {
-      setRequests(getMockRequests());
+      setRequests([]);
     } finally {
       setLoading(false);
     }
@@ -100,11 +100,23 @@ export const PendingApprovals: React.FC = () => {
     }
   };
 
-  const confirmReject = () => {
+  const confirmReject = async () => {
     if (!activeRequest) return;
-    setRequests(prev => prev.filter(r => r.id !== activeRequest.id));
-    setIsRejectOpen(false);
-    setActiveRequest(null);
+    try {
+      const headers = { 'Authorization': `Bearer ${token}` };
+      const response = await fetch(`/api/v5/orchestrator/approvals/${activeRequest.id}/reject`, {
+        method: 'POST',
+        headers
+      });
+      if (response.ok) {
+        setRequests(prev => prev.filter(r => r.id !== activeRequest.id));
+      }
+    } catch (e) {
+      setRequests(prev => prev.filter(r => r.id !== activeRequest.id));
+    } finally {
+      setIsRejectOpen(false);
+      setActiveRequest(null);
+    }
   };
 
   // Diff styling formatter
@@ -279,27 +291,4 @@ export const PendingApprovals: React.FC = () => {
   );
 };
 
-// Seed mock data
-function getMockRequests(): ApprovalRequest[] {
-  return [
-    {
-      id: 'req-1',
-      tenant: 'Acme-Enterprise',
-      summary: 'Add VLAN 240 segment definition to VRF tenant-blue trunk links',
-      blast_radius: 'Spine · Impact: 6 devices',
-      device_count: 6,
-      is_spine: true,
-      diff: `- switchport trunk allowed vlan 100\n+ switchport trunk allowed vlan 100,240\n- description Trunk-Link-Baseline\n+ description Trunk-Link-VLAN-240-Appended`
-    },
-    {
-      id: 'req-2',
-      tenant: 'AtlasWave Maroc Demo',
-      summary: 'Update AAA tacacs-server authentication group hosts',
-      blast_radius: 'Leaf · Impact: 1 device',
-      device_count: 1,
-      is_spine: false,
-      diff: `- tacacs server host 10.0.10.25\n+ tacacs server host 10.250.60.25`
-    }
-  ];
-}
 export default PendingApprovals;

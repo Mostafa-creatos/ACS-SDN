@@ -35,17 +35,7 @@ const decodeToken = (token: string): any => {
     );
     return JSON.parse(jsonPayload);
   } catch (e) {
-    // If it's not a real JWT (e.g. mock token), return mock data based on token value
-    if (token.includes('admin')) {
-      return { sub: 'admin@atlascloud.com', role: 'Platform Admin', tenants: ['AtlasWave Maroc Demo', 'Acme-Enterprise', 'Nokia-Lab'] };
-    }
-    if (token.includes('operator')) {
-      return { sub: 'operator@atlascloud.com', role: 'Operator', tenants: ['AtlasWave Maroc Demo'] };
-    }
-    if (token.includes('auditor') || token.includes('read')) {
-      return { sub: 'auditor@atlascloud.com', role: 'Read-only', tenants: ['AtlasWave Maroc Demo'] };
-    }
-    return { sub: 'user@atlascloud.com', role: 'Tenant Admin', tenants: ['AtlasWave Maroc Demo'] };
+    return null;
   }
 };
 
@@ -72,15 +62,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     if (token) {
-      localStorage.setItem('atlas_jwt', token);
       const decoded = decodeToken(token);
+      if (!decoded) {
+        localStorage.removeItem('atlas_jwt');
+        localStorage.removeItem('atlas_refresh');
+        setToken(null);
+        setUser(null);
+        return;
+      }
+      localStorage.setItem('atlas_jwt', token);
       let mappedRole = (decoded.role || 'Operator') as UserRole;
       if (decoded.role === 'Tenant Operator') mappedRole = 'Operator';
       if (decoded.role === 'Tenant Auditor') mappedRole = 'Read-only';
       setUser({
-        email: decoded.sub || decoded.email || 'user@atlascloud.com',
+        email: decoded.sub || decoded.email || '',
         role: mappedRole,
-        tenants: decoded.tenants || ['AtlasWave Maroc Demo'],
+        tenants: decoded.tenants || [],
         must_change_password: decoded.must_change_password || false,
       });
     } else {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavLink, Link, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import atlasLogo from '../assets/atlas-logo.svg';
@@ -16,7 +16,9 @@ import {
   Users,
   Building2,
   GitBranch,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Send,
+  ScrollText
 } from 'lucide-react';
 
 export const AppShell: React.FC = () => {
@@ -25,6 +27,21 @@ export const AppShell: React.FC = () => {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [backendConnected, setBackendConnected] = useState(true);
+
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const res = await fetch('/api/v5/', { method: 'HEAD' });
+        setBackendConnected(res.ok);
+      } catch {
+        setBackendConnected(false);
+      }
+    };
+    checkHealth();
+    const interval = setInterval(checkHealth, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleLogout = () => {
     logout();
@@ -39,6 +56,7 @@ export const AppShell: React.FC = () => {
     { name: 'Topology', path: '/topology', icon: Binary },
     { name: 'IP Management', path: '/ipam', icon: Network }, 
     { name: 'Compliance', path: '/compliance', icon: ShieldCheck },
+    { name: 'Config Push', path: '/config-push', icon: Send },
     { name: 'ZTP Console', path: '/ztp', icon: PlugZap },
   ];
 
@@ -169,6 +187,28 @@ export const AppShell: React.FC = () => {
               )}
             </NavLink>
           )}
+
+          {/* Audit Logs (Visible only to Platform Admins) */}
+          {showApprovals && (
+            <NavLink
+              to="/audit-logs"
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
+                  isActive
+                    ? 'bg-white/10 text-white font-semibold'
+                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  {isActive && <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-atlas-teal" />}
+                  <ScrollText className={`w-5 h-5 ${isActive ? 'text-atlas-teal' : 'text-slate-400 group-hover:text-white'}`} />
+                  {sidebarOpen && <span>Audit Logs</span>}
+                </>
+              )}
+            </NavLink>
+          )}
         </nav>
 
         {/* Sidebar Footer */}
@@ -182,8 +222,8 @@ export const AppShell: React.FC = () => {
           </button>
           {sidebarOpen && (
             <div className="flex items-center gap-2 text-xs text-slate-400">
-              <span className="w-2 h-2 rounded-full bg-atlas-teal animate-pulse" />
-              <span>Orchestrator Connected</span>
+              <span className={`w-2 h-2 rounded-full ${backendConnected ? 'bg-atlas-teal animate-pulse' : 'bg-rose-500'}`} />
+              <span>{backendConnected ? 'Orchestrator Connected' : 'Backend Offline'}</span>
             </div>
           )}
         </div>

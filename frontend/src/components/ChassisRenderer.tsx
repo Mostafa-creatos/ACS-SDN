@@ -96,43 +96,30 @@ export const ChassisRenderer: React.FC<ChassisRendererProps> = ({ devices, conne
     return (hash % 48) + 1;
   };
 
-  // Generate simulated ports/interfaces list for a device if not provided
+  // Return real interface data only — no simulated fallback
   const getDeviceInterfaces = (device: typeof devices[0]): DeviceInterface[] => {
     if (device.interfaces && device.interfaces.length > 0) return device.interfaces;
     
-    const count = device.model.toLowerCase().includes('7220') ? 54 : 48;
+    // Only show ports that have real LLDP connections
     const list: DeviceInterface[] = [];
-    
-    // Add active ports based on connections
-    for (let i = 1; i <= count; i++) {
-      // Check if this port has a connection in LLDP list
-      const conn = connections.find(c => 
-        (c.localDevice === device.label && parsePortIndex(c.localPort) === i) ||
-        (c.remoteDevice === device.label && parsePortIndex(c.remotePort) === i)
-      );
-
-      if (conn) {
-        const isLocal = conn.localDevice === device.label;
+    for (const conn of connections) {
+      if (conn.localDevice === device.label) {
         list.push({
-          name: isLocal ? conn.localPort : conn.remotePort,
+          name: conn.localPort,
           status: 'up',
-          speed: i > 48 ? '100Gbps' : '25Gbps',
-          peerDevice: isLocal ? conn.remoteDevice : conn.localDevice,
-          peerPort: isLocal ? conn.remotePort : conn.localPort,
-          opticType: i > 48 ? 'QSFP28-SR4' : 'SFP28-SR'
+          speed: parsePortIndex(conn.localPort) > 48 ? '100Gbps' : '25Gbps',
+          peerDevice: conn.remoteDevice,
+          peerPort: conn.remotePort,
+          opticType: parsePortIndex(conn.localPort) > 48 ? 'QSFP28-SR4' : 'SFP28-SR'
         });
-      } else {
-        // Semi-randomize other port states
-        const hash = (device.label.length + i) % 10;
-        let status: 'up' | 'down' | 'shutdown' = 'shutdown';
-        if (hash === 3) status = 'down'; // drifted/unplugged error
-        else if (hash > 6) status = 'up'; // random other active link
-        
+      } else if (conn.remoteDevice === device.label) {
         list.push({
-          name: `ethernet-1/${i}`,
-          status,
-          speed: i > 48 ? '100Gbps' : '25Gbps',
-          opticType: i > 48 ? 'QSFP28-SR4' : (status === 'up' ? 'SFP28-SR' : undefined)
+          name: conn.remotePort,
+          status: 'up',
+          speed: parsePortIndex(conn.remotePort) > 48 ? '100Gbps' : '25Gbps',
+          peerDevice: conn.localDevice,
+          peerPort: conn.localPort,
+          opticType: parsePortIndex(conn.remotePort) > 48 ? 'QSFP28-SR4' : 'SFP28-SR'
         });
       }
     }

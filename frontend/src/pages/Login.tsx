@@ -33,10 +33,8 @@ export const Login: React.FC = () => {
 
       if (response.ok) {
         const data = await response.json();
-        // Standard JWT in access_token, optional refresh_token
         login(data.access_token, data.refresh_token);
 
-        // Decode token to check must_change_password
         const decoded = decodeToken(data.access_token);
         if (decoded.must_change_password) {
           setShowChangePw(true);
@@ -44,22 +42,11 @@ export const Login: React.FC = () => {
           navigate('/dashboard');
         }
       } else {
-        if (response.status === 502 || response.status === 503 || response.status === 504) {
-          throw new Error("Backend is offline. Falling back to mock login.");
-        }
         const errData = await response.json().catch(() => ({}));
         setError(errData.detail || 'Authentication failed. Please verify credentials.');
       }
     } catch (err) {
-      // Offline fallback: simulate JWT generation
-      console.warn("Offline mock login fallback active.");
-      let token = 'mock-token-admin';
-      if (email.includes('operator')) token = 'mock-token-operator';
-      else if (email.includes('auditor') || email.includes('read')) token = 'mock-token-auditor';
-      else if (email.includes('tenant')) token = 'mock-token-operator';
-      
-      login(token);
-      navigate('/dashboard');
+      setError('Unable to reach the backend server. Please try again later.');
     } finally {
       setLoading(false);
     }

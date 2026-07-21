@@ -81,16 +81,27 @@ export const Dashboard: React.FC = () => {
         { name: 'Auditing Status', value: 0, color: '#564EBD' }
       ];
 
-      // Compliance Trend
-      const trend = [
-        { date: 'Jun 01', score: 92 },
-        { date: 'Jun 06', score: 94 },
-        { date: 'Jun 11', score: 94 },
-        { date: 'Jun 16', score: 89 },
-        { date: 'Jun 21', score: 91 },
-        { date: 'Jun 26', score: 95 },
-        { date: 'Today', score: compliance?.summary?.compliance_score_pct || 96 },
-      ];
+      // Compliance Trend — fetch real history
+      let trend: { date: string; score: number }[] = [];
+      try {
+        const histRes = await fetch('/api/v5/visibility/compliance/history', { headers });
+        if (histRes.ok) {
+          const histData = await histRes.json();
+          if (Array.isArray(histData) && histData.length > 0) {
+            trend = histData.map((h: any) => ({
+              date: new Date(h.recorded_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+              score: h.compliance_score_pct || 0
+            }));
+          }
+        }
+      } catch {}
+      // Fallback: use today's score only
+      if (trend.length === 0) {
+        const todayScore = compliance?.summary?.compliance_score_pct || 0;
+        if (todayScore > 0) {
+          trend = [{ date: 'Today', score: todayScore }];
+        }
+      }
 
       setData({
         totalSwitches: total,
