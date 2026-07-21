@@ -51,7 +51,43 @@ def sync_switch_config_task(switch_id_str: str, config_data: str):
     """
     Asynchronous Celery task for pushing configuration changes to southbound drivers.
     """
-    print(f"[CELERY WORKER] Initiating async configuration push for switch {switch_id_str}")
-    # In a real environment, this would invoke the southbound driver to communicate with the network switch
-    return {"status": "SYNC_COMPLETED", "switch_id": switch_id_str}
+    import uuid
+    import asyncio
+    from datetime import datetime
+    from ..db import SessionLocal
+    from .. import models
+    from ..main import resolve_southbound_driver
+
+    db = SessionLocal()
+    try:
+        sw_uuid = uuid.UUID(switch_id_str)
+        switch = db.query(models.Switch).filter(models.Switch.switch_id == sw_uuid).first()
+        if not switch:
+            return {"status": "SYNC_FAILED", "switch_id": switch_id_str, "error": "Switch not found"}
+
+        driver = resolve_southbound_driver(switch.vendor)
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(
+                driver.push_config(switch.management_ip, "admin", "admin", config_data)
+            )
+        finally:
+            loop.close()
+
+        if result.get("success"):
+            from ..main import LIFECYCLE_COMPLIANT
+            switch.lifecycle_status = LIFECYCLE_COMPLIANT
+            switch.last_successful_sync = datetime.utcnow()
+            db.commit()
+
+        return {
+            "status": "SYNC_COMPLETED" if result.get("success") else "SYNC_FAILED",
+            "switch_id": switch_id_str,
+            "output": result.get("output", "")
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "SYNC_FAILED", "switch_id": switch_id_str, "error": str(e)}
+    finally:
+        db.close()
 

@@ -486,6 +486,9 @@ def rollback_switch(id: uuid.UUID, db: Session = Depends(get_db), claims: dict =
     if not switch:
         raise HTTPException(status_code=404, detail="Switch not found.")
 
+    from ..auth import verify_switch_access
+    verify_switch_access(db, id, claims)
+
     if switch.role.lower() == "spine":
         # Requires approval
         approval = models.PolicyApproval(

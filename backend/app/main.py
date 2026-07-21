@@ -15,6 +15,8 @@ from .db import get_db, Base, engine, SessionLocal
 from . import models, schemas
 
 LIFECYCLE_COMPLIANT = "compliant_active"
+LIFECYCLE_DRIFTED = "configuration_drifted"
+LIFECYCLE_DISCOVERED = "discovered_raw"
 from .drivers.dell_os10 import DellOS10Driver
 from .drivers.arista_eos import AristaEosDriver
 from .admin_ui import ADMIN_HTML
@@ -756,6 +758,20 @@ def create_tenant(
     return {"tenant_id": str(new_tenant.tenant_id), "tenant_name": new_tenant.tenant_name}
 
 
+@app.get("/api/v5/orchestrator/approvals/count")
+def get_pending_approvals_count(
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("policy:read"))
+):
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
+    query = db.query(models.PolicyApproval).filter(models.PolicyApproval.status == "pending")
+    if user_role != "platform_admin":
+        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+        query = query.filter(models.PolicyApproval.tenant_id == t_uuid)
+    return {"count": query.count()}
+
+
 @app.get("/api/v5/orchestrator/approvals")
 def get_pending_approvals(
     db: Session = Depends(get_db),
@@ -816,6 +832,9 @@ def approve_policy_intent(
 
     if not target_switch:
         target_switch = db.query(models.Switch).filter(models.Switch.hostname == target_serial).first()
+
+    if not target_switch:
+        target_switch = db.query(models.Switch).filter(models.Switch.serial_number == target_serial).first()
 
     if not target_switch:
         raise HTTPException(
@@ -959,8 +978,21 @@ def get_admin_tenants(db: Session = Depends(get_db), claims: dict = Depends(requ
 
 
 @app.get("/api/v5/admin/switches")
-def get_admin_switches(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
-    switches = db.query(models.Switch).all()
+def get_admin_switches(db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
+
+    if user_role == "platform_admin":
+        switches = db.query(models.Switch).all()
+    else:
+        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+        switches = db.query(models.Switch).join(
+            models.Fabric, models.Switch.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.IpamSubnet, models.IpamSubnet.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+        ).filter(models.TenantVrf.tenant_id == t_uuid).distinct().all()
     return [
         {
             "switch_id": str(s.switch_id),
@@ -977,8 +1009,24 @@ def get_admin_switches(db: Session = Depends(get_db), claims: dict = Depends(req
 
 
 @app.get("/api/v5/admin/ztp-pool")
-def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
-    ztp_devices = db.query(models.ZtpDiscoveryPool).all()
+def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
+
+    if user_role == "platform_admin":
+        ztp_devices = db.query(models.ZtpDiscoveryPool).all()
+    else:
+        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+        ztp_devices = db.query(models.ZtpDiscoveryPool).join(
+            models.Switch, models.Switch.discovery_id == models.ZtpDiscoveryPool.discovery_id
+        ).join(
+            models.Fabric, models.Switch.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.IpamSubnet, models.IpamSubnet.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+        ).filter(models.TenantVrf.tenant_id == t_uuid).distinct().all()
+
     return [
         {
             "discovery_id": str(z.discovery_id),
@@ -993,8 +1041,17 @@ def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(req
 
 
 @app.get("/api/v5/admin/subnets")
-def get_admin_subnets(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
-    subnets = db.query(models.IpamSubnet).all()
+def get_admin_subnets(db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
+
+    if user_role == "platform_admin":
+        subnets = db.query(models.IpamSubnet).all()
+    else:
+        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+        subnets = db.query(models.IpamSubnet).join(
+            models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+        ).filter(models.TenantVrf.tenant_id == t_uuid).all()
     res = []
     for s in subnets:
         vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == s.vrf_id).first()
@@ -1023,17 +1080,37 @@ def get_admin_subnets(db: Session = Depends(get_db), claims: dict = Depends(requ
 
 
 @app.get("/api/v5/ipam/search")
-def search_ipam_ip(ip: str, db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
+def search_ipam_ip(ip: str, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
     """Search for an IP address in discovered endpoints and static reservations."""
     try:
         ipaddress.ip_address(ip)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid IP address format.")
 
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
+
+    def _switch_in_tenant(switch_id, tenant_uuid) -> bool:
+        sw = db.query(models.Switch).filter(models.Switch.switch_id == switch_id).first()
+        if not sw:
+            return False
+        return db.query(models.IpamSubnet).join(
+            models.Fabric, models.IpamSubnet.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+        ).filter(
+            models.TenantVrf.tenant_id == tenant_uuid,
+            models.Fabric.fabric_id == sw.fabric_id
+        ).first() is not None
+
     # 1. Search in discovered endpoints (live/active state)
     discovered_ep = db.query(models.DiscoveredEndpoint).filter(models.DiscoveredEndpoint.ip_address == ip).first()
     if discovered_ep:
         sw = db.query(models.Switch).filter(models.Switch.switch_id == discovered_ep.switch_id).first()
+        if user_role != "platform_admin":
+            t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+            if not _switch_in_tenant(discovered_ep.switch_id, t_uuid):
+                return {"ip": ip, "status": "unassigned"}
         return {
             "ip": ip,
             "switch_name": sw.hostname if sw else "unknown",
@@ -1049,6 +1126,10 @@ def search_ipam_ip(ip: str, db: Session = Depends(get_db), claims: dict = Depend
     if allocation:
         subnet = db.query(models.IpamSubnet).filter(models.IpamSubnet.subnet_id == allocation.subnet_id).first()
         vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == subnet.vrf_id).first() if subnet else None
+        if user_role != "platform_admin" and vrf:
+            t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+            if vrf.tenant_id != t_uuid:
+                return {"ip": ip, "status": "unassigned"}
         return {
             "ip": ip,
             "switch_name": "IPAM Controller Pool",
@@ -1106,12 +1187,30 @@ async def get_admin_topology(db: Session = Depends(get_db), claims: dict = Depen
         ]
 
 @app.get("/api/v5/topology/graph")
-async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
+async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
     """
     Returns the real discovered topology nodes and edges formatted for Cytoscape.js.
     """
     try:
-        switches = db.query(models.Switch).all()
+        user_role = claims.get("role")
+        user_tenant_id = claims.get("tenant_id")
+
+        if user_role == "platform_admin":
+            switches = db.query(models.Switch).all()
+        else:
+            t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+            allowed_switch_ids = db.query(models.Switch.switch_id).join(
+                models.Fabric, models.Switch.fabric_id == models.Fabric.fabric_id
+            ).join(
+                models.IpamSubnet, models.IpamSubnet.fabric_id == models.Fabric.fabric_id
+            ).join(
+                models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+            ).filter(models.TenantVrf.tenant_id == t_uuid).subquery()
+            switches = db.query(models.Switch).filter(
+                models.Switch.switch_id.in_(db.query(allowed_switch_ids.c.switch_id))
+            ).all()
+
+        allowed_hostnames = {sw.hostname for sw in switches}
         nodes_list = []
         switch_hostname_to_id = {}
         
@@ -1120,11 +1219,11 @@ async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depen
             switch_hostname_to_id[sw.hostname] = sw_id_str
             
             # Map status representation
-            status_map = "compliant_active"
-            if sw.lifecycle_status == "drifted" or sw.status == "Drifted":
-                status_map = "drifted"
+            status_map = LIFECYCLE_COMPLIANT
+            if sw.lifecycle_status == LIFECYCLE_DRIFTED or sw.status == "Drifted":
+                status_map = LIFECYCLE_DRIFTED
             elif sw.status != "Up":
-                status_map = "discovered"
+                status_map = LIFECYCLE_DISCOVERED
                 
             nodes_list.append({
                 "id": sw_id_str,
@@ -1141,6 +1240,8 @@ async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depen
         edges_list = []
         
         for e in edges:
+            if e.local_switch not in allowed_hostnames or e.remote_switch not in allowed_hostnames:
+                continue
             source_id = switch_hostname_to_id.get(e.local_switch)
             target_id = switch_hostname_to_id.get(e.remote_switch)
             if source_id and target_id:
@@ -1327,6 +1428,11 @@ def accept_switch_drift(
         is_baseline=True,
         taken_by=claims.get("username") or claims.get("email") or "operator"
     )
+    # Clear previous baselines for this switch
+    db.query(models.ConfigSnapshot).filter(
+        models.ConfigSnapshot.switch_id == sw_uuid,
+        models.ConfigSnapshot.is_baseline == True
+    ).update({"is_baseline": False})
     db.add(snapshot)
     
     # Update switch status
@@ -1563,7 +1669,7 @@ def export_reports_csv(
             ])
             
     elif report_type == "ipam":
-        writer.writerow(["Subnet CIDR", "Gateway IP", "VLAN ID", "VRF Name", "Description"])
+        writer.writerow(["Subnet CIDR", "Anycast Gateway", "VLAN ID", "VRF Name"])
         if user_role == "platform_admin":
             subnets = db.query(models.IpamSubnet).all()
         else:
@@ -1575,10 +1681,9 @@ def export_reports_csv(
             vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == sub.vrf_id).first()
             writer.writerow([
                 sub.subnet_cidr,
-                sub.gateway_ip,
+                sub.anycast_gateway_ip,
                 sub.vlan_id,
                 vrf.vrf_name if vrf else "unknown",
-                sub.description or ""
             ])
             
     elif report_type == "compliance":
@@ -1621,4 +1726,145 @@ def enqueue_config_push(
     verify_switch_access(db, sw_uuid, claims)
     task = sync_switch_config_task.delay(payload.switch_id, payload.config_data)
     return {"status": "ENQUEUED", "task_id": task.id}
+
+
+def calculate_blast_radius(db: Session, switch_ids: list) -> dict:
+    """
+    Calculate blast radius for a set of target switches.
+    For spine targets, count all connected leaf switches via TopologyEdge.
+    For leaf targets, blast radius is 1.
+    """
+    details = []
+    total_affected = 0
+    for sid in switch_ids:
+        sw_uuid = uuid.UUID(sid)
+        switch = db.query(models.Switch).filter(models.Switch.switch_id == sw_uuid).first()
+        if not switch:
+            continue
+        if switch.role.lower() == "spine":
+            connected_leaves = db.query(models.Switch).join(
+                models.TopologyEdge,
+                (models.TopologyEdge.local_switch == models.Switch.hostname) |
+                (models.TopologyEdge.remote_switch == models.Switch.hostname)
+            ).filter(
+                models.Switch.role == "leaf",
+                models.TopologyEdge.state == "up",
+                (models.TopologyEdge.local_switch == switch.hostname) |
+                (models.TopologyEdge.remote_switch == switch.hostname)
+            ).distinct().count()
+            affected = max(connected_leaves, 1)
+        else:
+            affected = 1
+        total_affected += affected
+        details.append({
+            "switch_id": sid,
+            "hostname": switch.hostname,
+            "role": switch.role,
+            "connected_leaves": affected
+        })
+    return {"total_affected": total_affected, "by_switch": details}
+
+
+@app.post("/api/v5/switch-config/push")
+async def push_switch_config(
+    payload: schemas.SwitchConfigPush,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("switch_config:dry_run"))
+):
+    """
+    4-stage config push pipeline:
+    Stage 1: Syntax validation
+    Stage 2: Tenant access check
+    Stage 3: Blast radius calculation
+    Stage 4: Dry-run (validate) or commit (push)
+    """
+    user_role = claims.get("role")
+    errors = []
+
+    # Stage 1: Syntax validation
+    if not payload.config_payload.strip():
+        raise HTTPException(status_code=400, detail="Config payload is empty.")
+    for line in payload.config_payload.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if ";" in line:
+            errors.append(f"Syntax error: semicolon not allowed in config payload (line: {line})")
+    if errors:
+        raise HTTPException(status_code=400, detail={"stage": "syntax", "errors": errors})
+
+    # Stage 2: Tenant access check
+    for sid in payload.switch_ids:
+        try:
+            sw_uuid = uuid.UUID(sid)
+            verify_switch_access(db, sw_uuid, claims)
+        except HTTPException as e:
+            errors.append(f"Access denied for switch {sid}: {e.detail}")
+    if errors:
+        raise HTTPException(status_code=403, detail={"stage": "tenant_check", "errors": errors})
+
+    # Stage 3: Blast radius
+    blast = calculate_blast_radius(db, payload.switch_ids)
+    if blast["total_affected"] > 5 and user_role != "platform_admin":
+        # Create approval request for high blast radius
+        approval = models.PolicyApproval(
+            tenant_id=uuid.UUID(claims.get("tenant_id")) if claims.get("tenant_id") else None,
+            vrf_name="config_push",
+            vlan_id=0,
+            layer2_vni=0,
+            layer3_vni=0,
+            requested_cidr="0.0.0.0/0",
+            target_switch_serials=",".join(payload.switch_ids),
+            blast_radius=6,
+            status="pending",
+            diff_payload=f"Config push to {len(payload.switch_ids)} switches (blast radius: {blast['total_affected']})"
+        )
+        db.add(approval)
+        db.commit()
+        return {
+            "status": "APPROVAL_REQUIRED",
+            "blast_radius": blast,
+            "approval_id": str(approval.approval_id),
+            "detail": "High blast radius push requires Platform Admin approval."
+        }
+
+    # Stage 4: Dry-run or commit
+    import asyncio
+    if payload.dry_run:
+        diffs = []
+        for sid in payload.switch_ids:
+            sw_uuid = uuid.UUID(sid)
+            switch = db.query(models.Switch).filter(models.Switch.switch_id == sw_uuid).first()
+            if not switch:
+                continue
+            try:
+                driver = resolve_southbound_driver(switch.vendor)
+                loop = asyncio.new_event_loop()
+                try:
+                    result = loop.run_until_complete(
+                        driver.validate_candidate(switch.management_ip, "admin", "admin", payload.config_payload)
+                    )
+                finally:
+                    loop.close()
+                diffs.append({
+                    "switch_id": sid,
+                    "hostname": switch.hostname,
+                    "diff": result.get("diff", ""),
+                    "validation_status": result.get("validation_status", "unknown")
+                })
+            except NotImplementedError:
+                diffs.append({
+                    "switch_id": sid,
+                    "hostname": switch.hostname,
+                    "diff": "",
+                    "validation_status": "driver_not_implemented"
+                })
+        return {"status": "DRY_RUN_COMPLETE", "diffs": diffs, "blast_radius": blast}
+    else:
+        from .workers.sync_tasks import sync_switch_config_task
+        task_ids = []
+        for sid in payload.switch_ids:
+            task = sync_switch_config_task.delay(sid, payload.config_payload)
+            task_ids.append({"switch_id": sid, "task_id": task.id})
+        return {"status": "PUSH_QUEUED", "task_ids": task_ids, "blast_radius": blast}
 

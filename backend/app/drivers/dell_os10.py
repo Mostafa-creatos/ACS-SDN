@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import difflib
 from typing import Optional, Dict, Any
 
 from .base import SouthboundNetworkDriver
@@ -74,3 +75,61 @@ class DellOS10Driver(SouthboundNetworkDriver):
                 return collector.collect_all()
 
         return await asyncio.to_thread(_run)
+
+    # ------------------------------------------------------------------
+    # Config push & validation
+    # ------------------------------------------------------------------
+    async def push_config(self, host: str, username: str, password: str, config_payload: str) -> dict:
+        """Push configuration to a Dell OS10 switch via TCP/console."""
+        def _apply():
+            with DellOS10Collector(
+                host=host,
+                username=username,
+                password=password,
+                port=5000,
+                use_ssh=False,
+            ) as collector:
+                if not collector.connect():
+                    return {"success": False, "output": "Failed to connect to switch", "applied_config": ""}
+                try:
+                    collector.send_command("terminal width 512")
+                    collector.send_command("configure terminal")
+                    for line in config_payload.strip().splitlines():
+                        line = line.strip()
+                        if line:
+                            collector.send_command(line)
+                    collector.send_command("end")
+                    collector.send_command("copy running-config startup-config")
+                    return {"success": True, "output": "Configuration applied successfully", "applied_config": config_payload}
+                except Exception as e:
+                    return {"success": False, "output": str(e), "applied_config": ""}
+                finally:
+                    try:
+                        collector.send_command("end")
+                    except Exception:
+                        pass
+
+        return await asyncio.to_thread(_apply)
+
+    async def validate_candidate(self, host: str, username: str, password: str, candidate_config: str) -> dict:
+        """Validate candidate config by comparing against running config without applying."""
+        def _validate():
+            with DellOS10Collector(
+                host=host,
+                username=username,
+                password=password,
+                port=5000,
+                use_ssh=False,
+            ) as collector:
+                if not collector.connect():
+                    return {"diff": "", "validation_status": "connection_failed", "error_detail": "Failed to connect"}
+                try:
+                    running_config = collector.collect_running_config()
+                    running_lines = running_config.splitlines(keepends=True)
+                    candidate_lines = candidate_config.splitlines(keepends=True)
+                    diff = "".join(difflib.unified_diff(running_lines, candidate_lines, fromfile="running", tofile="candidate"))
+                    return {"diff": diff, "validation_status": "diff_ready" if diff else "identical", "error_detail": ""}
+                except Exception as e:
+                    return {"diff": "", "validation_status": "error", "error_detail": str(e)}
+
+        return await asyncio.to_thread(_validate)

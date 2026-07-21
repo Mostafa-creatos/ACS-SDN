@@ -5,7 +5,7 @@ import type { User } from '../lib/types';
 import { Trash2, UserPlus, CheckCircle2, XCircle } from 'lucide-react';
 
 export const UsersPage: React.FC = () => {
-    const { user } = useAuth();
+    const { user, selectedTenant } = useAuth();
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
     const [showInviteModal, setShowInviteModal] = useState(false);
@@ -20,7 +20,7 @@ export const UsersPage: React.FC = () => {
 
     useEffect(() => {
         loadUsers();
-    }, []);
+    }, [selectedTenant]);
 
     const loadUsers = async () => {
         try {

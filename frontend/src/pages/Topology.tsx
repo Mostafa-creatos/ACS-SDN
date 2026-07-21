@@ -133,8 +133,8 @@ export const Topology: React.FC = () => {
         fetchedNodes = data.nodes || [];
         fetchedEdges = data.edges || [];
       } else {
-        fetchedNodes = getMockNodes();
-        fetchedEdges = getMockEdges();
+        fetchedNodes = [];
+        fetchedEdges = [];
       }
 
       const fetchedEndpoints: EndpointData[] = epRes.ok ? await epRes.json() : [];
@@ -143,8 +143,8 @@ export const Topology: React.FC = () => {
       setEdges(fetchedEdges);
       setEndpoints(fetchedEndpoints);
     } catch (e) {
-      setNodes(getMockNodes());
-      setEdges(getMockEdges());
+      setNodes([]);
+      setEdges([]);
       setEndpoints([]);
     } finally {
       setLoading(false);
@@ -889,37 +889,5 @@ const getCablingConnections = (selected: NodeData[], allEdges: EdgeData[]) => {
   });
   return connections;
 };
-
-// Seed mock multi-vendor data matching reference image
-function getMockNodes(): NodeData[] {
-  return [
-    { id: '1', label: 'Acc-Sw-A', ip: '10.250.60.10', status: 'compliant_active', role: 'leaf', model: 'S5248F-ON', vendor: 'dell', interfacesCount: 48 },
-    { id: '2', label: 'Agg-Nexus', ip: '10.250.60.11', status: 'compliant_active', role: 'spine', model: 'Nexus 9300', vendor: 'cisco', interfacesCount: 48 },
-    { id: '3', label: 'Acc-Sw-B', ip: '10.250.60.12', status: 'compliant_active', role: 'leaf', model: 'EX4300', vendor: 'juniper', interfacesCount: 24 },
-    { id: '4', label: 'Perimeter', ip: '10.250.20.1', status: 'compliant_active', role: 'leaf', model: 'FortiGate 60F', vendor: 'fortinet', interfacesCount: 16 },
-    { id: '5', label: 'Core', ip: '10.250.10.1', status: 'compliant_active', role: 'spine', model: 'Catalyst 9500', vendor: 'cisco', interfacesCount: 48 },
-    { id: '6', label: 'BRAS-01', ip: '10.250.10.10', status: 'compliant_active', role: 'spine', model: 'NetEngine AR6000', vendor: 'huawei', interfacesCount: 24 },
-    { id: '7', label: 'LB-01', ip: '10.250.10.20', status: 'compliant_active', role: 'leaf', model: 'BIG-IP i2600', vendor: 'f5', interfacesCount: 12 },
-    { id: '8', label: 'DLP-Edge', ip: '10.250.10.30', status: 'compliant_active', role: 'leaf', model: 'Forcepoint SG-1100', vendor: 'forcepoint', interfacesCount: 8 },
-    { id: '9', label: 'AP-204', ip: '10.250.60.150', status: 'compliant_active', role: 'leaf', model: 'AP-204 Wi-Fi 6', vendor: 'generic', interfacesCount: 2 },
-    { id: '10', label: 'HW-Sw-03', ip: '10.250.10.100', status: 'drifted', role: 'leaf', model: 'CloudEngine 6800', vendor: 'huawei', interfacesCount: 48 },
-    { id: '11', label: 'app-01', ip: '10.250.10.200', status: 'discovered', role: 'leaf', model: 'PowerEdge R750', vendor: 'generic', interfacesCount: 4 }
-  ];
-}
-
-function getMockEdges(): EdgeData[] {
-  return [
-    { id: 'e1', source: '1', target: '2', sourcePort: 'ethernet1/1', targetPort: 'ethernet1/2', protocol: 'LLDP' },
-    { id: 'e2', source: '3', target: '2', sourcePort: 'ge-0/0/1', targetPort: 'ethernet1/3', protocol: 'LLDP' },
-    { id: 'e3', source: '2', target: '5', sourcePort: 'ethernet1/48', targetPort: 'GigabitEthernet0/1', protocol: 'CDP' },
-    { id: 'e4', source: '4', target: '5', sourcePort: 'port1', targetPort: 'GigabitEthernet0/2', protocol: 'LLDP' },
-    { id: 'e5', source: '9', target: '4', sourcePort: 'eth0', targetPort: 'port4', protocol: 'LLDP' },
-    { id: 'e6', source: '8', target: '5', sourcePort: 'ge-0/1', targetPort: 'GigabitEthernet0/3', protocol: 'LLDP' },
-    { id: 'e7', source: '6', target: '5', sourcePort: 'GE0/0/1', targetPort: 'GigabitEthernet0/4', protocol: 'LLDP' },
-    { id: 'e8', source: '7', target: '5', sourcePort: '1.1', targetPort: 'GigabitEthernet0/5', protocol: 'LLDP' },
-    { id: 'e9', source: '10', target: '6', sourcePort: 'GE0/0/2', targetPort: 'GE0/0/2', protocol: 'LLDP' },
-    { id: 'e10', source: '11', target: '7', sourcePort: 'eth0', targetPort: '1.2', protocol: 'LLDP' }
-  ];
-}
 
 export default Topology;

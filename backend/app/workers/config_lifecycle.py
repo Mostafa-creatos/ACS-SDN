@@ -2,6 +2,7 @@ import uuid
 import hashlib
 import json
 import datetime
+import asyncio
 from sqlalchemy.orm import Session
 from .. import models
 from ..main import resolve_southbound_driver
@@ -280,7 +281,19 @@ def restore_config_snapshot(db: Session, snapshot_id: uuid.UUID, operator_claims
     if four_eyes_approval_required and operator_claims.get("role") != "platform_admin":
         raise PermissionError("Approval Exception: High blast radius rollback requires Platform Admin authorization.")
 
-    # Apply configuration commands (simulate write paths or trigger drivers)
+    # Push config to the switch via southbound driver
+    driver = resolve_southbound_driver(switch.vendor)
+    loop = asyncio.new_event_loop()
+    try:
+        push_result = loop.run_until_complete(
+            driver.push_config(switch.management_ip, "admin", "admin", snapshot.raw_config)
+        )
+    finally:
+        loop.close()
+
+    if not push_result.get("success"):
+        raise Exception(f"Config push failed: {push_result.get('output', 'unknown error')}")
+
     # Register new snapshot capturing the restore action
     new_snapshot = models.ConfigSnapshot(
         snapshot_id=uuid.uuid4(),
@@ -352,7 +365,8 @@ def config_compliance_mgr():
             # 3. Check for drift
             if current_config != baseline_snapshot.raw_config:
                 # Drift detected!
-                switch.lifecycle_status = "ConfigurationDrifted"
+                from ..main import LIFECYCLE_DRIFTED
+                switch.lifecycle_status = LIFECYCLE_DRIFTED
                 
                 # Simple diff
                 baseline_lines = baseline_snapshot.raw_config.splitlines(keepends=True)

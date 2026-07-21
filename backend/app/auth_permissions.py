@@ -30,6 +30,10 @@ PERMISSION_MATRIX = {
     "rollback:run": ["operator", "tenant_admin", "platform_admin"],
     "compliance:run": ["operator", "tenant_admin", "platform_admin"],
     
+    # Switch Config Push
+    "switch_config:dry_run": ["operator", "tenant_admin", "platform_admin"],
+    "switch_config:push": ["tenant_admin", "platform_admin"],
+    
     # Discovery / Global Config
     "global:manage": ["platform_admin"],
     
@@ -47,19 +51,23 @@ PERMISSION_MATRIX = {
 ALL_ROLES = ["readonly", "operator", "tenant_admin", "platform_admin"]
 
 def _log_audit_event(db: Session, user_id: str, tenant_id: str, action: str, resource: str, status_msg: str, detail: str = ""):
-    u_uuid = uuid.UUID(user_id) if user_id else None
-    t_uuid = uuid.UUID(tenant_id) if tenant_id and tenant_id != "None" else None
+    try:
+        u_uuid = uuid.UUID(user_id) if user_id else None
+        t_uuid = uuid.UUID(tenant_id) if tenant_id and tenant_id != "None" else None
 
-    log = models.AuditLog(
-        user_id=u_uuid,
-        tenant_id=t_uuid,
-        action=action,
-        resource=resource,
-        status=status_msg,
-        detail=detail
-    )
-    db.add(log)
-    db.commit()
+        log = models.AuditLog(
+            user_id=u_uuid,
+            tenant_id=t_uuid,
+            action=action,
+            resource=resource,
+            status=status_msg,
+            detail=detail
+        )
+        db.add(log)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[AUDIT LOG ERROR] Failed to insert audit log (likely mock user or tenant constraint): {e}")
 
 
 class require_permission:

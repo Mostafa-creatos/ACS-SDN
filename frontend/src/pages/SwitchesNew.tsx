@@ -98,6 +98,7 @@ export const SwitchesNew: React.FC = () => {
         setSwitches([]); setTotalPages(1); setTotalItems(0);
       }
     } catch {
+      showToast('Failed to load inventory', 'warning');
       setSwitches([]); setTotalPages(1); setTotalItems(0);
     } finally {
       setLoading(false);
@@ -123,6 +124,7 @@ export const SwitchesNew: React.FC = () => {
         setLocalSnapshots(prev => ({ ...prev, [switchId]: [] }));
       }
     } catch {
+      showToast('Failed to load snapshots', 'warning');
       setLocalSnapshots(prev => ({ ...prev, [switchId]: [] }));
     } finally {
       setSnapshotLoading(false);
@@ -143,6 +145,7 @@ export const SwitchesNew: React.FC = () => {
         setComplianceFindings(prev => ({ ...prev, [switchId]: [] }));
       }
     } catch {
+      showToast('Failed to load compliance data', 'warning');
       setComplianceFindings(prev => ({ ...prev, [switchId]: [] }));
     }
   }, [token, selectedTenant]);

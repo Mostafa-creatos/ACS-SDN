@@ -65,8 +65,13 @@ export const Dashboard: React.FC = () => {
       // Extract details
       const total = switchesList.length;
       const active = switchesList.filter((s: any) => s.status === 'Up' || s.lifecycle_status === 'compliant_active').length;
-      const drifted = switchesList.filter((s: any) => s.lifecycle_status === 'drifted').length;
-      const approvals = 2; // Mock approval count
+      const drifted = switchesList.filter((s: any) => s.lifecycle_status === 'configuration_drifted').length;
+      let approvals = 0;
+      try {
+        const approvalRes = await fetch('/api/v5/orchestrator/approvals', { headers });
+        const approvalsList = approvalRes.ok ? await approvalRes.json() : [];
+        approvals = approvalsList.length;
+      } catch {}
 
       // Distribution
       const distribution = [
@@ -96,24 +101,14 @@ export const Dashboard: React.FC = () => {
         complianceTrend: trend
       });
     } catch (err) {
-      // Offline fallback defaults
+      // Empty fallback on error
       setData({
-        totalSwitches: 8,
-        activeSwitches: 5,
-        driftedSwitches: 2,
-        pendingApprovals: 3,
-        switchDistribution: [
-          { name: 'Compliant & Active', value: 5, color: '#42CCB2' },
-          { name: 'Drifted / Warning', value: 2, color: '#E26C48' },
-          { name: 'Discovered Raw', value: 1, color: '#BAC0D8' },
-        ],
-        complianceTrend: [
-          { date: 'Jun 01', score: 88 },
-          { date: 'Jun 07', score: 90 },
-          { date: 'Jun 14', score: 92 },
-          { date: 'Jun 21', score: 85 },
-          { date: 'Jun 28', score: 94 },
-        ]
+        totalSwitches: 0,
+        activeSwitches: 0,
+        driftedSwitches: 0,
+        pendingApprovals: 0,
+        switchDistribution: [],
+        complianceTrend: []
       });
     } finally {
       setLoading(false);

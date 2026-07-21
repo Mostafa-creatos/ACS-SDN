@@ -24,3 +24,19 @@ class SouthboundNetworkDriver(ABC):
         Generate inverse configuration commands or XML payload to tear down/remove the VLAN interface.
         """
         pass
+
+    @abstractmethod
+    async def push_config(self, host: str, username: str, password: str, config_payload: str) -> dict:
+        """
+        Push a configuration payload to the switch.
+        Returns {"success": bool, "output": str, "applied_config": str}
+        """
+        pass
+
+    @abstractmethod
+    async def validate_candidate(self, host: str, username: str, password: str, candidate_config: str) -> dict:
+        """
+        Validate a candidate config against the running config without applying.
+        Returns {"diff": str, "validation_status": str, "error_detail": str}
+        """
+        pass

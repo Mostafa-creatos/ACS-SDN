@@ -80,11 +80,11 @@ async def ingest_ztp_signal(
             local_bgp_asn=65000,
             loopback_0_ip=f"10.255.0.{int(payload.serial_number[-4:], 16) % 254 + 1}",
             serial_number=payload.serial_number,
-            lifecycle_status="DiscoveredRaw"
+            lifecycle_status="discovered_raw"
         )
         db.add(switch)
     else:
-        switch.lifecycle_status = "DiscoveredRaw"
+        switch.lifecycle_status = "discovered_raw"
         switch.discovery_id = record.discovery_id
 
     db.commit()
@@ -99,12 +99,32 @@ async def ingest_ztp_signal(
 @router.get("/pool", status_code=status.HTTP_200_OK)
 async def get_discovery_pool(
     db: Session = Depends(get_db),
-    claims: dict = Depends(require_permission("global:manage"))
+    claims: dict = Depends(require_permission("inventory:read"))
 ):
     """
     Get the onboarding queue status (pending/provisioned/failed) per entry.
+    Tenant-scoped: non-platform-admins only see switches in their tenant's fabrics.
     """
-    records = db.query(models.ZtpDiscoveryPool).order_by(models.ZtpDiscoveryPool.first_seen.desc()).all()
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
+
+    if user_role == "platform_admin":
+        records = db.query(models.ZtpDiscoveryPool).order_by(models.ZtpDiscoveryPool.first_seen.desc()).all()
+    else:
+        import uuid
+        t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
+        records = db.query(models.ZtpDiscoveryPool).join(
+            models.Switch, models.Switch.discovery_id == models.ZtpDiscoveryPool.discovery_id
+        ).join(
+            models.Fabric, models.Switch.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.IpamSubnet, models.IpamSubnet.fabric_id == models.Fabric.fabric_id
+        ).join(
+            models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
+        ).filter(models.TenantVrf.tenant_id == t_uuid).distinct().order_by(
+            models.ZtpDiscoveryPool.first_seen.desc()
+        ).all()
+
     return [
         {
             "discovery_id": str(r.discovery_id),

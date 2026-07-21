@@ -72,7 +72,7 @@ class Switch(Base):
     local_bgp_asn = Column(Integer, nullable=False)
     loopback_0_ip = Column(String(45), nullable=False, unique=True)
     vtep_ip = Column(String(45), nullable=True, unique=True)
-    lifecycle_status = Column(String(64), default="DiscoveredRaw")
+    lifecycle_status = Column(String(64), default="discovered_raw")
     configuration_drift_category = Column(String(255), nullable=True)
     configuration_checksum = Column(String(64), nullable=True)
     last_successful_sync = Column(DateTime, nullable=True)

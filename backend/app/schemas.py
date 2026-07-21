@@ -40,3 +40,8 @@ class LoginPayload(BaseModel):
 class TenantCreate(BaseModel):
     tenant_name: str
 
+class SwitchConfigPush(BaseModel):
+    switch_ids: List[str] = Field(..., min_length=1, description="List of switch UUID strings to target")
+    config_payload: str = Field(..., min_length=1, description="Configuration payload to apply")
+    dry_run: bool = Field(default=True, description="If True, validate only. If False, commit.")
+

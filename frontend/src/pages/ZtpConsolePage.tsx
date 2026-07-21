@@ -23,16 +23,16 @@ interface ZtpRecord {
 }
 
 export const ZtpConsolePage: React.FC = () => {
-  const { token } = useAuth();
+  const { token, selectedTenant } = useAuth();
   const [records, setRecords] = useState<ZtpRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const fetchRecords = async () => {
     try {
-      const response = await fetch('/api/v5/discovery/pool', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
+      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
+      const response = await fetch('/api/v5/discovery/pool', { headers });
       if (!response.ok) throw new Error('Failed to fetch ZTP pool');
       const data = await response.json();
       setRecords(data);
@@ -47,7 +47,7 @@ export const ZtpConsolePage: React.FC = () => {
     fetchRecords();
     const interval = setInterval(fetchRecords, 5000);
     return () => clearInterval(interval);
-  }, [token]);
+  }, [token, selectedTenant]);
 
   return (
     <div className="space-y-6">

@@ -12,3 +12,9 @@ class AristaEosDriver(SouthboundNetworkDriver):
 
     async def generate_rollback_payload(self, vrf_name: str, vlan_id: int) -> str:
         return f"no interface Vlan{vlan_id}"
+
+    async def push_config(self, host: str, username: str, password: str, config_payload: str) -> dict:
+        raise NotImplementedError("Arista EOS push_config not yet implemented")
+
+    async def validate_candidate(self, host: str, username: str, password: str, candidate_config: str) -> dict:
+        raise NotImplementedError("Arista EOS validate_candidate not yet implemented")

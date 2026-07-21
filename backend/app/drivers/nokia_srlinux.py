@@ -28,3 +28,9 @@ class NokiaSrlinuxDriver(SouthboundNetworkDriver):
             f"/ network-instance {vrf_name}\n"
             f"  delete interface vlan-{vlan_id}.0\n"
         )
+
+    async def push_config(self, host: str, username: str, password: str, config_payload: str) -> dict:
+        raise NotImplementedError("Nokia SR Linux push_config not yet implemented")
+
+    async def validate_candidate(self, host: str, username: str, password: str, candidate_config: str) -> dict:
+        raise NotImplementedError("Nokia SR Linux validate_candidate not yet implemented")

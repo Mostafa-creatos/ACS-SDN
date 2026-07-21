@@ -209,7 +209,7 @@ def discover_dell_switch(sw, db: Session):
                 def normalize_cfg(c: str) -> str:
                     return "\n".join([l.strip() for l in c.replace("\r\n", "\n").split("\n") if l.strip()])
                 if normalize_cfg(running_config) != normalize_cfg(latest_snap.raw_config):
-                    sw.lifecycle_status = "drifted"
+                    sw.lifecycle_status = "configuration_drifted"
                 else:
                     sw.lifecycle_status = "compliant_active"
             else:
@@ -393,7 +393,7 @@ def discover_nokia_switch(sw, db: Session):
             lldp_links = parse_lldp_neighbors(lldp_data, sw.management_ip)
             
         # 2. Fetch System Metadata and Interface details via gNMI
-        with gNMIclient(target=(sw.management_ip, 57400), username="admin", password=os.getenv("GNMI_DEFAULT_PASSWORD", ""), skip_verify=True, gnmi_timeout=2) as gc:
+        with gNMIclient(target=(sw.management_ip, 57400), username="admin", password=os.getenv("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!"), skip_verify=True, gnmi_timeout=2) as gc:
             # Query /system for version and uptime
             sys_data = gc.get(path=['/system'])
             os_version = sw.os_version or "23.10.1"
@@ -793,6 +793,8 @@ def run_gnmi_discovery(db: Session):
                 remote_ip = l.get("remote_ip", "")
                 logger.info(f"[DISCOVERY] Auto-creating new switch from LLDP: {remote_name} (ip={remote_ip})")
                 import uuid as _uuid
+                def _stable_host_id(name: str, mod: int = 200) -> int:
+                    return _uuid.uuid5(_uuid.NAMESPACE_DNS, name).int % mod + 1
                 # Determine vendor from remote system description if available
                 remote_desc = l.get("remote_desc", "").lower()
                 if "nokia" in remote_desc or "srl" in remote_desc or "7220" in remote_desc:
@@ -815,19 +817,19 @@ def run_gnmi_discovery(db: Session):
                 fabric_id = local_sw.fabric_id
 
                 new_uuid = _uuid.uuid4()
-                loopback = f"10.200.99.{abs(hash(remote_name)) % 200 + 1}"
-                vtep = f"10.250.99.{abs(hash(remote_name)) % 200 + 1}"
+                loopback = f"10.200.99.{_stable_host_id(remote_name)}"
+                vtep = f"10.250.99.{_stable_host_id(remote_name)}"
 
                 new_sw = models.Switch(
                     switch_id=new_uuid,
                     fabric_id=fabric_id,
                     hostname=remote_name,
-                    management_ip=remote_ip or f"0.0.0.{abs(hash(remote_name)) % 200 + 1}",
+                    management_ip=remote_ip or f"10.200.1.{_stable_host_id(remote_name, 254)}",
                     vendor=vendor,
                     role=role,
-                    local_bgp_asn=65000 + abs(hash(remote_name)) % 100,
+                    local_bgp_asn=65000 + _stable_host_id(remote_name, 100),
                     loopback_0_ip=loopback,
-                    lifecycle_status="discovered",
+                    lifecycle_status="discovered_raw",
                     model=model,
                     os_version=os_version,
                     status="Up",
@@ -901,8 +903,8 @@ def run_gnmi_discovery(db: Session):
         db.commit()
 
     FALLBACK_MAC_TO_IP = {
-        "aa:c1:ab:6f:46:7f": "10.1.10.10", # client-01
-        "aa:c1:ab:ec:84:80": "10.1.20.10", # client-02
+        "aa:c1:ab:3a:59:6b": "10.1.10.10", # client-01
+        "aa:c1:ab:3e:d2:86": "10.1.20.10", # client-02
     }
 
     # Consistently format and insert newly discovered MAC/IP endpoints

@@ -31,6 +31,7 @@ export const Compliance: React.FC = () => {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [severityFilter, setSeverityFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('open');
+  const [error, setError] = useState('');
 
   // Run audit modal states
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
@@ -92,12 +93,14 @@ export const Compliance: React.FC = () => {
         });
         setFindings(mapped);
       } else {
-        setScore(78); // Simulate a drifted compliance score under 80% to show coral transition
-        setFindings(getMockFindings());
+        setScore(0);
+        setFindings([]);
+        setError('API unavailable — no compliance data.');
       }
     } catch (e) {
-      setScore(78);
-      setFindings(getMockFindings());
+      setScore(0);
+      setFindings([]);
+      setError('API unavailable — no compliance data.');
     }
   };
 
@@ -200,6 +203,13 @@ export const Compliance: React.FC = () => {
         </button>
       </div>
 
+      {error && (
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-lg flex gap-3 text-rose-700 text-sm">
+          <AlertTriangle className="w-5 h-5 shrink-0" />
+          <p>{error}</p>
+        </div>
+      )}
+
       {/* Stats and Gauge Row */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
         
@@ -244,14 +254,14 @@ export const Compliance: React.FC = () => {
           <Card className="flex items-center justify-between py-4 px-5">
             <div>
               <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Compliant Switches</span>
-              <span className="text-xl font-bold font-display text-slate-800">{findings.filter(f => f.status === 'resolved').length} Devices</span>
+              <span className="text-xl font-bold font-display text-slate-800">{findings.filter(f => f.status === 'resolved').length} Findings</span>
             </div>
             <ShieldCheck className="w-8 h-8 text-atlas-teal" />
           </Card>
           <Card className="flex items-center justify-between py-4 px-5">
             <div>
               <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Non-Compliant</span>
-              <span className="text-xl font-bold font-display text-slate-800">{findings.filter(f => f.status === 'open').length} Devices</span>
+              <span className="text-xl font-bold font-display text-slate-800">{findings.filter(f => f.status === 'open').length} Findings</span>
             </div>
             <ShieldAlert className="w-8 h-8 text-atlas-coral" />
           </Card>
