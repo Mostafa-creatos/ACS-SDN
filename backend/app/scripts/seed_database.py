@@ -48,7 +48,7 @@ def seed_all():
             print("[SDN SEED] Default tenant and fabric seeding completed.")
 
         # 2. Seed detailed multi-vendor switches if missing
-        if db.query(models.Switch).filter(models.Switch.hostname == "AWM-CAS-AGG-SW02").count() == 0:
+        if db.query(models.Switch).filter(models.Switch.hostname == "spine-01").count() == 0:
             print("[SDN SEED] Seeding detailed multi-vendor inventory switches...")
             fabric = db.query(models.Fabric).filter(models.Fabric.fabric_name == "DataCenter-East").first()
             fabric_id = fabric.fabric_id if fabric else uuid.UUID("33333333-3333-3333-3333-33333333333c")
