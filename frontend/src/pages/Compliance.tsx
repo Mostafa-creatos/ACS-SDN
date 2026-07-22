@@ -50,7 +50,7 @@ export const Compliance: React.FC = () => {
       
       if (response.ok) {
         const data = await response.json();
-        setScore(data.summary?.compliance_score_pct || 94);
+        setScore(data.summary?.compliance_score_pct ?? 0);
         
         // Map findings from API
         const mapped = (data.findings || []).map((f: any, idx: number) => {
@@ -83,10 +83,10 @@ export const Compliance: React.FC = () => {
 
           return {
             id: f.id || `find-${idx}`,
-            switch_name: f.switch_hostname || 'leaf-switch-02',
+            switch_name: f.switch_hostname || 'Unknown switch',
             vector,
-            expected: f.expected || (vector === 'MTU' ? 'mtu 9216' : vector === 'Syslog' ? 'logging server' : vector === 'LLDP' ? 'lldp enable' : 'configured'),
-            actual: f.detail || 'parameter missing',
+            expected: f.expected || 'N/A',
+            actual: f.detail || 'No detail available',
             severity,
             remediation,
             status: f.resolved ? 'resolved' : 'open'
@@ -149,23 +149,10 @@ export const Compliance: React.FC = () => {
 
     const interval = setInterval(() => {
       setAuditProgress(p => {
-        if (p === 20) {
-          setAuditMessage('Scanned 12 of 47 switch segments...');
-          return 50;
-        }
-        if (p === 50) {
-          setAuditMessage('Analyzing AAA/NTP configurations...');
-          return 85;
-        }
-        if (p === 85) {
-          setAuditMessage('Validating MD5 checksum integrity hashes...');
-          return 100;
-        }
-        if (p >= 100) {
+        if (p >= 90) {
           clearInterval(interval);
           setAuditCompleted(true);
           setAuditMessage('Golden configuration audit completed successfully!');
-          // Re-load the real compliance data from backend upon completion
           loadComplianceData();
           return 100;
         }
@@ -174,10 +161,21 @@ export const Compliance: React.FC = () => {
     }, 800);
   };
 
-  const handleResolve = (id: string) => {
+  const handleResolve = async (id: string) => {
     setFindings(prev => prev.map(f => f.id === id ? { ...f, status: 'resolved' } : f));
-    // Re-calculate compliance score
-    setScore(prev => Math.min(100, prev + 6));
+    try {
+      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
+      if (selectedTenant) {
+        headers['X-Tenant-ID'] = selectedTenant;
+      }
+      const res = await fetch('/api/v5/visibility/compliance/latest', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        setScore(data.summary?.compliance_score_pct ?? 0);
+      }
+    } catch {
+      setScore(prev => Math.min(100, prev + 6));
+    }
   };
 
   // Filtered findings
@@ -421,7 +419,7 @@ export const Compliance: React.FC = () => {
 
             <div className="space-y-1 text-xs">
               <div className="font-semibold text-slate-700">{auditMessage}</div>
-              <div className="text-[10px] text-slate-400">Total active nodes: 47 spine-leaf devices</div>
+              <div className="text-[10px] text-slate-400">Running compliance scan across fabric switches...</div>
             </div>
 
             {/* Progress Bar Container */}

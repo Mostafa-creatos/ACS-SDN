@@ -53,7 +53,7 @@ def sync_switch_config_task(switch_id_str: str, config_data: str):
     """
     import uuid
     import asyncio
-    from datetime import datetime
+    from datetime import datetime, timezone
     from ..db import SessionLocal
     from .. import models
     from ..main import resolve_southbound_driver
@@ -77,7 +77,7 @@ def sync_switch_config_task(switch_id_str: str, config_data: str):
         if result.get("success"):
             from ..main import LIFECYCLE_COMPLIANT
             switch.lifecycle_status = LIFECYCLE_COMPLIANT
-            switch.last_successful_sync = datetime.utcnow()
+            switch.last_successful_sync = datetime.now(timezone.utc)
             db.commit()
 
         return {

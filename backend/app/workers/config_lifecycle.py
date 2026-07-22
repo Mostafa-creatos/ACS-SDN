@@ -73,7 +73,7 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
     snapshot = models.ConfigSnapshot(
         snapshot_id=uuid.uuid4(),
         switch_id=switch_id,
-        taken_at=datetime.datetime.utcnow(),
+        taken_at=datetime.datetime.now(datetime.timezone.utc),
         raw_config=raw_config,
         config_hash=config_hash,
         taken_by=taken_by
@@ -82,7 +82,7 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
     
     # Update switch model fields
     switch.configuration_checksum = config_hash
-    switch.last_successful_sync = datetime.datetime.utcnow()
+    switch.last_successful_sync = datetime.datetime.now(datetime.timezone.utc)
     switch.lifecycle_status = "compliant_active"
     
     db.commit()
@@ -99,7 +99,7 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
         run_id=uuid.uuid4(),
         fabric_id=fabric_id,
         tenant_id=tenant_id,
-        started_at=datetime.datetime.utcnow(),
+        started_at=datetime.datetime.now(datetime.timezone.utc),
         status="running"
     )
     db.add(run)
@@ -298,7 +298,7 @@ def restore_config_snapshot(db: Session, snapshot_id: uuid.UUID, operator_claims
     new_snapshot = models.ConfigSnapshot(
         snapshot_id=uuid.uuid4(),
         switch_id=switch.switch_id,
-        taken_at=datetime.datetime.utcnow(),
+        taken_at=datetime.datetime.now(datetime.timezone.utc),
         raw_config=snapshot.raw_config,
         config_hash=snapshot.config_hash,
         taken_by=operator_claims.get("email", "operator")
@@ -307,7 +307,7 @@ def restore_config_snapshot(db: Session, snapshot_id: uuid.UUID, operator_claims
     
     # Update switch status
     switch.configuration_checksum = snapshot.config_hash
-    switch.last_successful_sync = datetime.datetime.utcnow()
+    switch.last_successful_sync = datetime.datetime.now(datetime.timezone.utc)
     switch.lifecycle_status = "compliant_active"
     db.commit()
 

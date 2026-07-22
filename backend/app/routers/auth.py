@@ -58,7 +58,7 @@ class RefreshTokenPayload(BaseModel):
     refresh_token: str
 
 def generate_jwt_for_user(user: models.User, tenant_id: str, role: str, tenants: list = None) -> str:
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     token_payload = {
         "sub": user.username,
         "user_id": str(user.user_id),
@@ -75,7 +75,7 @@ def generate_jwt_for_user(user: models.User, tenant_id: str, role: str, tenants:
 
 
 def create_refresh_token(user_id: str, role: str, tenant_id: str) -> str:
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     payload = {
         "sub": str(user_id),
         "role": role,
@@ -104,7 +104,7 @@ def login(payload: LoginPayload, request: Request, db: Session = Depends(get_db)
         _record_login_failure(client_ip)
         raise HTTPException(status_code=401, detail="Invalid username or password")
     
-    user.last_login_at = datetime.datetime.utcnow()
+    user.last_login_at = datetime.datetime.now(datetime.timezone.utc)
     db.commit()
 
     # Determine default tenant and role.
@@ -207,7 +207,7 @@ def forgot_password(payload: ForgotPasswordPayload, db: Session = Depends(get_db
         prt = models.PasswordResetToken(
             user_id=user.user_id,
             token_hash=token_hash,
-            expires_at=datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+            expires_at=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
         )
         db.add(prt)
         db.commit()
@@ -219,7 +219,7 @@ def forgot_password(payload: ForgotPasswordPayload, db: Session = Depends(get_db
 def reset_password(payload: ResetPasswordPayload, db: Session = Depends(get_db)):
     tokens = db.query(models.PasswordResetToken).filter(
         models.PasswordResetToken.used_at == None,
-        models.PasswordResetToken.expires_at > datetime.datetime.utcnow()
+        models.PasswordResetToken.expires_at > datetime.datetime.now(datetime.timezone.utc)
     ).all()
     
     matched_token = None
@@ -235,7 +235,7 @@ def reset_password(payload: ResetPasswordPayload, db: Session = Depends(get_db))
     validate_password_complexity(payload.new_password)
     user.hashed_password = bcrypt.hashpw(payload.new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     user.must_change_password = False
-    matched_token.used_at = datetime.datetime.utcnow()
+    matched_token.used_at = datetime.datetime.now(datetime.timezone.utc)
     db.commit()
     return {"status": "Password reset successfully"}
 

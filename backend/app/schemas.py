@@ -9,7 +9,7 @@ class PolicyIntentSubmission(BaseModel):
     l2_vni: int = Field(..., ge=10000, le=16777214, description="Layer 2 Virtual Network Identifier for localized segment encapsulation")
     vlan_id: int = Field(..., ge=2, le=4094, description="Access VLAN ID bound to interface maps")
     requested_cidr: str = Field(..., description="Target subnet range specification in CIDR geometry notation")
-    target_switch_serials: List[str] = Field(..., min_items=1)
+    target_switch_serials: List[str] = Field(..., min_length=1)
     dry_run: bool = False
 
     @field_validator("requested_cidr")

@@ -25,7 +25,7 @@ interface ConfigSnapshot {
   is_baseline?: boolean;
 }
 
-export const SwitchesNew: React.FC = () => {
+export const Switches: React.FC = () => {
   const { token, selectedTenant } = useAuth();
 
   // List state
@@ -794,4 +794,4 @@ export const SwitchesNew: React.FC = () => {
   );
 };
 
-export default SwitchesNew;
+export default Switches;

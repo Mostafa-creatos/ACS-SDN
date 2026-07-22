@@ -117,6 +117,16 @@ def migrate_db_columns(engine):
                 if "last_flapped" not in iface_cols:
                     conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN last_flapped TIMESTAMP DEFAULT NULL"))
 
+    # Migration: Drop FabricBlueprint (removed in Sprint 5)
+    if "fabrics" in inspector.get_table_names():
+        fab_cols = [c["name"] for c in inspector.get_columns("fabrics")]
+        with engine.begin() as conn:
+            if "blueprint_id" in fab_cols:
+                conn.execute(text("ALTER TABLE fabrics DROP COLUMN blueprint_id"))
+    if "fabric_blueprints" in inspector.get_table_names():
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE fabric_blueprints"))
+
 # Ensure database tables exist on application startup (convenient local bootstrapping)
 @app.on_event("startup")
 def startup_db_configure():
@@ -124,299 +134,10 @@ def startup_db_configure():
     Base.metadata.create_all(bind=engine)
     migrate_db_columns(engine)
 
-    
-    # Seed default developer records if database is empty
-    db = SessionLocal()
-    try:
-        # 1. Seed tenant, fabric, and blueprint if empty
-        if db.query(models.Tenant).count() == 0:
-            print("[SDN SEED] Seeding default tenant, fabric, and blueprint...")
-            # 1. Tenant
-            tenant = models.Tenant(
-                tenant_id=uuid.UUID("11111111-1111-1111-1111-11111111111a"),
-                tenant_name="Acme-Enterprise"
-            )
-            db.add(tenant)
-            
-            # 2. Fabric Blueprint
-            blueprint = models.FabricBlueprint(
-                blueprint_id=uuid.UUID("22222222-2222-2222-2222-22222222222b"),
-                name="L3-Leaf-Spine-Dev",
-                underlay_p2p_cidr="10.100.0.0/16",
-                loopback_cidr="10.200.0.0/16",
-                vtep_cidr="10.250.0.0/16",
-                system_mtu=9216
-            )
-            db.add(blueprint)
-            db.flush()
-            
-            # 3. Fabric
-            fabric = models.Fabric(
-                fabric_id=uuid.UUID("33333333-3333-3333-3333-33333333333c"),
-                fabric_name="DataCenter-East", 
-                blueprint_id=blueprint.blueprint_id, 
-                global_bgp_asn=65000
-            )
-            db.add(fabric)
-            db.commit()
-            print("[SDN SEED] Default tenant and fabric seeding completed.")
-
-        # 2. Seed detailed multi-vendor switches if missing
-        if db.query(models.Switch).filter(models.Switch.hostname == "AWM-CAS-AGG-SW02").count() == 0:
-            print("[SDN SEED] Seeding detailed multi-vendor inventory switches...")
-            # Find active fabric ID
-            fabric = db.query(models.Fabric).filter(models.Fabric.fabric_name == "DataCenter-East").first()
-            fabric_id = fabric.fabric_id if fabric else uuid.UUID("33333333-3333-3333-3333-33333333333c")
-
-            # 4. Switches (Seeding the Dell Spines and Nokia Leafs + detailed inventory switches)
-            spine1 = models.Switch(
-                switch_id=uuid.uuid4(),
-                fabric_id=fabric_id,
-                hostname="spine-01",
-                management_ip="172.20.20.10",
-                vendor="dell_os10",
-                role="spine",
-                local_bgp_asn=65000,
-                loopback_0_ip="10.200.1.10",
-                vtep_ip="10.250.1.10",
-                lifecycle_status="compliant_active",
-                model="S5248F-ON",
-                os_version="10.5.2.0",
-                location="Casablanca, Morocco",
-                serial_number="SN-DELL-SPINE1",
-                service_tag="6KH8XZ2",
-                part_number="S5248F-ON",
-                ppid="TW-0GKK8W-28298-713-0026",
-                express_service_code="909 144 413 2",
-                management_mac="90:B1:1C:F4:A5:8C",
-                os10_license_status="Licensed",
-                temperature="Normal",
-                device_type="Router",
-                os_type="OS10",
-                client_tenant="Acme-Enterprise",
-                ports_up=8,
-                ports_all=48,
-                chassis_status="Ready"
-            )
-            spine2 = models.Switch(
-                switch_id=uuid.uuid4(),
-                fabric_id=fabric_id,
-                hostname="spine-02",
-                management_ip="172.20.20.13",
-                vendor="dell_os10",
-                role="spine",
-                local_bgp_asn=65000,
-                loopback_0_ip="10.200.1.13",
-                vtep_ip="10.250.1.13",
-                lifecycle_status="compliant_active",
-                model="S5248F-ON",
-                os_version="10.5.2.0",
-                location="Casablanca, Morocco",
-                serial_number="SN-DELL-SPINE2",
-                service_tag="7PI8Z3K",
-                part_number="S5248F-ON",
-                ppid="TW-0GKK8W-28298-713-0027",
-                express_service_code="909 144 413 3",
-                management_mac="90:B1:1C:F4:A5:8D",
-                os10_license_status="Licensed",
-                temperature="Normal",
-                device_type="Router",
-                os_type="OS10",
-                client_tenant="Acme-Enterprise",
-                ports_up=8,
-                ports_all=48,
-                chassis_status="Ready"
-            )
-            leaf1 = models.Switch(
-                switch_id=uuid.uuid4(),
-                fabric_id=fabric_id,
-                hostname="leaf-01",
-                management_ip="172.20.20.11",
-                vendor="nokia",
-                role="leaf",
-                local_bgp_asn=65001,
-                loopback_0_ip="10.200.1.11",
-                vtep_ip="10.250.1.11",
-                lifecycle_status="compliant_active",
-                model="7220 IXR-D2",
-                os_version="23.10.1",
-                location="Casablanca, Morocco",
-                serial_number="SN-NOKIA-LEAF1",
-                device_type="Switch",
-                os_type="SR-Linux",
-                client_tenant="Acme-Enterprise",
-                ports_up=16,
-                ports_all=32,
-                chassis_status="Ready"
-            )
-            leaf2 = models.Switch(
-                switch_id=uuid.uuid4(),
-                fabric_id=fabric_id,
-                hostname="leaf-02",
-                management_ip="172.20.20.12",
-                vendor="nokia",
-                role="leaf",
-                local_bgp_asn=65002,
-                loopback_0_ip="10.200.1.12",
-                vtep_ip="10.250.1.12",
-                lifecycle_status="compliant_active",
-                model="7220 IXR-D2",
-                os_version="23.10.1",
-                location="Rabat, Morocco",
-                serial_number="SN-NOKIA-LEAF2",
-                device_type="Switch",
-                os_type="SR-Linux",
-                client_tenant="Acme-Enterprise",
-                ports_up=16,
-                ports_all=32,
-                chassis_status="Ready"
-            )
-            leaf3 = models.Switch(
-                switch_id=uuid.uuid4(),
-                fabric_id=fabric_id,
-                hostname="leaf-03",
-                management_ip="172.20.20.14",
-                vendor="nokia",
-                role="leaf",
-                local_bgp_asn=65003,
-                loopback_0_ip="10.200.1.14",
-                vtep_ip="10.250.1.14",
-                lifecycle_status="compliant_active",
-                model="7220 IXR-D2",
-                os_version="23.10.1",
-                location="Casablanca, Morocco",
-                serial_number="SN-NOKIA-LEAF3",
-                device_type="Switch",
-                os_type="SR-Linux",
-                client_tenant="Acme-Enterprise",
-                ports_up=16,
-                ports_all=32,
-                chassis_status="Ready"
-            )
-            leaf4 = models.Switch(
-                switch_id=uuid.uuid4(),
-                fabric_id=fabric_id,
-                hostname="leaf-04",
-                management_ip="172.20.20.15",
-                vendor="nokia",
-                role="leaf",
-                local_bgp_asn=65004,
-                loopback_0_ip="10.200.1.15",
-                vtep_ip="10.250.1.15",
-                lifecycle_status="compliant_active",
-                model="7220 IXR-D2",
-                os_version="23.10.1",
-                location="Agadir, Morocco",
-                serial_number="SN-NOKIA-LEAF4",
-                device_type="Switch",
-                os_type="SR-Linux",
-                client_tenant="Acme-Enterprise",
-                ports_up=16,
-                ports_all=32,
-                chassis_status="Ready"
-            )
-            leaf5 = models.Switch(
-                switch_id=uuid.uuid4(),
-                fabric_id=fabric_id,
-                hostname="leaf-05",
-                management_ip="172.20.20.16",
-                vendor="nokia",
-                role="leaf",
-                local_bgp_asn=65005,
-                loopback_0_ip="10.200.1.16",
-                vtep_ip="10.250.1.16",
-                lifecycle_status="compliant_active",
-                model="7220 IXR-D2",
-                os_version="23.10.1",
-                location="Rabat, Morocco",
-                serial_number="SN-NOKIA-LEAF5",
-                device_type="Switch",
-                os_type="SR-Linux",
-                client_tenant="Acme-Enterprise",
-                ports_up=16,
-                ports_all=32,
-                chassis_status="Ready"
-            )
-            leaf6 = models.Switch(
-                switch_id=uuid.uuid4(),
-                fabric_id=fabric_id,
-                hostname="leaf-06",
-                management_ip="172.20.20.17",
-                vendor="nokia",
-                role="leaf",
-                local_bgp_asn=65006,
-                loopback_0_ip="10.200.1.17",
-                vtep_ip="10.250.1.17",
-                lifecycle_status="compliant_active",
-                model="7220 IXR-D2",
-                os_version="23.10.1",
-                location="Tangier, Morocco",
-                serial_number="SN-NOKIA-LEAF6",
-                device_type="Switch",
-                os_type="SR-Linux",
-                client_tenant="Acme-Enterprise",
-                ports_up=16,
-                ports_all=32,
-                chassis_status="Ready"
-            )
-
-            db.add(spine1)
-            db.add(spine2)
-            db.add(leaf1)
-            db.add(leaf2)
-            db.add(leaf3)
-            db.add(leaf4)
-            db.add(leaf5)
-            db.add(leaf6)
-            db.commit()
-            print("[SDN SEED] Seeding completed. Tenant ID: 11111111-1111-1111-1111-11111111111a available.")
-
-
-        if db.query(models.User).count() == 0:
-            print("[SDN SEED] Seeding default users (admin, operator, auditor)...")
-            import secrets
-            admin_pwd_str = os.getenv("SEED_ADMIN_PASSWORD", secrets.token_urlsafe(24))
-            operator_pwd_str = os.getenv("SEED_OPERATOR_PASSWORD", secrets.token_urlsafe(24))
-            auditor_pwd_str = os.getenv("SEED_AUDITOR_PASSWORD", secrets.token_urlsafe(24))
-            admin_pwd = bcrypt.hashpw(admin_pwd_str.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            operator_pwd = bcrypt.hashpw(operator_pwd_str.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-            auditor_pwd = bcrypt.hashpw(auditor_pwd_str.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-            # Try to get the Acme-Enterprise tenant
-            acme_tenant = db.query(models.Tenant).filter(models.Tenant.tenant_name == "Acme-Enterprise").first()
-            acme_tenant_id = acme_tenant.tenant_id if acme_tenant else uuid.UUID("11111111-1111-1111-1111-11111111111a")
-
-            admin_user = models.User(
-                username="admin",
-                hashed_password=admin_pwd,
-                role="Platform Admin",
-                tenant_id=None
-            )
-            operator_user = models.User(
-                username="operator",
-                hashed_password=operator_pwd,
-                role="Tenant Operator",
-                tenant_id=acme_tenant_id
-            )
-            auditor_user = models.User(
-                username="auditor",
-                hashed_password=auditor_pwd,
-                role="Tenant Auditor",
-                tenant_id=acme_tenant_id
-            )
-            db.add(admin_user)
-            db.add(operator_user)
-            db.add(auditor_user)
-            db.commit()
-            print(f"[SDN SEED] Users seeding completed.")
-            print(f"[SDN SEED] Generated admin password: {admin_pwd_str}")
-            print(f"[SDN SEED] Generated operator password: {operator_pwd_str}")
-            print(f"[SDN SEED] Generated auditor password: {auditor_pwd_str}")
-    except Exception as e:
-        db.rollback()
-        print(f"[SDN SEED] Failed to seed database: {e}")
-    finally:
-        db.close()
+    # Seed database only when SEED_ON_STARTUP=true (dev/demo environments)
+    if os.getenv("SEED_ON_STARTUP", "false").lower() == "true":
+        from .scripts.seed_database import seed_all
+        seed_all()
 
 
 @app.on_event("startup")
@@ -426,6 +147,14 @@ async def start_gnmi_discovery_background():
     print("[gNMI STARTUP] Initiating background topology discovery and telemetry loops...")
     asyncio.create_task(start_periodic_discovery_loop(30))
     asyncio.create_task(start_periodic_telemetry_loop(10))
+
+
+@app.get("/api/v5/")
+@app.get("/api/v5")
+@app.head("/api/v5/")
+@app.head("/api/v5")
+def api_v5_root():
+    return {"status": "ok", "message": "Enterprise SDN API Gateway"}
 
 
 def resolve_southbound_driver(vendor: str):
@@ -1422,7 +1151,7 @@ def accept_switch_drift(
     snapshot = models.ConfigSnapshot(
         snapshot_id=uuid.uuid4(),
         switch_id=sw_uuid,
-        taken_at=datetime.datetime.utcnow(),
+        taken_at=datetime.datetime.now(datetime.timezone.utc),
         raw_config=raw_config,
         config_hash=config_hash,
         is_baseline=True,
@@ -1839,13 +1568,7 @@ async def push_switch_config(
                 continue
             try:
                 driver = resolve_southbound_driver(switch.vendor)
-                loop = asyncio.new_event_loop()
-                try:
-                    result = loop.run_until_complete(
-                        driver.validate_candidate(switch.management_ip, "admin", "admin", payload.config_payload)
-                    )
-                finally:
-                    loop.close()
+                result = await driver.validate_candidate(switch.management_ip, "admin", "admin", payload.config_payload)
                 diffs.append({
                     "switch_id": sid,
                     "hostname": switch.hostname,

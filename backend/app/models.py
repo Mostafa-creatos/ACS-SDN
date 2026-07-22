@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, Boolean, Float, BigInteger, UniqueConstraint, Text
 from sqlalchemy.dialects.postgresql import UUID, JSON
 from sqlalchemy.orm import relationship
@@ -10,34 +10,19 @@ class Tenant(Base):
 
     tenant_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_name = Column(String(100), nullable=False, unique=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     vrfs = relationship("TenantVrf", back_populates="tenant", cascade="all, delete-orphan")
-
-class FabricBlueprint(Base):
-    __tablename__ = "fabric_blueprints"
-
-    blueprint_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(100), nullable=False, unique=True)
-    underlay_p2p_cidr = Column(String(45), nullable=False)
-    loopback_cidr = Column(String(45), nullable=False)
-    vtep_cidr = Column(String(45), nullable=False)
-    system_mtu = Column(Integer, default=9216)
-
-    # Relationships
-    fabrics = relationship("Fabric", back_populates="blueprint")
 
 class Fabric(Base):
     __tablename__ = "fabrics"
 
     fabric_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     fabric_name = Column(String(100), nullable=False, unique=True)
-    blueprint_id = Column(UUID(as_uuid=True), ForeignKey("fabric_blueprints.blueprint_id", ondelete="RESTRICT"))
     global_bgp_asn = Column(Integer, nullable=False)
 
     # Relationships
-    blueprint = relationship("FabricBlueprint", back_populates="fabrics")
     switches = relationship("Switch", back_populates="fabric", cascade="all, delete-orphan")
     subnets = relationship("IpamSubnet", back_populates="fabric", cascade="all, delete-orphan")
 
@@ -51,8 +36,8 @@ class ZtpDiscoveryPool(Base):
     hardware_model = Column(String(64), nullable=False)
     current_dhcp_ip = Column(String(45), nullable=False)
     base_os_version = Column(String(32), nullable=False)
-    first_seen = Column(DateTime, default=datetime.utcnow)
-    last_boot_request = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    first_seen = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_boot_request = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     onboarding_status = Column(String(32), default="pending")  # 'pending', 'provisioned', 'failed'
     error_message = Column(String, nullable=True)
 
@@ -158,7 +143,7 @@ class HardwareComponent(Base):
     status = Column(String(16), default="ok")             # 'ok', 'warning', 'critical', 'absent'
     detail = Column(String(255), default="")
     numeric_value = Column(Float, nullable=True)          # For sensors (RPM, °C, watts)
-    discovered_at = Column(DateTime, default=datetime.utcnow)
+    discovered_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     switch = relationship("Switch", back_populates="hardware_components")
 
@@ -257,7 +242,7 @@ class IpamIpAllocation(Base):
     ip_address = Column(String(45), nullable=False)
     assignment_type = Column(String(64), default="static_assigned")  # 'static_assigned', 'leased_dhcp', etc.
     bound_entity_id = Column(String(255), nullable=False)
-    allocated_at = Column(DateTime, default=datetime.utcnow)
+    allocated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     subnet = relationship("IpamSubnet", back_populates="allocations")
@@ -270,7 +255,7 @@ class TopologyNode(Base):
     hostname = Column(String(255), nullable=False, unique=True)
     role = Column(String(64), nullable=False)  # 'spine', 'leaf'
     fabric_id = Column(UUID(as_uuid=True), ForeignKey("fabrics.fabric_id", ondelete="CASCADE"), nullable=True)
-    last_seen = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_seen = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
     switch = relationship("Switch")
@@ -288,7 +273,7 @@ class TopologyEdge(Base):
     remote_port = Column(String(100), nullable=False)
     protocol = Column(String(64), default="LLDP")        # 'LLDP', 'BGP'
     state = Column(String(32), default="up")             # 'up', 'down'
-    last_seen = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_seen = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 class DiscoveredEndpoint(Base):
     __tablename__ = "discovered_endpoints"
@@ -302,8 +287,8 @@ class DiscoveredEndpoint(Base):
     vlan_id = Column(Integer, nullable=True)
     switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="CASCADE"), nullable=True)
     port = Column(String(100), nullable=True)
-    first_seen = Column(DateTime, default=datetime.utcnow)
-    last_seen = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    first_seen = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_seen = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     switch = relationship("Switch")
 
@@ -312,7 +297,7 @@ class ConfigSnapshot(Base):
 
     snapshot_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="CASCADE"))
-    taken_at = Column(DateTime, default=datetime.utcnow)
+    taken_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     raw_config = Column(String, nullable=False)
     config_hash = Column(String(64), nullable=False)
     is_baseline = Column(Boolean, default=False)
@@ -326,7 +311,7 @@ class ComplianceRun(Base):
     run_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     fabric_id = Column(UUID(as_uuid=True), ForeignKey("fabrics.fabric_id", ondelete="CASCADE"), nullable=True)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=True)
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     status = Column(String(64), default="running")       # 'running', 'completed', 'failed'
     summary = Column(String, nullable=True)              # JSON string summarizing compliance metrics
 
@@ -365,7 +350,7 @@ class TelemetryMetric(Base):
     switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="CASCADE"))
     metric_name = Column(String(255), nullable=False)
     metric_value = Column(String(255), nullable=False)   # stored as string to support both numeric and state values
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     switch = relationship("Switch")
 
@@ -422,7 +407,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     audit_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id", ondelete="SET NULL"), nullable=True)
     action = Column(String(255), nullable=False)
@@ -447,7 +432,7 @@ class PolicyApproval(Base):
     target_switch_serials = Column(String, nullable=False)  # Comma-separated list of hostnames
     blast_radius = Column(Integer, nullable=False)
     status = Column(String(32), default="pending")  # 'pending', 'approved', 'rejected'
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     diff_payload = Column(String, nullable=True)
 
     tenant = relationship("Tenant")
@@ -465,6 +450,6 @@ class SwitchSTPState(Base):
     is_root_bridge = Column(Boolean, default=False)
     port_states = Column(JSON, default=list) # [{port, role, state}, ...]
     raw_output = Column(Text, default="")
-    collected_at = Column(DateTime, default=datetime.utcnow)
+    collected_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     switch = relationship("Switch", back_populates="stp_state")

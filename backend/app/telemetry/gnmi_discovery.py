@@ -196,7 +196,7 @@ def discover_dell_switch(sw, db: Session):
         
         # 2. Update status and sync time
         sw.status = "Up"
-        sw.last_successful_sync = datetime.datetime.utcnow()
+        sw.last_successful_sync = datetime.datetime.now(datetime.timezone.utc)
         
         # 3. Store raw config and check for configuration drift
         if running_config:
@@ -350,7 +350,7 @@ def discover_dell_switch(sw, db: Session):
                     existing.is_root_bridge = stp.get("root_bridge", False)
                     existing.bridge_priority = stp.get("bridge_priority", 32768)
                     existing.port_states = stp.get("port_states", [])
-                    existing.collected_at = datetime.datetime.utcnow()
+                    existing.collected_at = datetime.datetime.now(datetime.timezone.utc)
                 else:
                     db.add(models.SwitchSTPState(
                         switch_id=sw.switch_id,
@@ -360,7 +360,7 @@ def discover_dell_switch(sw, db: Session):
                         bridge_priority=stp.get("bridge_priority", 32768),
                         is_root_bridge=stp.get("root_bridge", False),
                         port_states=stp.get("port_states", []),
-                        collected_at=datetime.datetime.utcnow()
+                        collected_at=datetime.datetime.now(datetime.timezone.utc)
                      ))
                 db.commit()
             except Exception as stp_err:
@@ -492,7 +492,7 @@ def discover_nokia_switch(sw, db: Session):
             sw.ports_all = ports_all
             sw.ports_up = ports_up
             sw.status = "Up"
-            sw.last_successful_sync = datetime.datetime.utcnow()
+            sw.last_successful_sync = datetime.datetime.now(datetime.timezone.utc)
             db.commit()
 
             # Query network-instance MACvrf STP state
@@ -526,7 +526,7 @@ def discover_nokia_switch(sw, db: Session):
                         existing.is_root_bridge = False
                         existing.bridge_priority = bridge_priority
                         existing.port_states = port_states
-                        existing.collected_at = datetime.datetime.utcnow()
+                        existing.collected_at = datetime.datetime.now(datetime.timezone.utc)
                     else:
                         db.add(models.SwitchSTPState(
                             switch_id=sw.switch_id,
@@ -536,7 +536,7 @@ def discover_nokia_switch(sw, db: Session):
                             bridge_priority=bridge_priority,
                             is_root_bridge=False,
                             port_states=port_states,
-                            collected_at=datetime.datetime.utcnow()
+                            collected_at=datetime.datetime.now(datetime.timezone.utc)
                         ))
                     db.commit()
             except Exception as stp_ex:
@@ -705,7 +705,7 @@ def run_gnmi_discovery(db: Session):
             node.switch_id = sw.switch_id
             node.role = sw.role
             node.fabric_id = sw.fabric_id
-            node.last_seen = datetime.datetime.utcnow()
+            node.last_seen = datetime.datetime.now(datetime.timezone.utc)
     
     db.commit()
     
@@ -884,7 +884,7 @@ def run_gnmi_discovery(db: Session):
                 db.add(edge)
             else:
                 edge.state = "up"
-                edge.last_seen = datetime.datetime.utcnow()
+                edge.last_seen = datetime.datetime.now(datetime.timezone.utc)
 
     # Mark edges as down if they were not seen in this discovery run
     all_edges = db.query(models.TopologyEdge).all()

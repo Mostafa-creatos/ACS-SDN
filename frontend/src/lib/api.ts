@@ -40,20 +40,6 @@ const tryRefreshToken = async (): Promise<string | null> => {
     }
 };
 
-export const getValidToken = async (): Promise<string | null> => {
-    let token = localStorage.getItem('atlas_jwt');
-    if (token && isTokenExpired(token)) {
-        token = await tryRefreshToken();
-        if (!token) {
-            localStorage.removeItem('atlas_jwt');
-            localStorage.removeItem('atlas_refresh');
-            window.location.href = '/login';
-            return null;
-        }
-    }
-    return token;
-};
-
 const getHeaders = () => {
     const headers: Record<string, string> = {
         'Authorization': `Bearer ${localStorage.getItem('atlas_jwt')}`,
@@ -100,15 +86,6 @@ export const deactivateUser = async (id: string): Promise<void> => {
     if (!res.ok) throw new Error('Failed to deactivate user');
 };
 
-export const grantTenantAccess = async (userId: string, tenantId: string, role: string): Promise<void> => {
-    const res = await fetch(`/api/v5/users/${userId}/tenants`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ tenant_id: tenantId, role })
-    });
-    if (!res.ok) throw new Error('Failed to grant tenant access');
-};
-
 export const revokeTenantAccess = async (userId: string, tenantId: string): Promise<void> => {
     const res = await fetch(`/api/v5/users/${userId}/tenants/${tenantId}`, {
         method: 'DELETE',
@@ -150,28 +127,6 @@ export const deleteTenant = async (tenantId: string): Promise<void> => {
     if (!res.ok) throw new Error('Failed to delete tenant');
 };
 
-export interface VrfCreate {
-    tenant_id: string;
-    vrf_name: string;
-    layer3_vni: number;
-    route_distinguisher?: string;
-    route_target?: string;
-}
-
-export interface VrfUpdate {
-    layer3_vni?: number;
-    route_distinguisher?: string;
-    route_target?: string;
-}
-
-export interface SubnetCreate {
-    fabric_id: string;
-    vlan_id: number;
-    layer2_vni: number;
-    subnet_cidr: string;
-    anycast_gateway_ip: string;
-}
-
 export const fetchFabrics = async (): Promise<any[]> => {
     const res = await fetch('/api/v5/admin/fabrics', { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch fabrics');
@@ -185,7 +140,7 @@ export const fetchVrfs = async (tenantId?: string): Promise<any[]> => {
     return res.json();
 };
 
-export const createVrf = async (data: VrfCreate): Promise<any> => {
+export const createVrf = async (data: Record<string, unknown>): Promise<any> => {
     const res = await fetch('/api/v5/admin/vrfs', {
         method: 'POST',
         headers: getHeaders(),
@@ -198,7 +153,7 @@ export const createVrf = async (data: VrfCreate): Promise<any> => {
     return res.json();
 };
 
-export const updateVrf = async (vrfId: string, data: VrfUpdate): Promise<any> => {
+export const updateVrf = async (vrfId: string, data: Record<string, unknown>): Promise<any> => {
     const res = await fetch(`/api/v5/admin/vrfs/${vrfId}`, {
         method: 'PUT',
         headers: getHeaders(),
@@ -228,7 +183,7 @@ export const fetchSubnets = async (vrfId: string): Promise<any[]> => {
     return res.json();
 };
 
-export const createSubnet = async (vrfId: string, data: SubnetCreate): Promise<any> => {
+export const createSubnet = async (vrfId: string, data: Record<string, unknown>): Promise<any> => {
     const res = await fetch(`/api/v5/admin/vrfs/${vrfId}/subnets`, {
         method: 'POST',
         headers: getHeaders(),

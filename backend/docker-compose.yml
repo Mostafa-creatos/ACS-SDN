@@ -97,6 +97,11 @@ services:
       - REDIS_URL=redis://redis-master:6379/0
       - REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379;redis-sentinel-2:26379;redis-sentinel-3:26379
       - REDIS_SENTINEL_MASTER=mymaster
+      - SEED_ADMIN_PASSWORD=admin_password_123!
+      - SEED_OPERATOR_PASSWORD=operator_password_123!
+      - SEED_AUDITOR_PASSWORD=auditor_password_123!
+      - SEED_ON_STARTUP=true
+      - GNMI_DEFAULT_PASSWORD=NokiaSrl1!
     ports:
       - "8000:8000"
     depends_on:
@@ -118,6 +123,11 @@ services:
       - REDIS_URL=redis://redis-master:6379/0
       - REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379;redis-sentinel-2:26379;redis-sentinel-3:26379
       - REDIS_SENTINEL_MASTER=mymaster
+      - SEED_ADMIN_PASSWORD=admin_password_123!
+      - SEED_OPERATOR_PASSWORD=operator_password_123!
+      - SEED_AUDITOR_PASSWORD=auditor_password_123!
+      - SEED_ON_STARTUP=true
+      - GNMI_DEFAULT_PASSWORD=NokiaSrl1!
     depends_on:
       - db
       - redis-master

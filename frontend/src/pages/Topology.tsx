@@ -686,6 +686,13 @@ export const Topology: React.FC = () => {
           <RefreshCw className="w-6 h-6 animate-spin mr-2" />
           <span>Generating topology graph matrix...</span>
         </div>
+      ) : !loading && nodes.length === 0 ? (
+        <div className="flex-grow flex items-center justify-center text-slate-400 text-sm font-sans">
+          <div className="text-center space-y-2">
+            <p className="font-semibold">No topology data available</p>
+            <p className="text-xs text-slate-500">Run discovery to populate the graph.</p>
+          </div>
+        </div>
       ) : (
         <div ref={containerRef} className="flex-grow w-full h-full relative" />
       )}

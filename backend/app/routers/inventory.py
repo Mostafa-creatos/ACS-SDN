@@ -454,7 +454,7 @@ def update_switch(switch_id: uuid.UUID, payload: SwitchUpdate, db: Session = Dep
     if not sw:
         raise HTTPException(status_code=404, detail="Switch not found.")
         
-    update_data = payload.dict(exclude_unset=True)
+    update_data = payload.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(sw, key, value)
         
@@ -856,7 +856,7 @@ def collect_switch_snapshot(switch_id: uuid.UUID, db: Session = Depends(get_db),
     if not sw:
         raise HTTPException(status_code=404, detail="Switch not found.")
 
-    sw.last_collection_timestamp = datetime.datetime.utcnow()
+    sw.last_collection_timestamp = datetime.datetime.now(datetime.timezone.utc)
     sw.status = "Up"
 
     is_dell = sw.vendor.lower() in ("dell", "dell_os10")
@@ -965,3 +965,22 @@ def collect_switch_snapshot(switch_id: uuid.UUID, db: Session = Depends(get_db),
         "ports_up": sw.ports_up,
         "ports_all": sw.ports_all,
     }
+
+
+@router.post("/admin/switches/{switch_id}/provision", status_code=status.HTTP_202_ACCEPTED)
+def provision_switch(
+    switch_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("global:manage"))
+):
+    """
+    Manually trigger ZTP baseline provisioning for a switch.
+    """
+    sw = db.query(models.Switch).filter(models.Switch.switch_id == switch_id).first()
+    if not sw:
+        raise HTTPException(status_code=404, detail="Switch not found.")
+        
+    from app.workers.ztp_tasks import apply_baseline_template
+    apply_baseline_template.delay(str(switch_id))
+    
+    return {"status": "PROVISION_QUEUED", "message": f"Provisioning task queued for {sw.hostname}."}

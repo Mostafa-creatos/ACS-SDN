@@ -6,7 +6,7 @@ import { AppShell } from './components/AppShell';
 import { Login } from './pages/Login';
 import { Styleguide } from './pages/Styleguide';
 import { Dashboard } from './pages/Dashboard';
-import { SwitchesNew } from './pages/SwitchesNew';
+import { Switches } from './pages/Switches';
 import { Topology } from './pages/Topology';
 import { IPAM } from './pages/IPAM';
 import { Compliance } from './pages/Compliance';
@@ -64,7 +64,7 @@ export const App: React.FC = () => {
             >
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
-              <Route path="switches" element={<SwitchesNew />} />
+              <Route path="switches" element={<Switches />} />
               <Route path="stp" element={<STPPage />} />
               <Route path="reports" element={<ReportsPage />} />
               <Route path="topology" element={<Topology />} />

@@ -31,7 +31,7 @@ class GnmiTelemetryCollector:
                 # 1. Nokia Switch Ingestion (gNMI)
                 if sw.vendor.lower() == "nokia":
                     try:
-                        with gNMIclient(target=(sw.management_ip, 57400), username="admin", password=os.getenv("GNMI_DEFAULT_PASSWORD", ""), skip_verify=True, gnmi_timeout=2) as gc:
+                        with gNMIclient(target=(sw.management_ip, 57400), username="admin", password=os.getenv("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!"), skip_verify=True, gnmi_timeout=2) as gc:
                             data = gc.get(path=['/interface'])
                             
                             for notification in data.get('notification', []):
@@ -96,7 +96,7 @@ class GnmiTelemetryCollector:
                         switch_id=sw.switch_id,
                         metric_name=name,
                         metric_value=str(value),
-                        timestamp=datetime.datetime.utcnow()
+                        timestamp=datetime.datetime.now(datetime.timezone.utc)
                     )
                     db.add(metric_record)
             

@@ -15,7 +15,7 @@ security = HTTPBearer()
 logger = logging.getLogger(__name__)
 
 def create_access_token(user_id: str, role: str, tenant_id: str, tenants: list = None, jti: str = str(uuid.uuid4())) -> str:
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     payload = {
         "sub": str(user_id),
         "user_id": str(user_id),
