@@ -48,32 +48,74 @@ export const AppShell: React.FC = () => {
     navigate('/login');
   };
 
-  const navItems = [
+  // Gated access rules
+  const showApprovals = user?.role === 'Platform Admin' || user?.role === 'platform_admin';
+  const showUsersNav = user?.role === 'Platform Admin' || user?.role === 'platform_admin' || user?.role === 'Tenant Admin' || user?.role === 'tenant_admin';
+
+  // Grouped Navigation Definitions
+  const monitorItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
+    { name: 'Topology', path: '/topology', icon: Binary },
+    { name: 'Reports', path: '/reports', icon: FileSpreadsheet },
+  ];
+
+  const fabricItems = [
     { name: 'Switches', path: '/switches', icon: Network },
     { name: 'Spanning Tree (STP)', path: '/stp', icon: GitBranch },
-    { name: 'Reports', path: '/reports', icon: FileSpreadsheet },
-    { name: 'Topology', path: '/topology', icon: Binary },
-    { name: 'IP Management', path: '/ipam', icon: Network }, 
-    { name: 'Compliance', path: '/compliance', icon: ShieldCheck },
-    { name: 'Config Push', path: '/config-push', icon: Send },
     { name: 'ZTP Console', path: '/ztp', icon: PlugZap },
   ];
 
-  // Gated approvals page
-  const showApprovals = user?.role === 'Platform Admin' || user?.role === 'platform_admin';
-  const showUsersNav = user?.role === 'Platform Admin' || user?.role === 'platform_admin' || user?.role === 'Tenant Admin' || user?.role === 'tenant_admin';
+  const policyItems = [
+    { name: 'IP Management', path: '/ipam', icon: Network },
+    { name: 'Config Push', path: '/config-push', icon: Send },
+    { name: 'Compliance', path: '/compliance', icon: ShieldCheck },
+  ];
+
+  // Helper for rendering NavLink
+  const renderNavLink = (item: { name: string; path: string; icon: React.ComponentType<any>; badge?: string }) => {
+    const Icon = item.icon;
+    const isActive = location.pathname.startsWith(item.path);
+
+    return (
+      <NavLink
+        key={item.name}
+        to={item.path}
+        className={({ isActive: linkActive }) =>
+          `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
+            linkActive || isActive
+              ? 'bg-white/10 text-white font-semibold'
+              : 'text-slate-400 hover:bg-white/5 hover:text-white'
+          }`
+        }
+      >
+        {(isActive || location.pathname.startsWith(item.path)) && (
+          <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-atlas-teal" />
+        )}
+        <Icon className={`w-5 h-5 transition-colors ${isActive ? 'text-atlas-teal' : 'text-slate-400 group-hover:text-white'}`} />
+        {sidebarOpen && (
+          <span className="flex items-center justify-between w-full">
+            <span>{item.name}</span>
+            {item.badge && (
+              <span className="bg-atlas-coral text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                {item.badge}
+              </span>
+            )}
+          </span>
+        )}
+      </NavLink>
+    );
+  };
 
   return (
     <div className="min-h-screen flex bg-surface-light text-slate-800">
       
-      {/* 1. Sidebar (Fixed, Left, Dark) */}
+      {/* 1. Sidebar (Fixed, Left, Dark with grouped routes) */}
       <aside 
-        className={`fixed top-0 left-0 bottom-0 z-40 bg-sidebar-bg text-white transition-all duration-300 flex flex-col border-r border-atlas-lavender/10 ${
+        className={`fixed top-0 left-0 bottom-0 z-40 bg-sidebar-bg text-white transition-all duration-300 ease-in-out flex flex-col border-r border-atlas-lavender/10 ${
           sidebarOpen ? 'w-64' : 'w-20'
         }`}
       >
-        {/* Top: Logo icon ONLY to save space */}
+        {/* Top logo */}
         <div className="h-16 flex items-center justify-center border-b border-atlas-lavender/10">
           <Link to="/" className="flex items-center gap-3 px-4">
             <div className="w-9 h-9 flex items-center justify-center bg-gradient-to-br from-atlas-primary to-atlas-violet rounded-lg shadow-md font-bold text-lg font-display">
@@ -87,135 +129,61 @@ export const AppShell: React.FC = () => {
           </Link>
         </div>
 
-        {/* Sidebar Nav Navigation */}
-        <nav className="flex-1 px-3 py-6 space-y-1.5 overflow-y-auto">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = location.pathname.startsWith(item.path);
+        {/* Sidebar Nav Navigation with Category Subheaders */}
+        <nav className="flex-1 px-3 py-6 space-y-6 overflow-y-auto scrollbar-thin">
+          
+          {/* Operations / Monitoring */}
+          <div className="space-y-1">
+            {sidebarOpen && (
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 pb-1">
+                Operations
+              </div>
+            )}
+            {monitorItems.map(item => renderNavLink(item))}
+          </div>
 
-            return (
-              <NavLink
-                key={item.name}
-                to={item.path}
-                className={({ isActive: linkActive }) =>
-                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
-                    linkActive || isActive
-                      ? 'bg-white/10 text-white font-semibold'
-                      : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                  }`
-                }
-              >
-                {/* Left Teal Accent Bar for Active Link */}
-                {(isActive || location.pathname.startsWith(item.path)) && (
-                  <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-atlas-teal" />
-                )}
-                <Icon className={`w-5 h-5 transition-colors ${isActive ? 'text-atlas-teal' : 'text-slate-400 group-hover:text-white'}`} />
-                {sidebarOpen && <span>{item.name}</span>}
-              </NavLink>
-            );
-          })}
+          {/* Fabric Management */}
+          <div className="space-y-1">
+            {sidebarOpen && (
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 pb-1">
+                Fabric Management
+              </div>
+            )}
+            {fabricItems.map(item => renderNavLink(item))}
+          </div>
 
-          {/* Users & Access (Visible only to Tenant Admins & Platform Admins) */}
-          {showUsersNav && (
-            <NavLink
-              to="/users"
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
-                  isActive
-                    ? 'bg-white/10 text-white font-semibold'
-                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                }`
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-atlas-teal" />}
-                  <Users className={`w-5 h-5 ${isActive ? 'text-atlas-teal' : 'text-slate-400 group-hover:text-white'}`} />
-                  {sidebarOpen && <span>Users & Access</span>}
-                </>
+          {/* Policy & Deployments */}
+          <div className="space-y-1">
+            {sidebarOpen && (
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 pb-1">
+                Policy Engine
+              </div>
+            )}
+            {policyItems.map(item => renderNavLink(item))}
+          </div>
+
+          {/* Platform & Tenant Admin */}
+          {(showUsersNav || showApprovals) && (
+            <div className="space-y-1">
+              {sidebarOpen && (
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 pb-1">
+                  Platform Admin
+                </div>
               )}
-            </NavLink>
+              {showUsersNav && renderNavLink({ name: 'Users & Access', path: '/users', icon: Users })}
+              {(user?.role === 'Platform Admin' || user?.role === 'platform_admin') && renderNavLink({ name: 'Tenant Management', path: '/tenants', icon: Building2 })}
+              {showApprovals && renderNavLink({ name: 'Pending Approvals', path: '/pending-approvals', icon: FileCheck, badge: 'New' })}
+              {showApprovals && renderNavLink({ name: 'Audit Logs', path: '/audit-logs', icon: ScrollText })}
+            </div>
           )}
 
-          {/* Tenant Management (Visible only to Platform Admins) */}
-          {(user?.role === 'Platform Admin' || user?.role === 'platform_admin') && (
-            <NavLink
-              to="/tenants"
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
-                  isActive
-                    ? 'bg-white/10 text-white font-semibold'
-                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                }`
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-atlas-teal" />}
-                  <Building2 className={`w-5 h-5 ${isActive ? 'text-atlas-teal' : 'text-slate-400 group-hover:text-white'}`} />
-                  {sidebarOpen && <span>Tenant Management</span>}
-                </>
-              )}
-            </NavLink>
-          )}
-
-          {/* Pending Approvals (Visible only to Platform Admins) */}
-          {showApprovals && (
-            <NavLink
-              to="/pending-approvals"
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
-                  isActive
-                    ? 'bg-white/10 text-white font-semibold'
-                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                }`
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-atlas-teal" />}
-                  <FileCheck className={`w-5 h-5 ${isActive ? 'text-atlas-teal' : 'text-slate-400 group-hover:text-white'}`} />
-                  {sidebarOpen && (
-                    <span className="flex items-center justify-between w-full">
-                      <span>Pending Approvals</span>
-                      <span className="bg-atlas-coral text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                        New
-                      </span>
-                    </span>
-                  )}
-                </>
-              )}
-            </NavLink>
-          )}
-
-          {/* Audit Logs (Visible only to Platform Admins) */}
-          {showApprovals && (
-            <NavLink
-              to="/audit-logs"
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group relative ${
-                  isActive
-                    ? 'bg-white/10 text-white font-semibold'
-                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                }`
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-atlas-teal" />}
-                  <ScrollText className={`w-5 h-5 ${isActive ? 'text-atlas-teal' : 'text-slate-400 group-hover:text-white'}`} />
-                  {sidebarOpen && <span>Audit Logs</span>}
-                </>
-              )}
-            </NavLink>
-          )}
         </nav>
 
         {/* Sidebar Footer */}
         <div className="p-4 border-t border-atlas-lavender/10 flex items-center justify-between">
           <button 
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-1.5 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white transition-colors"
+            className="p-1.5 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white transition-colors duration-200"
             title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
           >
             <Menu className="w-5 h-5" />
@@ -231,7 +199,7 @@ export const AppShell: React.FC = () => {
 
       {/* Main Content Area Container */}
       <div 
-        className="flex-1 flex flex-col min-h-screen transition-all duration-300"
+        className="flex-1 flex flex-col min-h-screen transition-all duration-300 ease-in-out"
         style={{ paddingLeft: sidebarOpen ? '16rem' : '5rem' }}
       >
         
@@ -315,3 +283,4 @@ export const AppShell: React.FC = () => {
     </div>
   );
 };
+export default AppShell;

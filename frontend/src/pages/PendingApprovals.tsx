@@ -54,7 +54,7 @@ export const PendingApprovals: React.FC = () => {
   }, [token]);
 
   // Access check
-  if (user?.role !== 'Platform Admin') {
+  if (user?.role !== 'Platform Admin' && user?.role !== 'platform_admin') {
     return (
       <Card className="flex flex-col items-center justify-center p-12 text-center border-dashed border-2 min-h-[50vh]">
         <ShieldAlert className="w-16 h-16 text-rose-500 mb-4 stroke-[1.25]" />

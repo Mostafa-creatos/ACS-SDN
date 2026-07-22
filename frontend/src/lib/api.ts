@@ -13,13 +13,13 @@ const decodeJwt = (token: string): any => {
     }
 };
 
-const isTokenExpired = (token: string): boolean => {
+export const isTokenExpired = (token: string): boolean => {
     const decoded = decodeJwt(token);
     if (!decoded || !decoded.exp) return true;
     return Date.now() >= decoded.exp * 1000;
 };
 
-const tryRefreshToken = async (): Promise<string | null> => {
+export const tryRefreshToken = async (): Promise<string | null> => {
     const refreshToken = localStorage.getItem('atlas_refresh');
     if (!refreshToken) return null;
     try {

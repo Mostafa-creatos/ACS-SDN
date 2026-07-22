@@ -5,7 +5,6 @@ import {
   Send,
   Check,
   AlertTriangle,
-  FileText,
   History,
   ChevronDown,
   ShieldAlert,
@@ -16,8 +15,7 @@ import {
   List,
   CheckCircle2,
   AlertCircle,
-  Play,
-  Copy
+  Play
 } from 'lucide-react';
 
 interface SwitchItem {
@@ -113,7 +111,6 @@ export const ConfigPushPage: React.FC = () => {
   const [selectedSwitchIds, setSelectedSwitchIds] = useState<string[]>([]);
   const [configPayload, setConfigPayload] = useState('');
   const [loading, setLoading] = useState(false);
-  const [dryRun, setDryRun] = useState(true);
   const [switchDropdownOpen, setSwitchDropdownOpen] = useState(false);
 
   // Validation execution state (Step 3 stages)
@@ -325,7 +322,7 @@ export const ConfigPushPage: React.FC = () => {
         }
       }
     } catch (e: any) {
-      setValidationStages(prev => ({
+      setValidationStages(() => ({
         syntax: 'failed',
         boundary: 'failed',
         collision: 'failed',
@@ -1120,7 +1117,9 @@ export const ConfigPushPage: React.FC = () => {
                           h.status === 'pending' ? 'bg-amber-50 text-amber-600' :
                           'bg-slate-100 text-slate-500'
                         }`}>
-                          {h.status}
+                          {h.status === 'approved' ? 'pushed' :
+                           h.status === 'pending' ? 'waiting approval' :
+                           h.status}
                         </span>
                       </td>
                     </tr>
@@ -1134,6 +1133,4 @@ export const ConfigPushPage: React.FC = () => {
     </div>
   );
 };
-export default ConfigPushPage;
-
 export default ConfigPushPage;

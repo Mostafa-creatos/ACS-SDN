@@ -1585,6 +1585,23 @@ async def push_switch_config(
         return {"status": "DRY_RUN_COMPLETE", "diffs": diffs, "blast_radius": blast}
     else:
         from .workers.sync_tasks import sync_switch_config_task
+        
+        # Create approval record marked as approved for history tracking
+        approval = models.PolicyApproval(
+            tenant_id=uuid.UUID(claims.get("tenant_id")) if claims.get("tenant_id") else None,
+            vrf_name="config_push",
+            vlan_id=0,
+            layer2_vni=0,
+            layer3_vni=0,
+            requested_cidr="0.0.0.0/0",
+            target_switch_serials=",".join(payload.switch_ids),
+            blast_radius=blast["total_affected"],
+            status="approved",
+            diff_payload=payload.config_payload
+        )
+        db.add(approval)
+        db.commit()
+
         task_ids = []
         for sid in payload.switch_ids:
             task = sync_switch_config_task.delay(sid, payload.config_payload)

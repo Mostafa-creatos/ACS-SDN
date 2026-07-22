@@ -15,7 +15,7 @@ if ($BackendOnly) {
 
 # =============================================================================
 # sync_and_launch.ps1 — Sync local project to GCP VM and restart services
-# VM: alkhairplateforme@34.91.122.174
+# VM: alkhairplateforme@34.32.194.240
 # Remote path: ~/sdn-controller
 # =============================================================================
 
@@ -128,9 +128,9 @@ Write-Host "`n============================================" -ForegroundColor Mag
 Write-Host "  Deployment Complete!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Magenta
 Write-Host ""
-Write-Host "  Backend API:  https://34.91.122.174:8000/"  -ForegroundColor Cyan
-  Write-Host "  Swagger Docs: https://34.91.122.174:8000/docs" -ForegroundColor Cyan
-  Write-Host "  Frontend:     http://34.91.122.174:8080/"   -ForegroundColor Cyan
-  Write-Host "  Flower:       http://34.91.122.174:5555/ (admin/admin)" -ForegroundColor Cyan
+Write-Host "  Backend API:  https://34.32.194.240:8000/"  -ForegroundColor Cyan
+  Write-Host "  Swagger Docs: https://34.32.194.240:8000/docs" -ForegroundColor Cyan
+  Write-Host "  Frontend:     http://34.32.194.240:8080/"   -ForegroundColor Cyan
+  Write-Host "  Flower:       http://34.32.194.240:5555/ (admin/admin)" -ForegroundColor Cyan
 Write-Host ""
 Invoke-SSH "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | head -22"

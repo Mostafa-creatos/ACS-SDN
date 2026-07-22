@@ -9,6 +9,62 @@ from .dell_os10_collector import DellOS10Collector
 logger = logging.getLogger(__name__)
 
 
+def merge_os10_configs(running: str, candidate_payload: str) -> str:
+    """Helper to merge incremental candidate CLI payload into running configuration."""
+    def parse_to_dict(config_text: str):
+        blocks = {}
+        current_block = None
+        for line in config_text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped == "!":
+                continue
+            if line.startswith(" ") or line.startswith("\t"):
+                if current_block is not None:
+                    blocks[current_block].append(stripped)
+            else:
+                current_block = stripped
+                if current_block not in blocks:
+                    blocks[current_block] = []
+        return blocks
+
+    running_dict = parse_to_dict(running)
+    payload_dict = parse_to_dict(candidate_payload)
+
+    for block, sub_commands in payload_dict.items():
+        if block.startswith("no "):
+            target = block[3:]
+            running_dict.pop(target, None)
+            running_dict.pop(block, None)
+            continue
+            
+        if block not in running_dict:
+            running_dict[block] = sub_commands
+        else:
+            existing_subs = list(running_dict[block])
+            for sub in sub_commands:
+                if sub.startswith("no "):
+                    target_sub = sub[3:]
+                    existing_subs = [s for s in existing_subs if s != target_sub]
+                else:
+                    words = sub.split()
+                    prefix = words[0] if words else ""
+                    if prefix and prefix not in ["switchport", "ip", "no"]:
+                        existing_subs = [s for s in existing_subs if not s.startswith(prefix)]
+                    if sub not in existing_subs:
+                        existing_subs.append(sub)
+            running_dict[block] = existing_subs
+
+    merged_lines = []
+    for block, sub_commands in running_dict.items():
+        merged_lines.append(block)
+        for sub in sub_commands:
+            merged_lines.append(f" {sub}")
+        if sub_commands:
+            merged_lines.append("!")
+            
+    return "\n".join(merged_lines)
+
+
 class DellOS10Driver(SouthboundNetworkDriver):
     """
     Dell SmartFabric OS10 driver — config payload generation + live data collection.
@@ -89,8 +145,10 @@ class DellOS10Driver(SouthboundNetworkDriver):
                 port=5000,
                 use_ssh=False,
             ) as collector:
-                if not collector.connect():
-                    return {"success": False, "output": "Failed to connect to switch", "applied_config": ""}
+                try:
+                    collector.connect()
+                except Exception as e:
+                    return {"success": False, "output": f"Failed to connect to switch: {e}", "applied_config": ""}
                 try:
                     collector.send_command("terminal width 512")
                     collector.send_command("configure terminal")
@@ -121,12 +179,18 @@ class DellOS10Driver(SouthboundNetworkDriver):
                 port=5000,
                 use_ssh=False,
             ) as collector:
-                if not collector.connect():
-                    return {"diff": "", "validation_status": "connection_failed", "error_detail": "Failed to connect"}
+                try:
+                    collector.connect()
+                except Exception as e:
+                    return {"diff": "", "validation_status": "connection_failed", "error_detail": f"Failed to connect: {e}"}
                 try:
                     running_config = collector.collect_running_config()
-                    running_lines = running_config.splitlines(keepends=True)
-                    candidate_lines = candidate_config.splitlines(keepends=True)
+                    merged_candidate = merge_os10_configs(running_config, candidate_config)
+                    # Strip out all '!' separator lines and empty lines for a clean diff comparison
+                    running_clean = "\n".join([line for line in running_config.splitlines() if line.strip() != "!"])
+                    candidate_clean = "\n".join([line for line in merged_candidate.splitlines() if line.strip() != "!"])
+                    running_lines = running_clean.splitlines(keepends=True)
+                    candidate_lines = candidate_clean.splitlines(keepends=True)
                     diff = "".join(difflib.unified_diff(running_lines, candidate_lines, fromfile="running", tofile="candidate"))
                     return {"diff": diff, "validation_status": "diff_ready" if diff else "identical", "error_detail": ""}
                 except Exception as e:
