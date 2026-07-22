@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { fetchTenants, createTenant, deleteTenant, fetchFabrics, createFabric } from '../lib/api';
 import { Building2, Plus, Trash2, Network, Globe } from 'lucide-react';
-import { Card } from '../components/Card';
 
 export const TenantsPage: React.FC = () => {
     const { user } = useAuth();
