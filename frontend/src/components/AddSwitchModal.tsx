@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import type { DellSwitchDetails } from '../types/switch-types';
@@ -25,6 +25,7 @@ interface FormData {
   ports_up: number;
   ports_all: number;
   chassis_status: string;
+  fabric_id?: string;
 }
 
 interface Props {
@@ -56,12 +57,14 @@ const initialForm: FormData = {
   ports_up: 24,
   ports_all: 52,
   chassis_status: 'Ready',
+  fabric_id: '',
 };
 
 export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSwitch }) => {
   const { token } = useAuth();
   const isEdit = !!editSwitch;
 
+  const [fabrics, setFabrics] = useState<any[]>([]);
   const [form, setForm] = useState<FormData>(() => {
     if (editSwitch) {
       return {
@@ -86,6 +89,7 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
         ports_up: editSwitch.ports_up,
         ports_all: editSwitch.ports_all,
         chassis_status: editSwitch.chassis_status,
+        fabric_id: (editSwitch as any).fabric_id || '',
       };
     }
     return { ...initialForm, loopback_0_ip: `10.200.1.${Math.floor(Math.random() * 200 + 50)}` };
@@ -93,6 +97,25 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Fetch Fabrics on Modal Mount
+  useEffect(() => {
+    const loadFabrics = async () => {
+      try {
+        const res = await fetch('/api/v5/admin/fabrics', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          setFabrics(await res.json());
+        }
+      } catch (e) {
+        console.error('Failed to load fabrics', e);
+      }
+    };
+    if (open) {
+      loadFabrics();
+    }
+  }, [open, token]);
 
   if (!open) return null;
 
@@ -134,10 +157,13 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
         onSaved(editSwitch.switch_id);
       } else {
         // POST to create
+        const body: Record<string, any> = { ...form };
+        if (!body.fabric_id) delete body.fabric_id;
+
         const resp = await fetch('/api/v5/admin/switches', {
           method: 'POST',
           headers,
-          body: JSON.stringify(form),
+          body: JSON.stringify(body),
         });
         if (!resp.ok) {
           const err = await resp.json();
@@ -155,7 +181,7 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
   };
 
   const inputCls =
-    'w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-atlas-primary transition-colors text-slate-700';
+    'w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-atlas-primary transition-colors text-slate-700 font-sans';
   const labelCls = 'block text-[10px] font-bold text-slate-400 uppercase mb-1';
 
   return (
@@ -203,11 +229,10 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
               <div>
                 <label className={labelCls}>Vendor</label>
                 <select className={inputCls} value={form.vendor} onChange={e => set('vendor', e.target.value)}>
-                  <option value="dell">Dell</option>
+                  <option value="dell_os10">Dell OS10</option>
                   <option value="nokia">Nokia</option>
-                  <option value="cisco">Cisco</option>
                   <option value="arista">Arista</option>
-                  <option value="juniper">Juniper</option>
+                  <option value="cisco">Cisco</option>
                 </select>
               </div>
               <div>
@@ -216,7 +241,15 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
                   <option value="leaf">Leaf</option>
                   <option value="spine">Spine</option>
                   <option value="border">Border</option>
-                  <option value="super-spine">Super Spine</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelCls}>Fabric Context</label>
+                <select className={inputCls} value={form.fabric_id} onChange={e => set('fabric_id', e.target.value)}>
+                  <option value="">Default Fabric</option>
+                  {fabrics.map((f) => (
+                    <option key={f.fabric_id} value={f.fabric_id}>{f.fabric_name}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -224,17 +257,12 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
                 <input className={inputCls} placeholder="S5248F-ON"
                   value={form.model} onChange={e => set('model', e.target.value)} />
               </div>
-              <div>
-                <label className={labelCls}>OS Version</label>
-                <input className={inputCls} placeholder="SmartFabric OS10 10.5.6.1"
-                  value={form.os_version} onChange={e => set('os_version', e.target.value)} />
-              </div>
             </div>
           </div>
 
           {/* Network */}
           <div>
-            <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-3">Network</h4>
+            <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-3">Network & OS</h4>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className={labelCls}>Loopback0 IP</label>
@@ -252,15 +280,11 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
                   value={form.local_bgp_asn} onChange={e => set('local_bgp_asn', parseInt(e.target.value) || 65000)} />
               </div>
               <div>
-                <label className={labelCls}>Loopback0 IP</label>
                 <label className={labelCls}>OS Type</label>
                 <select className={inputCls} value={form.os_type} onChange={e => set('os_type', e.target.value)}>
                   <option value="OS10">OS10</option>
-                  <option value="FTOS">FTOS</option>
-                  <option value="NOS">NOS</option>
                   <option value="SRLinux">SR Linux</option>
                   <option value="EOS">EOS</option>
-                  <option value="IOS-XR">IOS-XR</option>
                 </select>
               </div>
             </div>
@@ -280,81 +304,16 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
                 <input className={inputCls} placeholder="ABC1234"
                   value={form.service_tag} onChange={e => set('service_tag', e.target.value)} />
               </div>
-              <div>
-                <label className={labelCls}>Part Number</label>
-                <input className={inputCls} placeholder="0GKK8W"
-                  value={form.part_number} onChange={e => set('part_number', e.target.value)} />
-              </div>
-              <div>
-                <label className={labelCls}>PPID</label>
-                <input className={inputCls} placeholder="TW-0GKK8W-..."
-                  value={form.ppid} onChange={e => set('ppid', e.target.value)} />
-              </div>
-              <div>
-                <label className={labelCls}>Management MAC</label>
-                <input className={inputCls} placeholder="00:11:22:33:44:55"
-                  value={form.management_mac} onChange={e => set('management_mac', e.target.value)} />
-              </div>
-            </div>
-          </div>
-
-          {/* Location & Tenant */}
-          <div>
-            <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-3">Location & Tenant</h4>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={labelCls}>Location</label>
-                <input className={inputCls} placeholder="Casablanca, Morocco"
-                  value={form.location} onChange={e => set('location', e.target.value)} />
-              </div>
-              <div>
-                <label className={labelCls}>Client / Tenant</label>
-                <input className={inputCls} placeholder="AtlasWave Maroc Demo"
-                  value={form.client_tenant} onChange={e => set('client_tenant', e.target.value)} />
-              </div>
-              <div>
-                <label className={labelCls}>Device Type</label>
-                <select className={inputCls} value={form.device_type} onChange={e => set('device_type', e.target.value)}>
-                  <option value="Switch">Switch</option>
-                  <option value="Router">Router</option>
-                  <option value="Firewall">Firewall</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelCls}>Chassis Status</label>
-                <select className={inputCls} value={form.chassis_status} onChange={e => set('chassis_status', e.target.value)}>
-                  <option value="Ready">Ready</option>
-                  <option value="Degraded">Degraded</option>
-                  <option value="Critical">Critical</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Ports */}
-          <div>
-            <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-3">Ports</h4>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={labelCls}>Ports Up</label>
-                <input className={inputCls} type="number" placeholder="24"
-                  value={form.ports_up} onChange={e => set('ports_up', parseInt(e.target.value) || 0)} />
-              </div>
-              <div>
-                <label className={labelCls}>Total Ports</label>
-                <input className={inputCls} type="number" placeholder="52"
-                  value={form.ports_all} onChange={e => set('ports_all', parseInt(e.target.value) || 0)} />
-              </div>
             </div>
           </div>
         </form>
 
         {/* Footer */}
-        <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-100 shrink-0">
-          <button type="button" onClick={onClose} className="btn-secondary text-xs px-5 py-2">
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-100 shrink-0 bg-slate-50/30">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 rounded-lg transition-colors">
             Cancel
           </button>
-          <button type="submit" onClick={handleSubmit} disabled={saving} className="btn-primary text-xs px-5 py-2">
+          <button type="submit" onClick={handleSubmit} disabled={saving} className="bg-atlas-primary hover:bg-atlas-primary/95 text-white px-5 py-2 rounded-lg font-semibold text-xs shadow-sm transition-all">
             {saving ? 'Saving...' : isEdit ? 'Update Switch' : 'Register Switch'}
           </button>
         </div>

@@ -18,6 +18,10 @@ class FabricResponse(BaseModel):
     fabric_name: str
     global_bgp_asn: int
 
+class FabricCreate(BaseModel):
+    fabric_name: str = Field(..., min_length=1)
+    global_bgp_asn: int = Field(..., ge=1, le=4294967295)
+
 class VrfResponse(BaseModel):
     vrf_id: str
     tenant_id: str
@@ -91,6 +95,32 @@ def list_fabrics(
         }
         for f in fabrics
     ]
+
+@router.post("/fabrics", response_model=FabricResponse, status_code=status.HTTP_201_CREATED)
+def create_fabric(
+    payload: FabricCreate,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("global:manage"))
+):
+    """Create a new Fabric infrastructure domain."""
+    # Check if a fabric with same name already exists
+    existing = db.query(models.Fabric).filter(models.Fabric.fabric_name == payload.fabric_name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Fabric '{payload.fabric_name}' already exists.")
+        
+    fabric = models.Fabric(
+        fabric_id=uuid.uuid4(),
+        fabric_name=payload.fabric_name,
+        global_bgp_asn=payload.global_bgp_asn
+    )
+    db.add(fabric)
+    db.commit()
+    db.refresh(fabric)
+    return {
+        "fabric_id": str(fabric.fabric_id),
+        "fabric_name": fabric.fabric_name,
+        "global_bgp_asn": fabric.global_bgp_asn
+    }
 
 @router.get("/vrfs", response_model=List[VrfResponse])
 def list_vrfs(

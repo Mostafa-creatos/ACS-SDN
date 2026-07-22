@@ -133,6 +133,19 @@ export const fetchFabrics = async (): Promise<any[]> => {
     return res.json();
 };
 
+export const createFabric = async (fabricName: string, globalBgpAsn: number): Promise<any> => {
+    const res = await fetch('/api/v5/admin/fabrics', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ fabric_name: fabricName, global_bgp_asn: globalBgpAsn })
+    });
+    if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(detail || 'Failed to create fabric');
+    }
+    return res.json();
+};
+
 export const fetchVrfs = async (tenantId?: string): Promise<any[]> => {
     const url = tenantId ? `/api/v5/admin/vrfs?tenant_id=${tenantId}` : '/api/v5/admin/vrfs';
     const res = await fetch(url, { headers: getHeaders() });

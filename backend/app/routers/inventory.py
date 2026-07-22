@@ -59,6 +59,7 @@ class SwitchCreate(BaseModel):
     part_number: Optional[str] = None
     ppid: Optional[str] = None
     management_mac: Optional[str] = None
+    fabric_id: Optional[str] = None
 
 class SwitchUpdate(BaseModel):
     hostname: Optional[str] = None
@@ -396,9 +397,12 @@ def get_switch_vlt(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: 
 @router.post("/admin/switches", status_code=status.HTTP_201_CREATED)
 def create_switch(payload: SwitchCreate, db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
         
-    # Get active fabric ID (bind to default DataCenter fabric)
-    fabric = db.query(models.Fabric).first()
-    fabric_id = fabric.fabric_id if fabric else uuid.UUID("33333333-3333-3333-3333-33333333333c")
+    if payload.fabric_id:
+        fabric_id = uuid.UUID(payload.fabric_id)
+    else:
+        # Get active fabric ID (bind to default DataCenter fabric)
+        fabric = db.query(models.Fabric).first()
+        fabric_id = fabric.fabric_id if fabric else uuid.UUID("33333333-3333-3333-3333-33333333333c")
     
     # Check if duplicate hostname exists
     existing = db.query(models.Switch).filter(models.Switch.hostname == payload.hostname).first()
