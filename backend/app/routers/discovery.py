@@ -139,3 +139,124 @@ async def get_discovery_pool(
         }
         for r in records
     ]
+
+
+@router.get("/pool/{discovery_id}/status", status_code=status.HTTP_200_OK)
+async def get_ztp_record_status(
+    discovery_id: str,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("inventory:read"))
+):
+    """Get full status details for a single ZTP discovery record."""
+    import uuid as _uuid
+    try:
+        did = _uuid.UUID(discovery_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid discovery_id format")
+
+    record = db.query(models.ZtpDiscoveryPool).filter(
+        models.ZtpDiscoveryPool.discovery_id == did
+    ).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Discovery record not found")
+
+    switch = db.query(models.Switch).filter(models.Switch.discovery_id == did).first()
+    latest_snapshot = None
+    if switch:
+        snap = db.query(models.ConfigSnapshot).filter(
+            models.ConfigSnapshot.switch_id == switch.switch_id
+        ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
+        if snap:
+            latest_snapshot = {
+                "snapshot_id": str(snap.snapshot_id),
+                "config_hash": snap.config_hash,
+                "is_baseline": snap.is_baseline,
+                "taken_by": snap.taken_by,
+                "taken_at": snap.taken_at.isoformat() if snap.taken_at else None
+            }
+
+    return {
+        "discovery_id": str(record.discovery_id),
+        "serial_number": record.serial_number,
+        "mac_address": record.mac_address,
+        "hardware_vendor": record.hardware_vendor,
+        "os_version": record.base_os_version,
+        "current_dhcp_ip": record.current_dhcp_ip,
+        "first_seen": record.first_seen.isoformat() if record.first_seen else None,
+        "onboarding_status": record.onboarding_status,
+        "error_message": record.error_message,
+        "switch": {
+            "switch_id": str(switch.switch_id) if switch else None,
+            "hostname": switch.hostname if switch else None,
+            "management_ip": switch.management_ip if switch else None,
+            "lifecycle_status": switch.lifecycle_status if switch else None,
+        } if switch else None,
+        "latest_snapshot": latest_snapshot
+    }
+
+
+@router.post("/pool/{discovery_id}/retry", status_code=status.HTTP_200_OK)
+async def retry_ztp_provisioning(
+    discovery_id: str,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("inventory:write"))
+):
+    """Retry provisioning for a failed ZTP discovery record."""
+    import uuid as _uuid
+    try:
+        did = _uuid.UUID(discovery_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid discovery_id format")
+
+    record = db.query(models.ZtpDiscoveryPool).filter(
+        models.ZtpDiscoveryPool.discovery_id == did
+    ).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Discovery record not found")
+
+    if record.onboarding_status != "failed":
+        raise HTTPException(status_code=400, detail="Can only retry failed records")
+
+    switch = db.query(models.Switch).filter(models.Switch.discovery_id == did).first()
+    if not switch:
+        raise HTTPException(status_code=404, detail="No switch associated with this discovery record")
+
+    record.onboarding_status = "pending"
+    record.error_message = None
+    switch.lifecycle_status = "discovered_raw"
+    db.commit()
+
+    apply_baseline_template.delay(str(switch.switch_id))
+
+    return {"status": "RETRY_QUEUED", "discovery_id": discovery_id, "switch_id": str(switch.switch_id)}
+
+
+@router.delete("/pool/{discovery_id}", status_code=status.HTTP_200_OK)
+async def remove_ztp_record(
+    discovery_id: str,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("global:manage"))
+):
+    """Remove a ZTP discovery record. Platform Admin only."""
+    import uuid as _uuid
+    try:
+        did = _uuid.UUID(discovery_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid discovery_id format")
+
+    record = db.query(models.ZtpDiscoveryPool).filter(
+        models.ZtpDiscoveryPool.discovery_id == did
+    ).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Discovery record not found")
+
+    # Soft-delete associated switch if exists
+    switch = db.query(models.Switch).filter(models.Switch.discovery_id == did).first()
+    if switch:
+        switch.discovery_id = None
+        db.commit()
+
+    db.delete(record)
+    db.commit()
+
+    return {"status": "REMOVED", "discovery_id": discovery_id}
