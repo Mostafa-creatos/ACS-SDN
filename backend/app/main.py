@@ -953,7 +953,10 @@ async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depen
                 status_map = LIFECYCLE_DRIFTED
             elif sw.status != "Up":
                 status_map = LIFECYCLE_DISCOVERED
-                
+            
+            fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == sw.fabric_id).first()
+            fabric_name = fabric.fabric_name if fabric else "Default Fabric"
+
             nodes_list.append({
                 "id": sw_id_str,
                 "label": sw.hostname,
@@ -962,7 +965,8 @@ async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depen
                 "role": sw.role,
                 "vendor": sw.vendor or "generic",
                 "model": sw.model or "C9300-48P",
-                "interfacesCount": sw.ports_all or 24
+                "interfacesCount": sw.ports_all or 24,
+                "fabric_name": fabric_name
             })
             
         edges = db.query(models.TopologyEdge).filter(models.TopologyEdge.state == "up").all()

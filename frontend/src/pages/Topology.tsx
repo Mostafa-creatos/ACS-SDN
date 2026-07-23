@@ -20,6 +20,7 @@ interface NodeData {
   model: string;
   vendor: string;
   interfacesCount: number;
+  fabric_name: string;
 }
 
 interface EdgeData {
@@ -223,13 +224,23 @@ export const Topology: React.FC = () => {
     });
 
     // Convert to Cytoscape elements
+    const uniqueFabrics = Array.from(new Set(activeNodes.map(n => n.fabric_name || 'Default Fabric')));
+
     const elements: cytoscape.ElementDefinition[] = [
+      // Parent Compound Nodes for Fabrics
+      ...uniqueFabrics.map(fabricName => ({
+        data: {
+          id: `fabric-${fabricName}`,
+          name: fabricName,
+          nodeType: 'fabric-group'
+        }
+      })),
       ...activeNodes.map(n => {
         let color = '#BAC0D8'; // discovered / raw
         if (n.status === 'compliant_active') color = '#42CCB2';
         else if (n.status === 'drifted') color = '#E26C48';
         else if (n.status === 'auditing') color = '#564EBD';
-
+ 
         let rawVendor = (n.vendor || '').toLowerCase();
         let vendor = '';
         if (rawVendor.includes('dell')) vendor = 'dell';
@@ -253,12 +264,13 @@ export const Topology: React.FC = () => {
           else if (nameLower.includes('forcepoint') || nameLower.includes('dlp')) vendor = 'forcepoint';
           else vendor = 'generic';
         }
-
+ 
         const vendorIcon = VENDOR_ICONS[vendor] || VENDOR_ICONS.generic;
-
+ 
         return {
           data: {
             id: n.id,
+            parent: `fabric-${n.fabric_name || 'Default Fabric'}`,
             label: n.role === 'spine' ? 'SP' : 'LF',
             name: n.label,
             color,
@@ -292,31 +304,36 @@ export const Topology: React.FC = () => {
         };
       }),
       // Endpoint host nodes (shown only when showEndpoints is enabled)
-      ...(showEndpoints ? endpoints.map(ep => ({
-        data: {
-          id: `host-${ep.endpoint_id}`,
-          label: ep.ip_address || ep.mac_address.slice(-8),
-          name: ep.ip_address || ep.mac_address.slice(-8),
-          mac: ep.mac_address,
-          ip: ep.ip_address,
-          vlan: ep.vlan_id,
-          port: ep.port,
-          parentSwitch: ep.switch_hostname,
-          nodeType: 'host',
-          color: '#16a34a',
-          icon: HOST_ICON,
-          raw: {
+      ...(showEndpoints ? endpoints.map(ep => {
+        const pSwitch = activeNodes.find(n => n.label === ep.switch_hostname || n.id === ep.switch_hostname);
+        const pFabric = pSwitch ? pSwitch.fabric_name : 'Default Fabric';
+        return {
+          data: {
             id: `host-${ep.endpoint_id}`,
+            parent: `fabric-${pFabric}`,
             label: ep.ip_address || ep.mac_address.slice(-8),
-            ip: ep.ip_address || '',
-            status: 'host',
-            role: 'host',
-            model: 'End Host',
-            vendor: 'linux',
-            interfacesCount: 1
+            name: ep.ip_address || ep.mac_address.slice(-8),
+            mac: ep.mac_address,
+            ip: ep.ip_address,
+            vlan: ep.vlan_id,
+            port: ep.port,
+            parentSwitch: ep.switch_hostname,
+            nodeType: 'host',
+            color: '#16a34a',
+            icon: HOST_ICON,
+            raw: {
+              id: `host-${ep.endpoint_id}`,
+              label: ep.ip_address || ep.mac_address.slice(-8),
+              ip: ep.ip_address || '',
+              status: 'host',
+              role: 'host',
+              model: 'End Host',
+              vendor: 'linux',
+              interfacesCount: 1
+            }
           }
-        }
-      })) : []),
+        };
+      }) : []),
       // Endpoint host edges (dashed lines to parent switch)
       ...(showEndpoints ? (() => {
         // Build hostname -> node ID map (topology nodes use UUID as ID but have hostname as label)
@@ -422,6 +439,27 @@ export const Topology: React.FC = () => {
             'text-background-color': '#0f172a',
             'text-background-padding': '3px',
             'text-background-shape': 'roundrectangle',
+          }
+        },
+        // Fabric group (Compound Nodes) styling
+        {
+          selector: 'node[nodeType = "fabric-group"]',
+          style: {
+            'shape': 'roundrectangle',
+            'background-color': '#475569',
+            'background-opacity': 0.08,
+            'border-width': '2px',
+            'border-color': '#64748b',
+            'border-style': 'dashed',
+            'label': 'data(name)',
+            'color': '#f8fafc',
+            'font-family': "'Sora', 'Inter', sans-serif",
+            'font-size': '11px',
+            'font-weight': 'bold',
+            'text-valign': 'top',
+            'text-margin-y': -8,
+            'text-halign': 'center',
+            'padding': 18
           }
         },
         // Host node style
