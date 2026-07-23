@@ -88,6 +88,7 @@ class SwitchUpdate(BaseModel):
     credentials_status: Optional[str] = None
     ports_up: Optional[int] = None
     ports_all: Optional[int] = None
+    fabric_id: Optional[str] = None
     chassis_status: Optional[str] = None
 
 
@@ -459,6 +460,12 @@ def update_switch(switch_id: uuid.UUID, payload: SwitchUpdate, db: Session = Dep
         raise HTTPException(status_code=404, detail="Switch not found.")
         
     update_data = payload.model_dump(exclude_unset=True)
+    if "fabric_id" in update_data:
+        if update_data["fabric_id"]:
+            update_data["fabric_id"] = uuid.UUID(update_data["fabric_id"])
+        else:
+            update_data["fabric_id"] = None
+
     for key, value in update_data.items():
         setattr(sw, key, value)
         
