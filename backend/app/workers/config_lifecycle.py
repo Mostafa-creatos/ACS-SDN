@@ -106,6 +106,9 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
     db.commit()
     db.refresh(run)
 
+    # Fetch active compliance rules
+    rules = db.query(models.ComplianceRule).filter(models.ComplianceRule.is_active == True).all()
+
     query = db.query(models.Switch)
     if fabric_id:
         query = query.filter(models.Switch.fabric_id == fabric_id)
@@ -116,117 +119,89 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
     findings_list = []
 
     for sw in switches:
-        # Get latest configuration snapshot or create one
-        snapshot = db.query(models.ConfigSnapshot).filter(
-            models.ConfigSnapshot.switch_id == sw.switch_id
-        ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
-        
-        if not snapshot:
+        # Load switch's associated fabric
+        fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == sw.fabric_id).first()
+
+        # Always pull a fresh live configuration snapshot during compliance audit
+        try:
             snapshot = take_config_snapshot(db, sw.switch_id, "compliance-auditor")
+        except Exception as e:
+            print(f"[COMPLIANCE] Failed to take live snapshot for {sw.hostname}, falling back to latest cache: {e}")
+            snapshot = db.query(models.ConfigSnapshot).filter(
+                models.ConfigSnapshot.switch_id == sw.switch_id
+            ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
 
-        config = snapshot.raw_config
-        
-        # Rule 1: NTP check
-        total_rules += 1
-        ntp_present = "ntp server 192.168.100.1" in config or "ntp" in config.lower()
-        if not ntp_present:
-            finding = models.ComplianceFinding(
-                finding_id=uuid.uuid4(),
-                compliance_run_id=run.run_id,
-                switch_id=sw.switch_id,
-                rule_name="NTP Service Configuration Check",
-                severity="warning",
-                detail="No NTP server configuration parsed in running config."
-            )
-            db.add(finding)
-            findings_list.append(finding)
+        if not snapshot:
+            # If absolutely no snapshot can be fetched or found, default to an empty config string
+            config = ""
         else:
-            passed_rules += 1
+            config = snapshot.raw_config or ""
 
-        # Rule 2: DNS check
-        total_rules += 1
-        dns_present = "name-server 8.8.8.8" in config or "dns" in config.lower()
-        if not dns_present:
-            finding = models.ComplianceFinding(
-                finding_id=uuid.uuid4(),
-                compliance_run_id=run.run_id,
-                switch_id=sw.switch_id,
-                rule_name="DNS Client Configuration Check",
-                severity="info",
-                detail="DNS server IP (8.8.8.8) is not defined."
-            )
-            db.add(finding)
-            findings_list.append(finding)
-        else:
-            passed_rules += 1
+        # Interpolation context dictionary
+        context = {
+            "fabric.expected_ntp_servers": fabric.expected_ntp_servers if fabric and fabric.expected_ntp_servers else "192.168.100.1",
+            "fabric.expected_dns_servers": fabric.expected_dns_servers if fabric and fabric.expected_dns_servers else "8.8.8.8",
+            "fabric.expected_syslog_server": fabric.expected_syslog_server if fabric and fabric.expected_syslog_server else "10.10.100.5",
+            "fabric.global_bgp_asn": str(fabric.global_bgp_asn) if fabric else "65000",
+            "switch.hostname": sw.hostname,
+            "switch.management_ip": sw.management_ip,
+            "switch.local_bgp_asn": str(sw.local_bgp_asn),
+            "switch.loopback_0_ip": sw.loopback_0_ip
+        }
 
-        # Rule 3: AAA check
-        total_rules += 1
-        aaa_present = "aaa" in config.lower() or "security" in config.lower()
-        if not aaa_present:
-            finding = models.ComplianceFinding(
-                finding_id=uuid.uuid4(),
-                compliance_run_id=run.run_id,
-                switch_id=sw.switch_id,
-                rule_name="AAA Authentication Check",
-                severity="critical",
-                detail="AAA local login verification rules are missing from config."
-            )
-            db.add(finding)
-            findings_list.append(finding)
-        else:
-            passed_rules += 1
+        for rule in rules:
+            total_rules += 1
 
-        # Rule 4: MTU check
-        total_rules += 1
-        mtu_present = "mtu 9216" in config or "mtu 9000" in config or "mtu" in config.lower()
-        if not mtu_present:
-            finding = models.ComplianceFinding(
-                finding_id=uuid.uuid4(),
-                compliance_run_id=run.run_id,
-                switch_id=sw.switch_id,
-                rule_name="Jumbo Frames MTU Check",
-                severity="warning",
-                detail="Jumbo Frames (MTU >= 9000) are not configured on fabric link interfaces."
-            )
-            db.add(finding)
-            findings_list.append(finding)
-        else:
-            passed_rules += 1
+            # Interpolate variables in pattern
+            expected_str = rule.template_pattern
+            for key, val in context.items():
+                expected_str = expected_str.replace("{" + key + "}", val)
 
-        # Rule 5: Syslog check
-        total_rules += 1
-        syslog_present = "logging server" in config or "logging-server" in config or "syslog-server" in config or "syslog" in config.lower()
-        if not syslog_present:
-            finding = models.ComplianceFinding(
-                finding_id=uuid.uuid4(),
-                compliance_run_id=run.run_id,
-                switch_id=sw.switch_id,
-                rule_name="Centralized Syslog Check",
-                severity="info",
-                detail="Centralized Syslog logging server target is not configured."
-            )
-            db.add(finding)
-            findings_list.append(finding)
-        else:
-            passed_rules += 1
+            # Match evaluation
+            is_compliant = False
+            if sw.vendor in ["dell_os10", "dell"] and expected_str == "lldp enable":
+                # On Dell OS10, LLDP is enabled by default. It is compliant unless disabled explicitly.
+                is_compliant = "disable" not in config.lower() and "no protocol lldp" not in config.lower()
+            elif rule.match_type == "contains":
+                is_compliant = expected_str in config or expected_str.lower() in config.lower()
+            elif rule.match_type == "not_contains":
+                is_compliant = expected_str not in config and expected_str.lower() not in config.lower()
+            elif rule.match_type == "regex":
+                import re
+                try:
+                    is_compliant = bool(re.search(expected_str, config, re.IGNORECASE))
+                except:
+                    is_compliant = False
 
-        # Rule 6: LLDP check
-        total_rules += 1
-        lldp_present = "lldp enable" in config or "lldp" in config.lower()
-        if not lldp_present:
-            finding = models.ComplianceFinding(
-                finding_id=uuid.uuid4(),
-                compliance_run_id=run.run_id,
-                switch_id=sw.switch_id,
-                rule_name="LLDP Status Check",
-                severity="warning",
-                detail="LLDP protocol is not enabled globally on this device."
-            )
-            db.add(finding)
-            findings_list.append(finding)
-        else:
-            passed_rules += 1
+            if not is_compliant:
+                # Custom descriptive details for default rules
+                detail_msg = f"Configuration requirement missing: '{expected_str}'."
+                if "ntp" in rule.name.lower():
+                    detail_msg = f"No NTP server configuration parsed in running config (Expected: {expected_str})."
+                elif "dns" in rule.name.lower():
+                    detail_msg = f"DNS server IP ({expected_str}) is not defined."
+                elif "aaa" in rule.name.lower():
+                    detail_msg = "AAA local login verification rules are missing from config."
+                elif "mtu" in rule.name.lower():
+                    detail_msg = f"Jumbo Frames (MTU >= 9000) are not configured on fabric link interfaces."
+                elif "syslog" in rule.name.lower():
+                    detail_msg = f"Centralized Syslog logging server target ({expected_str}) is not configured."
+                elif "lldp" in rule.name.lower():
+                    detail_msg = "LLDP protocol is not enabled globally on this device."
+
+                finding = models.ComplianceFinding(
+                    finding_id=uuid.uuid4(),
+                    compliance_run_id=run.run_id,
+                    switch_id=sw.switch_id,
+                    rule_name=rule.name,
+                    severity=rule.severity,
+                    detail=detail_msg,
+                    expected=expected_str
+                )
+                db.add(finding)
+                findings_list.append(finding)
+            else:
+                passed_rules += 1
 
     summary_data = {
         "switches_audited": len(switches),

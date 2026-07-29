@@ -19,6 +19,8 @@ LIFECYCLE_DRIFTED = "configuration_drifted"
 LIFECYCLE_DISCOVERED = "discovered_raw"
 from .drivers.dell_os10 import DellOS10Driver
 from .drivers.arista_eos import AristaEosDriver
+from .validators.config_syntax import validate_os10_syntax
+from .validators.collision_check import check_collisions
 from .admin_ui import ADMIN_HTML
 from .routers import inventory, discovery, auth, users, tenants, vrfs
 from .auth import security, get_current_user_claims, verify_switch_access
@@ -138,6 +140,39 @@ def startup_db_configure():
     if os.getenv("SEED_ON_STARTUP", "false").lower() == "true":
         from .scripts.seed_database import seed_all
         seed_all()
+
+    # Self-healing database sync: migrate legacy users with tenant_id to user_tenant_memberships
+    try:
+        from .db import SessionLocal
+        from .models import User, UserTenantMembership
+        db_sync = SessionLocal()
+        users_with_tenant = db_sync.query(User).filter(User.tenant_id != None).all()
+        synced = False
+        for u in users_with_tenant:
+            # Check if membership already exists
+            exists = db_sync.query(UserTenantMembership).filter(
+                UserTenantMembership.user_id == u.user_id,
+                UserTenantMembership.tenant_id == u.tenant_id
+            ).first()
+            if not exists:
+                role = u.role or "readonly"
+                if role == "Platform Admin": role = "platform_admin"
+                elif role == "Tenant Operator": role = "operator"
+                elif role == "Tenant Auditor": role = "readonly"
+                
+                membership = UserTenantMembership(
+                    user_id=u.user_id,
+                    tenant_id=u.tenant_id,
+                    role=role
+                )
+                db_sync.add(membership)
+                print(f"[STARTUP SYNC] Created UserTenantMembership for user {u.username} in tenant {u.tenant_id} as {role}")
+                synced = True
+        if synced:
+            db_sync.commit()
+        db_sync.close()
+    except Exception as e:
+        print(f"[STARTUP SYNC ERROR] Failed to sync user tenant memberships: {e}")
 
 
 @app.on_event("startup")
@@ -662,9 +697,13 @@ def get_audit_logs(
     return [
         {
             "audit_id": str(l.audit_id),
+            "log_id": str(l.audit_id),
             "timestamp": l.timestamp.isoformat() if l.timestamp else None,
+            "created_at": l.timestamp.isoformat() if l.timestamp else None,
             "user_id": str(l.user_id) if l.user_id else None,
+            "user_email": l.user.username if l.user else "system",
             "tenant_id": str(l.tenant_id) if l.tenant_id else None,
+            "tenant_name": l.tenant.tenant_name if l.tenant else "System",
             "action": l.action,
             "resource": l.resource,
             "status": l.status,
@@ -1506,24 +1545,22 @@ async def push_switch_config(
 ):
     """
     4-stage config push pipeline:
-    Stage 1: Syntax validation
+    Stage 1: Syntax validation (vendor-aware)
     Stage 2: Tenant access check
-    Stage 3: Blast radius calculation
-    Stage 4: Dry-run (validate) or commit (push)
+    Stage 3: Topology collision + Blast radius calculation
+    Stage 4: Pre-commit snapshot → Dry-run (validate) or commit (push)
     """
     user_role = claims.get("role")
-    errors = []
+    username = claims.get("username", "system")
+    errors: List[str] = []
 
-    # Stage 1: Syntax validation
+    # Stage 1: Syntax validation (vendor-aware)
     if not payload.config_payload.strip():
         raise HTTPException(status_code=400, detail="Config payload is empty.")
-    for line in payload.config_payload.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if ";" in line:
-            errors.append(f"Syntax error: semicolon not allowed in config payload (line: {line})")
-    if errors:
+
+    syntax_errors = validate_os10_syntax(payload.config_payload)
+    if syntax_errors:
+        errors = [f"Line {ln}: {msg}" for ln, msg in syntax_errors]
         raise HTTPException(status_code=400, detail={"stage": "syntax", "errors": errors})
 
     # Stage 2: Tenant access check
@@ -1536,10 +1573,14 @@ async def push_switch_config(
     if errors:
         raise HTTPException(status_code=403, detail={"stage": "tenant_check", "errors": errors})
 
-    # Stage 3: Blast radius
+    # Stage 3: Collision detection + Blast radius
+    collision_warnings = check_collisions(db, payload.switch_ids, payload.config_payload)
+    collision_errors = [msg for sev, msg in collision_warnings if sev == "error"]
+    if collision_errors:
+        raise HTTPException(status_code=409, detail={"stage": "collision", "errors": collision_errors})
+
     blast = calculate_blast_radius(db, payload.switch_ids)
     if blast["total_affected"] > 5 and user_role != "platform_admin":
-        # Create approval request for high blast radius
         approval = models.PolicyApproval(
             tenant_id=uuid.UUID(claims.get("tenant_id")) if claims.get("tenant_id") else None,
             vrf_name="config_push",
@@ -1561,8 +1602,42 @@ async def push_switch_config(
             "detail": "High blast radius push requires Platform Admin approval."
         }
 
-    # Stage 4: Dry-run or commit
     import asyncio
+    from datetime import datetime, timezone
+    import hashlib
+
+    # Stage 4a: Pre-commit snapshot (capture running config for rollback)
+    snapshot_results: List[dict] = []
+    for sid in payload.switch_ids:
+        sw_uuid = uuid.UUID(sid)
+        switch = db.query(models.Switch).filter(models.Switch.switch_id == sw_uuid).first()
+        hostname = switch.hostname if switch else sid[:8]
+        try:
+            if not switch or switch.vendor.lower() not in ("dell_os10", "dell"):
+                snapshot_results.append({"switch_id": sid, "hostname": hostname, "snapshot_taken": False, "reason": "unsupported_vendor"})
+                continue
+            driver = DellOS10Driver()
+            snapshot = await driver.validate_candidate(
+                switch.management_ip, "admin", "admin", ""
+            )
+            running_config = snapshot.get("diff", "")
+            if running_config:
+                config_hash = hashlib.md5(running_config.encode()).hexdigest()
+                snap_record = models.ConfigSnapshot(
+                    switch_id=sw_uuid,
+                    raw_config=running_config,
+                    config_hash=config_hash,
+                    taken_by=username,
+                )
+                db.add(snap_record)
+                db.commit()
+                snapshot_results.append({"switch_id": sid, "hostname": hostname, "snapshot_taken": True})
+            else:
+                snapshot_results.append({"switch_id": sid, "hostname": hostname, "snapshot_taken": False, "reason": "empty_config"})
+        except Exception:
+            snapshot_results.append({"switch_id": sid, "hostname": hostname, "snapshot_taken": False, "reason": "collection_failed"})
+
+    # Stage 4b: Dry-run validate or live commit
     if payload.dry_run:
         diffs = []
         for sid in payload.switch_ids:
@@ -1586,11 +1661,16 @@ async def push_switch_config(
                     "diff": "",
                     "validation_status": "driver_not_implemented"
                 })
-        return {"status": "DRY_RUN_COMPLETE", "diffs": diffs, "blast_radius": blast}
+        return {
+            "status": "DRY_RUN_COMPLETE",
+            "diffs": diffs,
+            "blast_radius": blast,
+            "collision_warnings": [msg for sev, msg in collision_warnings if sev == "warn"],
+            "snapshots": snapshot_results,
+        }
     else:
         from .workers.sync_tasks import sync_switch_config_task
-        
-        # Create approval record marked as approved for history tracking
+
         approval = models.PolicyApproval(
             tenant_id=uuid.UUID(claims.get("tenant_id")) if claims.get("tenant_id") else None,
             vrf_name="config_push",
@@ -1610,7 +1690,13 @@ async def push_switch_config(
         for sid in payload.switch_ids:
             task = sync_switch_config_task.delay(sid, payload.config_payload)
             task_ids.append({"switch_id": sid, "task_id": task.id})
-        return {"status": "PUSH_QUEUED", "task_ids": task_ids, "blast_radius": blast}
+        return {
+            "status": "PUSH_QUEUED",
+            "task_ids": task_ids,
+            "blast_radius": blast,
+            "collision_warnings": [msg for sev, msg in collision_warnings if sev == "warn"],
+            "snapshots": snapshot_results,
+        }
 
 
 @app.get("/api/v5/switch-config/history")

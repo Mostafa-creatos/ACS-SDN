@@ -17,10 +17,23 @@ class FabricResponse(BaseModel):
     fabric_id: str
     fabric_name: str
     global_bgp_asn: int
+    expected_ntp_servers: Optional[str] = "192.168.100.1"
+    expected_dns_servers: Optional[str] = "8.8.8.8"
+    expected_syslog_server: Optional[str] = "10.10.100.5"
 
 class FabricCreate(BaseModel):
     fabric_name: str = Field(..., min_length=1)
     global_bgp_asn: int = Field(..., ge=1, le=4294967295)
+    expected_ntp_servers: Optional[str] = "192.168.100.1"
+    expected_dns_servers: Optional[str] = "8.8.8.8"
+    expected_syslog_server: Optional[str] = "10.10.100.5"
+
+class FabricUpdate(BaseModel):
+    fabric_name: Optional[str] = Field(None, min_length=1)
+    global_bgp_asn: Optional[int] = Field(None, ge=1, le=4294967295)
+    expected_ntp_servers: Optional[str] = None
+    expected_dns_servers: Optional[str] = None
+    expected_syslog_server: Optional[str] = None
 
 class VrfResponse(BaseModel):
     vrf_id: str
@@ -91,7 +104,10 @@ def list_fabrics(
         {
             "fabric_id": str(f.fabric_id),
             "fabric_name": f.fabric_name,
-            "global_bgp_asn": f.global_bgp_asn
+            "global_bgp_asn": f.global_bgp_asn,
+            "expected_ntp_servers": f.expected_ntp_servers,
+            "expected_dns_servers": f.expected_dns_servers,
+            "expected_syslog_server": f.expected_syslog_server
         }
         for f in fabrics
     ]
@@ -111,7 +127,10 @@ def create_fabric(
     fabric = models.Fabric(
         fabric_id=uuid.uuid4(),
         fabric_name=payload.fabric_name,
-        global_bgp_asn=payload.global_bgp_asn
+        global_bgp_asn=payload.global_bgp_asn,
+        expected_ntp_servers=payload.expected_ntp_servers,
+        expected_dns_servers=payload.expected_dns_servers,
+        expected_syslog_server=payload.expected_syslog_server
     )
     db.add(fabric)
     db.commit()
@@ -119,7 +138,52 @@ def create_fabric(
     return {
         "fabric_id": str(fabric.fabric_id),
         "fabric_name": fabric.fabric_name,
-        "global_bgp_asn": fabric.global_bgp_asn
+        "global_bgp_asn": fabric.global_bgp_asn,
+        "expected_ntp_servers": fabric.expected_ntp_servers,
+        "expected_dns_servers": fabric.expected_dns_servers,
+        "expected_syslog_server": fabric.expected_syslog_server
+    }
+
+@router.patch("/fabrics/{fabric_id}", response_model=FabricResponse)
+def update_fabric(
+    fabric_id: uuid.UUID,
+    payload: FabricUpdate,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("global:manage"))
+):
+    """Update an existing Fabric infrastructure domain."""
+    fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == fabric_id).first()
+    if not fabric:
+        raise HTTPException(status_code=404, detail="Fabric not found.")
+        
+    if payload.fabric_name is not None:
+        if payload.fabric_name != fabric.fabric_name:
+            existing = db.query(models.Fabric).filter(models.Fabric.fabric_name == payload.fabric_name).first()
+            if existing:
+                raise HTTPException(status_code=400, detail=f"Fabric '{payload.fabric_name}' already exists.")
+        fabric.fabric_name = payload.fabric_name
+        
+    if payload.global_bgp_asn is not None:
+        fabric.global_bgp_asn = payload.global_bgp_asn
+        
+    if payload.expected_ntp_servers is not None:
+        fabric.expected_ntp_servers = payload.expected_ntp_servers
+        
+    if payload.expected_dns_servers is not None:
+        fabric.expected_dns_servers = payload.expected_dns_servers
+        
+    if payload.expected_syslog_server is not None:
+        fabric.expected_syslog_server = payload.expected_syslog_server
+        
+    db.commit()
+    db.refresh(fabric)
+    return {
+        "fabric_id": str(fabric.fabric_id),
+        "fabric_name": fabric.fabric_name,
+        "global_bgp_asn": fabric.global_bgp_asn,
+        "expected_ntp_servers": fabric.expected_ntp_servers,
+        "expected_dns_servers": fabric.expected_dns_servers,
+        "expected_syslog_server": fabric.expected_syslog_server
     }
 
 @router.get("/vrfs", response_model=List[VrfResponse])

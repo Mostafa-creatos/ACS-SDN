@@ -17,7 +17,7 @@ if REDIS_SENTINEL_HOSTS:
             sentinels_list.append((item.strip(), 26379))
             
     broker_url = f"sentinel://{sentinels_list[0][0]}:{sentinels_list[0][1]}"
-    backend_url = f"redis+sentinel://{sentinels_list[0][0]}:{sentinels_list[0][1]}/0"
+    backend_url = f"sentinel://{sentinels_list[0][0]}:{sentinels_list[0][1]}/0"
     
     broker_transport_options = {
         'master_name': REDIS_SENTINEL_MASTER,

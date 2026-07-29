@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 import ipaddress
 
@@ -44,4 +44,8 @@ class SwitchConfigPush(BaseModel):
     switch_ids: List[str] = Field(..., min_length=1, description="List of switch UUID strings to target")
     config_payload: str = Field(..., min_length=1, description="Configuration payload to apply")
     dry_run: bool = Field(default=True, description="If True, validate only. If False, commit.")
+
+class ComplianceRuleUpdate(BaseModel):
+    is_active: Optional[bool] = None
+    severity: Optional[str] = None
 

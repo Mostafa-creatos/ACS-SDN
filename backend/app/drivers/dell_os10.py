@@ -74,35 +74,19 @@ class DellOS10Driver(SouthboundNetworkDriver):
     # Configuration payload generators (XML/NETCONF)
     # ------------------------------------------------------------------
     async def generate_vrf_payload(self, vrf_name: str, l3_vni: int) -> str:
-        return f"""<config>
-    <vrf xmlns="http://dellemc.com">
-        <name>{vrf_name}</name>
-        <vni>{l3_vni}</vni>
-    </vrf>
-</config>"""
+        return f"ip vrf {vrf_name}\n exit"
 
     async def generate_evpn_overlay_payload(
         self, vrf_name: str, vlan_id: int, l2_vni: int, anycast_gw: str
     ) -> str:
-        return f"""<config>
-    <interfaces xmlns="http://dellemc.com">
-        <interface>
-            <name>vlan{vlan_id}</name>
-            <vrf-member>{vrf_name}</vrf-member>
-            <ip-address>{anycast_gw}</ip-address>
-            <evpn-overlay-tunnel><vni>{l2_vni}</vni></evpn-overlay-tunnel>
-        </interface>
-    </interfaces>
-</config>"""
+        return f"""interface vlan{vlan_id}
+ no shutdown
+ ip vrf forwarding {vrf_name}
+ ip address {anycast_gw}
+ exit"""
 
     async def generate_rollback_payload(self, vrf_name: str, vlan_id: int) -> str:
-        return f"""<config>
-    <interfaces xmlns="http://dellemc.com">
-        <interface operation="delete">
-            <name>vlan{vlan_id}</name>
-        </interface>
-    </interfaces>
-</config>"""
+        return f"no interface vlan{vlan_id}"
 
     # ------------------------------------------------------------------
     # Live data collection via SSH
@@ -150,20 +134,20 @@ class DellOS10Driver(SouthboundNetworkDriver):
                 except Exception as e:
                     return {"success": False, "output": f"Failed to connect to switch: {e}", "applied_config": ""}
                 try:
-                    collector.send_command("terminal width 512")
-                    collector.send_command("configure terminal")
+                    collector._send_command("terminal width 512")
+                    collector._send_command("configure terminal")
                     for line in config_payload.strip().splitlines():
                         line = line.strip()
                         if line:
-                            collector.send_command(line)
-                    collector.send_command("end")
-                    collector.send_command("copy running-config startup-config")
+                            collector._send_command(line)
+                    collector._send_command("end")
+                    collector._send_command("copy running-config startup-config")
                     return {"success": True, "output": "Configuration applied successfully", "applied_config": config_payload}
                 except Exception as e:
                     return {"success": False, "output": str(e), "applied_config": ""}
                 finally:
                     try:
-                        collector.send_command("end")
+                        collector._send_command("end")
                     except Exception:
                         pass
 

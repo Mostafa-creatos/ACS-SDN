@@ -857,9 +857,18 @@ class DellOS10Collector:
             )
             if lldp_match:
                 local = lldp_match.group(1).lower()
-                remote_host = lldp_match.group(2)
-                remote_port = lldp_match.group(3)
+                field2 = lldp_match.group(2)
+                field3 = lldp_match.group(3)
                 remote_chassis = lldp_match.group(4) or ""
+
+                # Detect format: FTOS = local_port hostname port chassis
+                #               OS10  = local_port port hostname chassis
+                if "/" in field2:
+                    remote_port = field2
+                    remote_host = field3
+                else:
+                    remote_host = field2
+                    remote_port = field3
 
                 links.append({
                     "port": local,

@@ -15,8 +15,14 @@ import {
   List,
   CheckCircle2,
   AlertCircle,
-  Play
+  Plus,
+  Terminal,
 } from 'lucide-react';
+import { CategoryPanel } from '../components/config-push/CategoryPanel';
+import { CommandForm } from '../components/config-push/CommandForm';
+import { CommandPreview } from '../components/config-push/CommandPreview';
+import { fetchSwitchInterfaces } from '../components/config-push/InterfaceFetcher';
+import type { CommandTemplate, BuiltCommand } from '../types/config-push-types';
 
 interface SwitchItem {
   switch_id: string;
@@ -137,24 +143,22 @@ export const ConfigPushPage: React.FC = () => {
   } | null>(null);
   const [deployError, setDeployError] = useState('');
 
-  // Step 2 sub-mode: 'form' | 'editor'
-  const [configMode, setConfigMode] = useState<'form' | 'editor'>('editor');
+  // Step 2 sub-mode: 'builder' | 'editor'
+  const [configMode, setConfigMode] = useState<'builder' | 'editor'>('builder');
 
-  // Form Mode details
-  const [formTemplate, setFormTemplate] = useState<'interface' | 'vlan' | 'aaa'>('interface');
-  const [formInterface, setFormInterface] = useState('ethernet1/1/1');
-  const [formDesc, setFormDesc] = useState('UPLINK-CONNECTION');
-  const [formIp, setFormIp] = useState('10.100.1.1/24');
-  const [formPortMode, setFormPortMode] = useState('access');
-  const [formVlan, setFormVlan] = useState('100');
-  const [formAdminState, setFormAdminState] = useState(true);
-
-  const [formVlanId, setFormVlanId] = useState('200');
-  const [formVlanName] = useState('APP-BACKEND-VLAN');
-
-  const [formUsername, setFormUsername] = useState('operator_admin');
-  const [formPassword, setFormPassword] = useState('AltasWaveSecurityPass123!');
-  const [formPrivilege, setFormPrivilege] = useState('15');
+  // Builder state
+  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
+  const [activeTemplate, setActiveTemplate] = useState<CommandTemplate | null>(null);
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
+  const [includedLines, setIncludedLines] = useState<Record<string, boolean>>({});
+  const [builtCommands, setBuiltCommands] = useState<BuiltCommand[]>([]);
+  const [interfaceMap, setInterfaceMap] = useState<{
+    interfaces: string[];
+    ethernet: string[];
+    loopbacks: string[];
+    port_channels: string[];
+    mgmt: string[];
+  } | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
@@ -177,6 +181,18 @@ export const ConfigPushPage: React.FC = () => {
     fetchSwitches();
   }, [token, selectedTenant]);
 
+  // Fetch interfaces for the first selected switch
+  useEffect(() => {
+    if (!token || selectedSwitchIds.length === 0) {
+      setInterfaceMap(null);
+      return;
+    }
+    const swId = selectedSwitchIds[0];
+    fetchSwitchInterfaces(swId, token, selectedTenant)
+      .then(setInterfaceMap)
+      .catch(() => setInterfaceMap(null));
+  }, [token, selectedSwitchIds, selectedTenant]);
+
   // Fetch history
   const fetchHistory = async () => {
     setHistoryLoading(true);
@@ -195,74 +211,103 @@ export const ConfigPushPage: React.FC = () => {
     if (activeTab === 'history') fetchHistory();
   }, [activeTab, token, selectedTenant]);
 
-  // Command Generator for Form templates
-  const handleGenerateConfig = () => {
-    let generated = '';
-    const selectedSw = switches.find(s => selectedSwitchIds.includes(s.switch_id));
-    const vendor = (selectedSw?.vendor || 'dell_os10').toLowerCase();
+  // Builder helpers
+  const toggleCategory = (id: string) => {
+    setExpandedCategories(prev => ({ ...prev, [id]: !prev[id] }));
+  };
 
-    if (formTemplate === 'interface') {
-      if (vendor === 'dell_os10') {
-        generated = `interface ${formInterface}\n description ${formDesc}\n`;
-        if (formPortMode === 'no-switchport') {
-          generated += ` no switchport\n ip address ${formIp}\n`;
-        } else {
-          generated += ` switchport mode ${formPortMode}\n`;
-          if (formPortMode === 'access') {
-            generated += ` switchport access vlan ${formVlan}\n`;
-          } else {
-            generated += ` switchport trunk allowed vlan ${formVlan}\n`;
-          }
+  const selectTemplate = (tmpl: CommandTemplate) => {
+    setActiveTemplate(tmpl);
+    const initialValues: Record<string, string> = {};
+    for (const gen of tmpl.generates) {
+      for (const arg of gen.args) {
+        if (arg.default !== undefined && !initialValues[arg.name]) {
+          initialValues[arg.name] = String(arg.default);
         }
-        generated += formAdminState ? ' no shutdown\n' : ' shutdown\n';
-      } else if (vendor === 'arista_eos') {
-        generated = `interface ${formInterface}\n description ${formDesc}\n`;
-        if (formPortMode === 'no-switchport') {
-          generated += ` no switchport\n ip address ${formIp}\n`;
-        } else {
-          generated += ` switchport mode ${formPortMode}\n`;
-          if (formPortMode === 'access') {
-            generated += ` switchport access vlan ${formVlan}\n`;
-          } else {
-            generated += ` switchport trunk allowed vlan ${formVlan}\n`;
-          }
-        }
-        generated += formAdminState ? ' no shutdown\n' : ' shutdown\n';
-      } else {
-        // Nokia SRLinux CLI
-        generated = `enter candidate\n/ interface ${formInterface}\n description "${formDesc}"\n admin-state ${formAdminState ? 'enable' : 'disable'}\ncommit\n`;
-      }
-    } else if (formTemplate === 'vlan') {
-      if (vendor === 'dell_os10' || vendor === 'arista_eos') {
-        generated = `interface vlan ${formVlanId}\n description ${formVlanName}\n no shutdown\n`;
-      } else {
-        generated = `enter candidate\n/ network-instance default protocols vran vlan-interface ${formVlanId}\ncommit\n`;
-      }
-    } else if (formTemplate === 'aaa') {
-      if (vendor === 'dell_os10') {
-        generated = `username ${formUsername} password ${formPassword} role sysadmin privilege ${formPrivilege}\n`;
-      } else if (vendor === 'arista_eos') {
-        generated = `username ${formUsername} privilege ${formPrivilege} secret ${formPassword}\n`;
-      } else {
-        generated = `enter candidate\n/ system security user ${formUsername} role admin password ${formPassword}\ncommit\n`;
       }
     }
+    setFormValues(initialValues);
+    const initialLines: Record<string, boolean> = {};
+    tmpl.generates.forEach((gen, idx) => {
+      initialLines[String(idx)] = !(gen.optional && idx > 0);
+    });
+    setIncludedLines(initialLines);
+  };
 
-    setConfigPayload(prev => prev + (prev ? '\n' : '') + generated);
+  const handleFormChange = (name: string, value: string) => {
+    setFormValues(prev => ({ ...prev, [name]: value }));
+  };
+
+  const toggleIncludedLine = (lineIndex: number, included: boolean) => {
+    setIncludedLines(prev => ({ ...prev, [String(lineIndex)]: included }));
+  };
+
+  const addToConfig = () => {
+    if (!activeTemplate) return;
+    const generatedLines: string[] = [];
+    for (const [idx, gen] of activeTemplate.generates.entries()) {
+      if (!(includedLines[String(idx)] ?? true)) continue;
+      let line = gen.line;
+      const argNames = gen.line.match(/\{(\w+)\}/g);
+      if (argNames) {
+        let hasAllValues = true;
+        for (const placeholder of argNames) {
+          const name = placeholder.slice(1, -1);
+          const val = formValues[name];
+          if (!val || val === '') {
+            hasAllValues = false;
+            break;
+          }
+          line = line.replace(placeholder, val);
+        }
+        if (!hasAllValues) continue;
+      }
+      generatedLines.push(line);
+    }
+    if (generatedLines.length === 0) return;
+    setBuiltCommands(prev => [...prev, {
+      categoryId: activeTemplate.category,
+      templateId: activeTemplate.id,
+      values: { ...formValues },
+      generatedLines,
+    }]);
+    setActiveTemplate(null);
+    setFormValues({});
+    setIncludedLines({});
+  };
+
+  const removeCommand = (index: number) => {
+    setBuiltCommands(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const clearCommands = () => {
+    setBuiltCommands([]);
+  };
+
+  const insertBuilderToEditor = () => {
+    const allLines = builtCommands.flatMap(cmd => cmd.generatedLines);
+    setConfigPayload(prev => prev + (prev ? '\n' : '') + allLines.join('\n'));
     setConfigMode('editor');
   };
 
-  // Run dry run validation steps
+  // Run dry run validation steps — real 4-stage pipeline
   const executeValidationPipeline = async () => {
     setLoading(true);
     setValidationError('');
     setValidationResult(null);
     setValidationStages({
       syntax: 'loading',
-      boundary: 'pending',
-      collision: 'pending',
-      dryrun: 'pending'
+      boundary: 'loading',
+      collision: 'loading',
+      dryrun: 'loading'
     });
+
+    const stageMap: Record<string, 'syntax' | 'boundary' | 'collision' | 'dryrun'> = {
+      syntax: 'syntax',
+      tenant_check: 'boundary',
+      collision: 'collision',
+      dryrun: 'dryrun',
+    };
 
     try {
       const headers: Record<string, string> = {
@@ -271,19 +316,7 @@ export const ConfigPushPage: React.FC = () => {
       };
       if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
 
-      // Stage 1: Syntax (Simulated UI progression)
-      await new Promise(r => setTimeout(r, 600));
-      setValidationStages(prev => ({ ...prev, syntax: 'success', boundary: 'loading' }));
-
-      // Stage 2: Boundary Isolation check
-      await new Promise(r => setTimeout(r, 600));
-      setValidationStages(prev => ({ ...prev, boundary: 'success', collision: 'loading' }));
-
-      // Stage 3: Collision Check
-      await new Promise(r => setTimeout(r, 600));
-      setValidationStages(prev => ({ ...prev, collision: 'success', dryrun: 'loading' }));
-
-      // Stage 4: Real Dry run diff invocation
+      // Single API call — backend runs all 4 stages synchronously
       const res = await fetch('/api/v5/switch-config/push', {
         method: 'POST',
         headers,
@@ -295,39 +328,52 @@ export const ConfigPushPage: React.FC = () => {
       });
 
       const data = await res.json();
+
       if (res.ok) {
-        setValidationStages(prev => ({ ...prev, dryrun: 'success' }));
+        // All stages passed
+        setValidationStages({
+          syntax: 'success',
+          boundary: 'success',
+          collision: 'success',
+          dryrun: 'success'
+        });
         setValidationResult(data);
       } else {
-        setValidationStages(prev => ({ ...prev, dryrun: 'failed' }));
-        if (data && data.detail) {
-          if (typeof data.detail === 'object') {
-            if (data.detail.stage) {
-              const failedStage = data.detail.stage;
-              setValidationStages(prev => ({
-                ...prev,
-                [failedStage === 'syntax' ? 'syntax' : failedStage === 'tenant_check' ? 'boundary' : 'collision']: 'failed'
-              }));
-            }
-            if (data.detail.errors && Array.isArray(data.detail.errors)) {
-              setValidationError(`${data.detail.stage ? data.detail.stage.toUpperCase() : 'VALIDATION'}: ${data.detail.errors.join(', ')}`);
-            } else {
-              setValidationError(JSON.stringify(data.detail));
-            }
-          } else {
-            setValidationError(data.detail);
-          }
+        // Backend reports which stage failed
+        const failed = data?.detail?.stage
+          ? stageMap[data.detail.stage] || 'dryrun'
+          : null;
+
+        if (failed) {
+          setValidationStages(prev => ({
+            ...prev,
+            [failed]: 'failed',
+            // Mark subsequent stages as pending (not attempted)
+            ...(failed === 'syntax' ? { boundary: 'pending', collision: 'pending', dryrun: 'pending' } : {}),
+            ...(failed === 'boundary' ? { collision: 'pending', dryrun: 'pending' } : {}),
+            ...(failed === 'collision' ? { dryrun: 'pending' } : {}),
+          }));
         } else {
-          setValidationError('Config validation failed');
+          setValidationStages({
+            syntax: 'failed',
+            boundary: 'failed',
+            collision: 'failed',
+            dryrun: 'failed'
+          });
         }
+
+        const errMsg = data?.detail?.errors
+          ? (Array.isArray(data.detail.errors) ? data.detail.errors.join(', ') : String(data.detail.errors))
+          : (data?.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)) : 'Config validation failed');
+        setValidationError(errMsg);
       }
     } catch (e: any) {
-      setValidationStages(() => ({
+      setValidationStages({
         syntax: 'failed',
         boundary: 'failed',
         collision: 'failed',
         dryrun: 'failed'
-      }));
+      });
       setValidationError(e.message || 'Network error occurred during pipeline validation');
     } finally {
       setLoading(false);
@@ -593,13 +639,13 @@ export const ConfigPushPage: React.FC = () => {
                 <div className="space-y-4">
                   <div className="flex gap-2 p-1 bg-slate-100 rounded-lg w-fit">
                     <button
-                      onClick={() => setConfigMode('form')}
+                      onClick={() => setConfigMode('builder')}
                       className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-[10px] font-bold uppercase transition-colors ${
-                        configMode === 'form' ? 'bg-white text-atlas-ink shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                        configMode === 'builder' ? 'bg-white text-atlas-ink shadow-sm' : 'text-slate-500 hover:text-slate-700'
                       }`}
                     >
                       <List className="w-3.5 h-3.5" />
-                      Quick Form Helper
+                      Command Builder
                     </button>
                     <button
                       onClick={() => setConfigMode('editor')}
@@ -608,162 +654,64 @@ export const ConfigPushPage: React.FC = () => {
                       }`}
                     >
                       <Code className="w-3.5 h-3.5" />
-                      CLI Code Editor
+                      CLI Editor
                     </button>
                   </div>
 
-                  {configMode === 'form' ? (
-                    <Card className="p-6 space-y-4">
-                      <div>
-                        <h3 className="text-base font-bold font-display text-atlas-ink">Quick Config Helper</h3>
-                        <p className="text-xs text-slate-400">Generate CLI config syntaxes using standard form structures.</p>
-                      </div>
+                  {configMode === 'builder' ? (
+                    /* Command Builder Layout */
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      {/* Left: Category Panel */}
+                      <Card className="p-4 lg:col-span-1">
+                        <h3 className="text-xs font-bold font-display text-atlas-ink mb-3 uppercase tracking-wider">
+                          Command Catalog
+                        </h3>
+                        <CategoryPanel
+                          expandedCategories={expandedCategories}
+                          toggleCategory={toggleCategory}
+                          onSelectTemplate={selectTemplate}
+                        />
+                      </Card>
 
-                      {/* Template switch tabs */}
-                      <div className="flex border-b border-slate-100">
-                        {(['interface', 'vlan', 'aaa'] as const).map(t => (
+                      {/* Middle: Command Form */}
+                      <Card className="p-5 lg:col-span-2 space-y-4">
+                        <CommandForm
+                          template={activeTemplate}
+                          values={formValues}
+                          onChange={handleFormChange}
+                          includedLines={includedLines}
+                          onToggleLine={toggleIncludedLine}
+                          availableInterfaces={interfaceMap}
+                        />
+                        {activeTemplate && (
                           <button
-                            key={t}
-                            onClick={() => setFormTemplate(t)}
-                            className={`px-4 py-2 text-xs font-bold border-b-2 capitalize transition-colors ${
-                              formTemplate === t ? 'border-atlas-violet text-atlas-violet' : 'border-transparent text-slate-400 hover:text-slate-600'
-                            }`}
+                            onClick={addToConfig}
+                            className="btn-primary w-full py-2.5 font-bold flex items-center justify-center gap-2"
                           >
-                            {t === 'aaa' ? 'AAA Setup' : t}
+                            <Plus className="w-4 h-4" />
+                            Add to Config
                           </button>
-                        ))}
+                        )}
+                      </Card>
+
+                      {/* Right: Built Commands Preview */}
+                      <div className="lg:col-span-3">
+                        <CommandPreview
+                          builtCommands={builtCommands}
+                          onRemove={removeCommand}
+                          onClear={clearCommands}
+                        />
+                        {builtCommands.length > 0 && (
+                          <button
+                            onClick={insertBuilderToEditor}
+                            className="btn-primary w-full mt-2 py-2.5 font-bold flex items-center justify-center gap-2"
+                          >
+                            <Terminal className="w-4 h-4" />
+                            Insert {builtCommands.reduce((s, c) => s + c.generatedLines.length, 0)} commands to Editor
+                          </button>
+                        )}
                       </div>
-
-                      {/* Form inputs based on active template */}
-                      {formTemplate === 'interface' && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Interface Name</label>
-                            <select
-                              value={formInterface}
-                              onChange={e => setFormInterface(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs"
-                            >
-                              <option value="ethernet1/1/1">ethernet1/1/1</option>
-                              <option value="ethernet1/1/2">ethernet1/1/2</option>
-                              <option value="ethernet1/1/3">ethernet1/1/3</option>
-                              <option value="loopback0">loopback0</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Description</label>
-                            <input
-                              type="text"
-                              value={formDesc}
-                              onChange={e => setFormDesc(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Port Mode</label>
-                            <select
-                              value={formPortMode}
-                              onChange={e => setFormPortMode(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs"
-                            >
-                              <option value="access">Access</option>
-                              <option value="trunk">Trunk</option>
-                              <option value="no-switchport">No Switchport (Routed)</option>
-                            </select>
-                          </div>
-                          {formPortMode === 'no-switchport' ? (
-                            <div>
-                              <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">IP Address / CIDR</label>
-                              <input
-                                type="text"
-                                value={formIp}
-                                onChange={e => setFormIp(e.target.value)}
-                                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono"
-                              />
-                            </div>
-                          ) : (
-                            <div>
-                              <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">VLAN tag ID</label>
-                              <input
-                                type="number"
-                                value={formVlan}
-                                onChange={e => setFormVlan(e.target.value)}
-                                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs"
-                              />
-                            </div>
-                          )}
-                          <div className="flex items-center justify-between md:col-span-2 pt-2 border-t border-slate-50">
-                            <span className="text-xs text-slate-600 font-bold">Admin Status (Enable port)</span>
-                            <button
-                              onClick={() => setFormAdminState(!formAdminState)}
-                              className={`relative w-10 h-5 rounded-full transition-colors ${
-                                formAdminState ? 'bg-atlas-teal' : 'bg-slate-300'
-                              }`}
-                            >
-                              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                                !formAdminState ? 'translate-x-5' : ''
-                              }`} />
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {formTemplate === 'vlan' && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">VLAN ID (2-4094)</label>
-                            <input
-                              type="number"
-                              value={formVlanId}
-                              onChange={e => setFormVlanId(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs"
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {formTemplate === 'aaa' && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Username</label>
-                            <input
-                              type="text"
-                              value={formUsername}
-                              onChange={e => setFormUsername(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Privilege level</label>
-                            <select
-                              value={formPrivilege}
-                              onChange={e => setFormPrivilege(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs"
-                            >
-                              <option value="1">1 (Read Only)</option>
-                              <option value="15">15 (Admin/Write)</option>
-                            </select>
-                          </div>
-                          <div className="md:col-span-2">
-                            <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Password</label>
-                            <input
-                              type="password"
-                              value={formPassword}
-                              onChange={e => setFormPassword(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs"
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      <button
-                        onClick={handleGenerateConfig}
-                        className="btn-primary w-full py-2.5 font-bold flex items-center justify-center gap-2"
-                      >
-                        <Play className="w-4 h-4" />
-                        Generate & Insert CLI Commands
-                      </button>
-                    </Card>
+                    </div>
                   ) : (
                     /* Monospace syntax highlight editor */
                     <Card className="p-5 space-y-2">
@@ -858,6 +806,21 @@ export const ConfigPushPage: React.FC = () => {
                       <div>
                         <p className="font-bold">Pipeline validation failed:</p>
                         <p className="mt-1 font-mono">{validationError}</p>
+                      </div>
+                    </Card>
+                  )}
+
+                  {/* Collision warnings */}
+                  {validationResult && (validationResult as any).collision_warnings?.length > 0 && (
+                    <Card className="p-4 border-amber-200 bg-amber-50/50 flex gap-3 text-amber-700 text-xs">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
+                      <div>
+                        <p className="font-bold mb-1">Collision Warnings:</p>
+                        <ul className="list-disc list-inside space-y-0.5 font-mono">
+                          {(validationResult as any).collision_warnings.map((w: string, i: number) => (
+                            <li key={i}>{w}</li>
+                          ))}
+                        </ul>
                       </div>
                     </Card>
                   )}

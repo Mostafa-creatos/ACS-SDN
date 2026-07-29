@@ -133,11 +133,23 @@ export const fetchFabrics = async (): Promise<any[]> => {
     return res.json();
 };
 
-export const createFabric = async (fabricName: string, globalBgpAsn: number): Promise<any> => {
+export const createFabric = async (
+    fabricName: string,
+    globalBgpAsn: number,
+    expectedNtpServers?: string,
+    expectedDnsServers?: string,
+    expectedSyslogServer?: string
+): Promise<any> => {
     const res = await fetch('/api/v5/admin/fabrics', {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ fabric_name: fabricName, global_bgp_asn: globalBgpAsn })
+        body: JSON.stringify({
+            fabric_name: fabricName,
+            global_bgp_asn: globalBgpAsn,
+            expected_ntp_servers: expectedNtpServers || '192.168.100.1',
+            expected_dns_servers: expectedDnsServers || '8.8.8.8',
+            expected_syslog_server: expectedSyslogServer || '10.10.100.5'
+        })
     });
     if (!res.ok) {
         const detail = await res.text();
@@ -218,4 +230,52 @@ export const deleteSubnet = async (subnetId: string): Promise<void> => {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.detail || 'Failed to delete subnet');
     }
+};
+
+export const remediateComplianceFinding = async (findingId: string): Promise<any> => {
+    const res = await fetch(`/api/v5/visibility/compliance/findings/${findingId}/remediate`, {
+        method: 'POST',
+        headers: getHeaders()
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to trigger remediation');
+    }
+    return res.json();
+};
+
+export const updateFabric = async (fabricId: string, payload: any): Promise<any> => {
+    const res = await fetch(`/api/v5/admin/fabrics/${fabricId}`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to update fabric');
+    }
+    return res.json();
+};
+
+export const fetchComplianceRules = async (): Promise<any[]> => {
+    const res = await fetch('/api/v5/visibility/compliance/rules', {
+        headers: getHeaders()
+    });
+    if (!res.ok) {
+        throw new Error('Failed to fetch compliance rules');
+    }
+    return res.json();
+};
+
+export const updateComplianceRule = async (ruleId: string, payload: { is_active?: boolean; severity?: string }): Promise<any> => {
+    const res = await fetch(`/api/v5/visibility/compliance/rules/${ruleId}`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to update compliance rule');
+    }
+    return res.json();
 };

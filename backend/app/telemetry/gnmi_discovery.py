@@ -12,6 +12,11 @@ from sqlalchemy.orm import Session
 from .. import models
 from .gnmi_client import gNMIclient, get_switch_lldp, parse_lldp_neighbors
 
+def normalize_hostname(name: str) -> str:
+    """Strip leading zeros from numeric parts so leaf-05 and leaf-5 match."""
+    return re.sub(r'\d+', lambda m: str(int(m.group(0))), name)
+
+
 def is_valid_host_mac(mac: str) -> bool:
     """
     Returns True for unicast MACs that are plausibly real end-host addresses.
@@ -328,9 +333,20 @@ def discover_dell_switch(sw, db: Session):
                             filtered_lldp += 1
                             continue
                             
+                        # On switches with no LLDP neighbors (e.g., spine connected to leaves
+                        # with down data-plane ports), MAC-only entries are neighboring switch
+                        # interface MACs, not real endpoint hosts. Require an IP in that case.
+                        if not lldp_ports:
+                            ip_addr = mac_to_ip.get(mac_addr.upper())
+                            if not ip_addr:
+                                filtered_mac += 1
+                                continue
+                        else:
+                            ip_addr = mac_to_ip.get(mac_addr.upper())
+                            
                         endpoints.append({
                             "mac_address": mac_addr,
-                            "ip_address": mac_to_ip.get(mac_addr.upper()),
+                            "ip_address": ip_addr,
                             "vlan_id": vlan_id,
                             "port": port_name,
                             "switch_id": sw.switch_id
@@ -646,6 +662,10 @@ def discover_nokia_switch(sw, db: Session):
                 if not is_valid_host_mac(entry["mac_address"]):
                     logger.info(f"[Nokia Discovery] {sw.hostname}: filtered MAC {entry['mac_address']} port={entry['port']}")
                     continue
+                # On switches with no LLDP neighbors, MAC-only entries are likely
+                # neighbor switch MACs rather than real endpoints
+                if not lldp_ports and not mac_to_ip.get(entry["mac_address"].upper()):
+                    continue
                 endpoints.append({
                     "mac_address": entry["mac_address"],
                     "ip_address": mac_to_ip.get(entry["mac_address"].upper()),
@@ -710,7 +730,8 @@ def run_gnmi_discovery(db: Session):
     db.commit()
     
     # Map hostname to IP and switch_id to speed up lookup
-    host_to_sw = {s.hostname: s for s in switches}
+    # Use normalized hostname for matching so leaf-05 and leaf-5 resolve to the same switch
+    host_to_sw = {normalize_hostname(s.hostname): s for s in switches}
     ip_to_sw = {s.management_ip: s for s in switches}
     
     # Keep track of active edges and endpoints we see in this run
@@ -727,10 +748,14 @@ def run_gnmi_discovery(db: Session):
         sw_endpoints = []
         sw_mac_to_ip = {}
         
-        if sw.vendor.lower() == "nokia":
-            sw_interfaces, sw_lldp_links, sw_endpoints, sw_mac_to_ip = discover_nokia_switch(sw, db)
-        elif sw.vendor.lower() == "dell_os10":
-            sw_interfaces, sw_lldp_links, sw_endpoints, sw_mac_to_ip = discover_dell_switch(sw, db)
+        try:
+            if sw.vendor.lower() == "nokia":
+                sw_interfaces, sw_lldp_links, sw_endpoints, sw_mac_to_ip = discover_nokia_switch(sw, db)
+            elif sw.vendor.lower() == "dell_os10":
+                sw_interfaces, sw_lldp_links, sw_endpoints, sw_mac_to_ip = discover_dell_switch(sw, db)
+        except Exception as e:
+            logger.error(f"[DISCOVERY] Failed to discover {sw.hostname} ({sw.management_ip}): {e}")
+            continue
             
         all_lldp_links.extend(sw_lldp_links)
         all_discovered_endpoints.extend(sw_endpoints)
@@ -787,7 +812,10 @@ def run_gnmi_discovery(db: Session):
         local_sw = ip_to_sw.get(l.get("ip"))
         remote_sw = None
         if remote_name:
-            remote_sw = host_to_sw.get(remote_name)
+            remote_sw = host_to_sw.get(normalize_hostname(remote_name))
+            # Fallback: try the raw name too
+            if remote_sw is None:
+                remote_sw = host_to_sw.get(remote_name)
             # Auto-create switch record if discovered via LLDP but not yet in DB
             if remote_sw is None and remote_name:
                 remote_ip = l.get("remote_ip", "")
@@ -852,7 +880,7 @@ def run_gnmi_discovery(db: Session):
                     try:
                         db.commit()
                         remote_sw = new_sw
-                        host_to_sw[remote_name] = remote_sw
+                        host_to_sw[normalize_hostname(remote_name)] = remote_sw
                         ip_to_sw[new_sw.management_ip] = remote_sw
                         logger.info(f"[DISCOVERY] Auto-created switch: {remote_name}")
                     except Exception as e:
@@ -886,12 +914,11 @@ def run_gnmi_discovery(db: Session):
                 edge.state = "up"
                 edge.last_seen = datetime.datetime.now(datetime.timezone.utc)
 
-    # Mark edges as down if they were not seen in this discovery run
-    all_edges = db.query(models.TopologyEdge).all()
-    for edge in all_edges:
-        key = tuple(sorted([edge.local_switch, edge.remote_switch]))
-        if key not in discovered_edge_keys:
-            edge.state = "down"
+    # NOTE: We do NOT mark edges as "down" here because LLDP may not flow
+    # between certain device types (e.g., Nokia leaves ↔ Dell spines have
+    # data-plane issues in containerlab). Edges represent the known physical
+    # topology and remain at their last-known state. The "last_seen" timestamp
+    # is updated when LLDP data confirms the edge is active.
             
     # 4. Update DiscoveredEndpoint records in DB
     # Clean up endpoints for the switches audited in this run

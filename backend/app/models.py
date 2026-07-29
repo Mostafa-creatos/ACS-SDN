@@ -22,6 +22,10 @@ class Fabric(Base):
     fabric_name = Column(String(100), nullable=False, unique=True)
     global_bgp_asn = Column(Integer, nullable=False)
 
+    expected_ntp_servers = Column(String(255), default="192.168.100.1")
+    expected_dns_servers = Column(String(255), default="8.8.8.8")
+    expected_syslog_server = Column(String(255), default="10.10.100.5")
+
     # Relationships
     switches = relationship("Switch", back_populates="fabric", cascade="all, delete-orphan")
     subnets = relationship("IpamSubnet", back_populates="fabric", cascade="all, delete-orphan")
@@ -312,10 +316,24 @@ class ComplianceRun(Base):
     fabric_id = Column(UUID(as_uuid=True), ForeignKey("fabrics.fabric_id", ondelete="CASCADE"), nullable=True)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=True)
     started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    completed_at = Column(DateTime, nullable=True)       # when scan finished
     status = Column(String(64), default="running")       # 'running', 'completed', 'failed'
+    triggered_by = Column(String(128), nullable=True)    # username who initiated this scan
     summary = Column(String, nullable=True)              # JSON string summarizing compliance metrics
 
     findings = relationship("ComplianceFinding", back_populates="run", cascade="all, delete-orphan")
+
+class ComplianceRule(Base):
+    __tablename__ = "compliance_rules"
+
+    rule_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    category = Column(String(64), nullable=False)        # 'Security', 'Observability', 'Routing', etc.
+    severity = Column(String(32), nullable=False)        # 'critical', 'warning', 'info'
+    match_type = Column(String(32), default="contains")  # 'contains', 'not_contains', 'regex'
+    template_pattern = Column(String, nullable=False)    # e.g. "ntp server {fabric.expected_ntp_servers}"
+    remediation_guide = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True)
 
 class ComplianceFinding(Base):
     __tablename__ = "compliance_findings"
@@ -326,6 +344,14 @@ class ComplianceFinding(Base):
     rule_name = Column(String(255), nullable=False)
     severity = Column(String(32), nullable=False)        # 'info', 'warning', 'critical'
     detail = Column(String, nullable=True)
+    expected = Column(String, nullable=True)
+    # Remediation tracking
+    remediation_status = Column(String(32), default="open")       # open | pending | success | failed
+    remediation_task_id = Column(String(128), nullable=True)       # Celery task UUID
+    remediation_triggered_by = Column(String(128), nullable=True)  # username who clicked remediate
+    remediation_triggered_at = Column(DateTime, nullable=True)     # when remediation was triggered
+    resolved_at = Column(DateTime, nullable=True)                  # when Celery confirmed success
+    remediation_error = Column(String, nullable=True)              # failure reason from worker
 
     run = relationship("ComplianceRun", back_populates="findings")
     switch = relationship("Switch")

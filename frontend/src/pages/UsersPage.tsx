@@ -15,6 +15,11 @@ export const UsersPage: React.FC = () => {
     // Manage access modal
     const [manageUser, setManageUser] = useState<User | null>(null);
 
+    // Success popup state for temp password
+    const [invitedUserPassword, setInvitedUserPassword] = useState<string | null>(null);
+    const [invitedUsername, setInvitedUsername] = useState<string | null>(null);
+
+
     const isPlatformAdmin = user?.role === 'Platform Admin' || user?.role === 'platform_admin';
     const isTenantAdmin = user?.role === 'Tenant Admin' || user?.role === 'tenant_admin' || isPlatformAdmin;
 
@@ -35,10 +40,14 @@ export const UsersPage: React.FC = () => {
 
     const handleInvite = async () => {
         try {
-            await createUser({ username: newUsername, role: newRole });
+            const res = await createUser({ username: newUsername, role: newRole });
             setShowInviteModal(false);
             setNewUsername('');
             loadUsers();
+            if (res && res.temp_password) {
+                setInvitedUserPassword(res.temp_password);
+                setInvitedUsername(res.username);
+            }
         } catch (e) {
             alert('Error creating user');
         }
@@ -226,6 +235,50 @@ export const UsersPage: React.FC = () => {
 
                         <div className="mt-6 flex justify-end gap-3">
                             <button onClick={() => setManageUser(null)} className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-lg">Close</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Success Password Modal */}
+            {invitedUserPassword && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 border border-emerald-100">
+                        <div className="flex items-center gap-3 mb-4 text-emerald-600">
+                            <CheckCircle2 className="w-8 h-8" />
+                            <h3 className="text-xl font-bold text-slate-800">User Invited!</h3>
+                        </div>
+                        <p className="text-sm text-slate-500 mb-4 font-sans">
+                            A new account has been created for <strong className="text-slate-800">{invitedUsername}</strong>.
+                        </p>
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 mb-4">
+                            <span className="block text-xs font-semibold text-emerald-700 uppercase tracking-wider mb-1">Temporary Password</span>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono font-bold text-lg text-emerald-900 select-all">{invitedUserPassword}</span>
+                                <button 
+                                    onClick={() => {
+                                        navigator.clipboard.writeText(invitedUserPassword);
+                                        alert("Password copied to clipboard!");
+                                    }}
+                                    className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-2.5 py-1.5 rounded transition"
+                                >
+                                    Copy
+                                </button>
+                            </div>
+                        </div>
+                        <p className="text-xs text-rose-500 font-semibold mb-6">
+                            ⚠️ Write this password down! It will not be shown again.
+                        </p>
+                        <div className="flex justify-end">
+                            <button 
+                                onClick={() => {
+                                    setInvitedUserPassword(null);
+                                    setInvitedUsername(null);
+                                }} 
+                                className="w-full bg-slate-800 hover:bg-slate-950 text-white font-medium py-2 rounded-lg transition"
+                            >
+                                Done
+                            </button>
                         </div>
                     </div>
                 </div>

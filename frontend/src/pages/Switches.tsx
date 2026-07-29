@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card } from '../components/Card';
-import { StatusPill } from '../components/StatusPill';
+
 import { useAuth } from '../context/AuthContext';
 import { HardwareHealthIcon } from '../components/HealthBadge';
 import { FabricVltTab } from '../components/FabricVltTab';
@@ -163,6 +163,49 @@ export const Switches: React.FC = () => {
   };
 
   const setTab = (id: string, tab: string) => setTabMap(prev => ({ ...prev, [id]: tab }));
+
+  // ── Compliance badge (compact, role-style) ───────────────────────────────────
+  const complianceBadge = (status: string | undefined) => {
+    const norm = (status || '').toLowerCase().replace(/[\s-]/g, '_');
+    if (norm.includes('compliant') || norm.includes('active')) {
+      return (
+        <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-100 whitespace-nowrap">
+          COMPLIANT
+        </span>
+      );
+    } else if (norm.includes('drift') || norm.includes('critical') || norm.includes('warn')) {
+      return (
+        <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-rose-50 text-rose-700 border border-rose-100 whitespace-nowrap">
+          DRIFTED
+        </span>
+      );
+    } else if (norm.includes('audit')) {
+      return (
+        <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-violet-50 text-violet-700 border border-violet-100 whitespace-nowrap">
+          AUDITING
+        </span>
+      );
+    } else {
+      return (
+        <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">
+          DISCOVERED
+        </span>
+      );
+    }
+  };
+
+  // ── Last Discovery formatter ──────────────────────────────────────────────────
+  const fmtDiscovery = (iso: string | null | undefined) => {
+    if (!iso) return { label: 'Never', color: 'text-rose-400', title: 'No collection run yet' };
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    const hrs  = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    const label = mins < 1 ? 'Just now' : mins < 60 ? `${mins}m ago` : hrs < 24 ? `${hrs}h ago` : `${days}d ago`;
+    const color = hrs < 1 ? 'text-emerald-600' : hrs < 24 ? 'text-amber-500' : 'text-rose-500';
+    const title = new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return { label, color, title };
+  };
 
   // ── CRUD callbacks ───────────────────────────────────────────────────────────
   const handleSwitchSaved = (id: string) => { fetchSwitches(); setExpandedId(id); };
@@ -407,13 +450,16 @@ export const Switches: React.FC = () => {
                           }`}>{sw.role?.toUpperCase() || 'LEAF'}</span>
                         </td>
                         {/* Compliance */}
-                        <td className="px-6 py-4"><StatusPill status={sw.lifecycle_status} /></td>
+                        <td className="px-6 py-4">{complianceBadge(sw.lifecycle_status)}</td>
                         {/* Last discovery */}
-                        <td className="px-6 py-4 text-[10px] text-slate-500">
-                          {sw.last_collection_timestamp
-                            ? new Date(sw.last_collection_timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                            : 'Never'}
-                        </td>
+                        {(() => {
+                          const disc = fmtDiscovery((sw as any).last_successful_sync || sw.last_collection_timestamp);
+                          return (
+                            <td className={`px-6 py-4 text-[10px] font-semibold ${disc.color}`} title={disc.title}>
+                              {disc.label}
+                            </td>
+                          );
+                        })()}
                         {/* HW health */}
                         <td className="px-6 py-4"><HardwareHealthIcon status={hwStatus} /></td>
                         {/* Actions */}

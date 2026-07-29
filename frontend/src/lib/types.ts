@@ -11,4 +11,5 @@ export interface User {
     last_login_at: string | null;
     role_in_tenant: string;
     tenantMemberships?: TenantMembership[]; // Optional for when we fetch details
+    temp_password?: string;
 }

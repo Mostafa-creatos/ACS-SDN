@@ -6,7 +6,7 @@ def test_ssh():
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
         print("Connecting to spine-02 via SSH...")
-        client.connect("172.20.20.13", username="admin", password="admin", port=22, timeout=5)
+        client.connect("172.20.20.13", username="admin", password="admin", port=22, timeout=5, look_for_keys=False, allow_agent=False)
         channel = client.invoke_shell(width=512, height=999)
         channel.settimeout(5)
         

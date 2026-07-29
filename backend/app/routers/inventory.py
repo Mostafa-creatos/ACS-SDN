@@ -214,7 +214,8 @@ def _serialize_switch(db: Session, sw: models.Switch) -> dict:
         "device_type": sw.device_type or "Switch",
         "os_type": sw.os_type or "OS10",
         "client_tenant": sw.client_tenant or "AtlasWave Maroc Demo",
-        "last_collection_timestamp": sw.last_collection_timestamp.isoformat() if sw.last_collection_timestamp else None,
+        "last_collection_timestamp": sw.last_collection_timestamp.isoformat() + "Z" if sw.last_collection_timestamp else None,
+        "last_successful_sync": sw.last_successful_sync.isoformat() + "Z" if sw.last_successful_sync else None,
         "credentials_status": sw.credentials_status or "Valid",
         "ports_up": sw.ports_up or 0,
         "ports_all": sw.ports_all or 52,
@@ -332,6 +333,22 @@ def get_switch_hardware(switch_id: uuid.UUID, db: Session = Depends(get_db), cla
         }
         for c in components
     ]
+
+
+# Get Switch Interface Names (for config push port selector)
+@router.get("/admin/switches/{switch_id}/interfaces")
+def get_switch_interfaces(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
+    verify_switch_access(db, switch_id, claims)
+    interfaces = db.query(models.DeviceInterface).filter(
+        models.DeviceInterface.switch_id == switch_id
+    ).order_by(models.DeviceInterface.name).all()
+    return {
+        "interfaces": [i.name for i in interfaces],
+        "loopbacks": [i.name for i in interfaces if i.name.startswith("loopback")],
+        "port_channels": [i.name for i in interfaces if i.name.startswith("port-channel")],
+        "ethernet": [i.name for i in interfaces if i.name.startswith("ethernet")],
+        "mgmt": [i.name for i in interfaces if i.name.startswith("mgmt")],
+    }
 
 
 # Get Switch VLANs
@@ -519,6 +536,7 @@ def rollback_switch(id: uuid.UUID, db: Session = Depends(get_db), claims: dict =
         return {"status": "APPROVAL_REQUIRED", "message": "Rollback of a spine switch requires Platform Admin approval.", "approval_id": str(approval.approval_id)}
     
     # Trigger rollback immediately
+    from app.workers.celery_app import celery_app
     from app.workers.ztp_tasks import trigger_rollback
     trigger_rollback.delay(str(switch.switch_id))
     

@@ -157,6 +157,21 @@ def seed_all():
             db.add(admin_user)
             db.add(operator_user)
             db.add(auditor_user)
+            db.flush()
+
+            # Create UserTenantMembership for operator and auditor under Acme-Enterprise
+            membership_operator = models.UserTenantMembership(
+                user_id=operator_user.user_id,
+                tenant_id=acme_tenant_id,
+                role="operator"
+            )
+            membership_auditor = models.UserTenantMembership(
+                user_id=auditor_user.user_id,
+                tenant_id=acme_tenant_id,
+                role="readonly"
+            )
+            db.add(membership_operator)
+            db.add(membership_auditor)
             db.commit()
             print("[SDN SEED] Users seeding completed.")
             print(f"[SDN SEED] Generated admin password: {admin_pwd_str}")

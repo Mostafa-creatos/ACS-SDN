@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     libpq-dev \
     iputils-ping \
+    sshpass \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -28,6 +30,9 @@ COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
 # Generate self-signed SSL certs for uvicorn
 RUN openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 365 -nodes -subj "/CN=localhost"
+
+# Install Dell OS10 Ansible collection
+RUN ansible-galaxy collection install dellemc.os10
 
 # Default command launches FastAPI via uvicorn with SSL keys if they exist
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--ssl-keyfile", "key.pem", "--ssl-certfile", "cert.pem"]

@@ -38,7 +38,7 @@ interface Props {
 const initialForm: FormData = {
   hostname: '',
   management_ip: '',
-  vendor: 'dell',
+  vendor: 'dell_os10',
   role: 'leaf',
   local_bgp_asn: 65000,
   loopback_0_ip: '',

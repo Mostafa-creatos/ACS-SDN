@@ -19,6 +19,8 @@ class UserResponse(BaseModel):
     is_active: bool
     last_login_at: Optional[datetime.datetime] = None
     role_in_tenant: str
+    temp_password: Optional[str] = None
+
 
 class UserCreate(BaseModel):
     username: str
@@ -113,7 +115,8 @@ def create_user(
         username=new_user.username,
         is_active=new_user.is_active,
         last_login_at=new_user.last_login_at,
-        role_in_tenant=membership.role
+        role_in_tenant=membership.role,
+        temp_password=temp_password
     )
 
 @router.patch("/{user_id}", response_model=UserResponse)
