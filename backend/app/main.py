@@ -1320,15 +1320,34 @@ def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends
     }
 
 @app.get("/api/v5/visibility/compliance/latest")
-def get_latest_compliance(db: Session = Depends(get_db), claims: dict = Depends(require_permission("compliance:run"))):
-    
+def get_latest_compliance(
+    page: int = 1,
+    page_size: int = 25,
+    severity: Optional[str] = None,
+    switch_id: Optional[str] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("compliance:run"))
+):
+    import json
     run = db.query(models.ComplianceRun).order_by(models.ComplianceRun.started_at.desc()).first()
     if not run:
         return {"status": "NO_RUNS_EVALUATED"}
-    import json
-    
+
     query = db.query(models.ComplianceFinding).filter(models.ComplianceFinding.compliance_run_id == run.run_id)
-    findings = query.all()
+
+    if severity:
+        query = query.filter(models.ComplianceFinding.severity == severity)
+    if switch_id:
+        query = query.filter(models.ComplianceFinding.switch_id == uuid.UUID(switch_id))
+    if status:
+        query = query.filter(models.ComplianceFinding.remediation_status == status)
+
+    total_items = query.count()
+    total_pages = max(1, (total_items + page_size - 1) // page_size)
+    offset_val = (page - 1) * page_size
+    findings = query.order_by(models.ComplianceFinding.severity.desc()).offset(offset_val).limit(page_size).all()
+
     res = []
     for f in findings:
         sw = db.query(models.Switch).filter(models.Switch.switch_id == f.switch_id).first()
@@ -1336,16 +1355,135 @@ def get_latest_compliance(db: Session = Depends(get_db), claims: dict = Depends(
             "finding_id": str(f.finding_id),
             "switch_id": str(f.switch_id),
             "switch_hostname": sw.hostname if sw else "unknown",
+            "switch_vendor": sw.vendor if sw else "unknown",
+            "switch_ip": sw.management_ip if sw else None,
             "rule_name": f.rule_name,
             "severity": f.severity,
-            "detail": f.detail
+            "detail": f.detail,
+            "expected": f.expected,
+            "remediation_status": f.remediation_status or "open",
+            "remediation_task_id": f.remediation_task_id,
+            "remediation_triggered_by": f.remediation_triggered_by,
+            "remediation_triggered_at": f.remediation_triggered_at.isoformat() if f.remediation_triggered_at else None,
+            "resolved_at": f.resolved_at.isoformat() if f.resolved_at else None,
+            "remediation_error": f.remediation_error
+        })
+
+    return {
+        "run_id": str(run.run_id),
+        "started_at": run.started_at.isoformat(),
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "triggered_by": run.triggered_by,
+        "status": run.status,
+        "summary": json.loads(run.summary) if run.summary else {},
+        "findings": res,
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "total_items": total_items
+        }
+    }
+
+@app.post("/api/v5/visibility/compliance/findings/{finding_id}/remediate")
+def remediate_compliance_finding(
+    finding_id: str,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("compliance:run"))
+):
+    import datetime
+    f = db.query(models.ComplianceFinding).filter(models.ComplianceFinding.finding_id == uuid.UUID(finding_id)).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    f.remediation_status = "pending"
+    f.remediation_triggered_by = claims.get("username") or claims.get("email") or "operator"
+    f.remediation_triggered_at = datetime.datetime.now(datetime.timezone.utc)
+    db.commit()
+    return {"status": "remediation_queued", "finding_id": str(f.finding_id)}
+
+@app.get("/api/v5/visibility/compliance/runs/{run_id}")
+def get_compliance_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("compliance:run"))
+):
+    import json
+    run = db.query(models.ComplianceRun).filter(models.ComplianceRun.run_id == uuid.UUID(run_id)).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Compliance run not found")
+    findings = db.query(models.ComplianceFinding).filter(models.ComplianceFinding.compliance_run_id == run.run_id).all()
+    res = []
+    for f in findings:
+        sw = db.query(models.Switch).filter(models.Switch.switch_id == f.switch_id).first()
+        res.append({
+            "finding_id": str(f.finding_id),
+            "switch_id": str(f.switch_id),
+            "switch_hostname": sw.hostname if sw else "unknown",
+            "switch_vendor": sw.vendor if sw else "unknown",
+            "switch_ip": sw.management_ip if sw else None,
+            "rule_name": f.rule_name,
+            "severity": f.severity,
+            "detail": f.detail,
+            "expected": f.expected,
+            "remediation_status": f.remediation_status or "open",
+            "remediation_task_id": f.remediation_task_id,
+            "remediation_triggered_by": f.remediation_triggered_by,
+            "remediation_triggered_at": f.remediation_triggered_at.isoformat() if f.remediation_triggered_at else None,
+            "resolved_at": f.resolved_at.isoformat() if f.resolved_at else None,
+            "remediation_error": f.remediation_error
         })
     return {
         "run_id": str(run.run_id),
         "started_at": run.started_at.isoformat(),
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "triggered_by": run.triggered_by,
         "status": run.status,
         "summary": json.loads(run.summary) if run.summary else {},
         "findings": res
+    }
+
+@app.get("/api/v5/visibility/compliance/rules")
+def list_compliance_rules(
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("compliance:run"))
+):
+    rules = db.query(models.ComplianceRule).order_by(models.ComplianceRule.category, models.ComplianceRule.name).all()
+    return [{
+        "rule_id": str(r.rule_id),
+        "name": r.name,
+        "category": r.category,
+        "severity": r.severity,
+        "match_type": r.match_type,
+        "template_pattern": r.template_pattern,
+        "remediation_guide": r.remediation_guide,
+        "is_active": r.is_active
+    } for r in rules]
+
+@app.patch("/api/v5/visibility/compliance/rules/{rule_id}")
+def update_compliance_rule(
+    rule_id: str,
+    payload: schemas.ComplianceRuleUpdate,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("compliance:run"))
+):
+    rule = db.query(models.ComplianceRule).filter(models.ComplianceRule.rule_id == uuid.UUID(rule_id)).first()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Compliance rule not found")
+    if payload.is_active is not None:
+        rule.is_active = payload.is_active
+    if payload.severity is not None:
+        rule.severity = payload.severity
+    db.commit()
+    db.refresh(rule)
+    return {
+        "rule_id": str(rule.rule_id),
+        "name": rule.name,
+        "category": rule.category,
+        "severity": rule.severity,
+        "match_type": rule.match_type,
+        "template_pattern": rule.template_pattern,
+        "remediation_guide": rule.remediation_guide,
+        "is_active": rule.is_active
     }
 
 @app.get("/api/v5/visibility/endpoints")
@@ -1845,18 +1983,29 @@ def get_compliance_history(
 
     results = []
     for r in runs:
+        import json
         score_pct = 0
+        total_findings = 0
+        passed_checks = 0
+        failed_checks = 0
         if r.summary:
             try:
-                import json
                 summary_data = json.loads(r.summary)
                 score_pct = summary_data.get("compliance_score_pct", 0)
+                total_findings = summary_data.get("total_checks", 0)
+                passed_checks = summary_data.get("passed_checks", 0)
+                failed_checks = summary_data.get("failed_checks", 0)
             except (json.JSONDecodeError, AttributeError):
                 pass
         results.append({
             "run_id": str(r.run_id),
-            "recorded_at": r.started_at.isoformat() if r.started_at else None,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+            "triggered_by": r.triggered_by,
             "compliance_score_pct": score_pct,
+            "total_findings": total_findings,
+            "passed_checks": passed_checks,
+            "failed_checks": failed_checks,
             "status": r.status
         })
 

@@ -29,9 +29,10 @@ $LOCAL_FRONT= "c:\Users\mosta\OneDrive\Desktop\Antigravity\SDN-Front-End\fronten
 function Invoke-SSH {
     param([string]$Cmd)
     Write-Host "`n[SSH] $Cmd" -ForegroundColor Cyan
-    $result = & ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 $REMOTE "$Cmd"
+    $result = & ssh -n -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 $REMOTE "$Cmd"
     $result
 }
+
 
 function Sync-Dir {
     param([string]$LocalPath, [string]$RemotePath, [string[]]$Excludes)
@@ -77,12 +78,13 @@ Write-Host "============================================" -ForegroundColor Magen
 
 # Step 1: Test SSH connectivity
 Write-Host "`n[1/4] Testing SSH connection..." -ForegroundColor Blue
-$test = & ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 $REMOTE "echo OK"
+$test = & ssh -n -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=15 $REMOTE "echo OK"
 if ($test -ne "OK") {
     Write-Host "[ERROR] SSH connection failed. Check your key and VM status." -ForegroundColor Red
     exit 1
 }
 Write-Host "       SSH connection: OK" -ForegroundColor Green
+
 
 # Step 2: Sync backend
 if ($SYNC_BACKEND) {
@@ -124,9 +126,9 @@ if ($SYNC_BACKEND) { $namedRm += " docker rm -f sdn_flower 2>/dev/null;" }
 $runCmds = "docker-compose stop $containerList && docker-compose rm -f $containerList &&$namedRm docker-compose build $containerList 2>&1 | tail -30;"
 if ($SYNC_BACKEND) {
     $runCmds += " docker rm -f sdn_controller_app sdn_celery_worker sdn_flower 2>/dev/null;"
-    $runCmds += " docker run -d --name sdn_controller_app --network sdn-controller_default -p 8000:8000 -e DATABASE_URL=postgresql://sdn_admin:sdn_secure_password@db:5432/sdn_controller -e REDIS_URL=redis://redis-master:6379/0 -e \`"REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379;redis-sentinel-2:26379;redis-sentinel-3:26379\`" -e REDIS_SENTINEL_MASTER=mymaster -e SEED_ADMIN_PASSWORD=admin_password_123! -e SEED_OPERATOR_PASSWORD=operator_password_123! -e SEED_AUDITOR_PASSWORD=auditor_password_123! -e SEED_ON_STARTUP=true -e GNMI_DEFAULT_PASSWORD=NokiaSrl1! --restart unless-stopped sdn-controller_app:latest;"
-    $runCmds += " docker run -d --name sdn_celery_worker --network sdn-controller_default -e DATABASE_URL=postgresql://sdn_admin:sdn_secure_password@db:5432/sdn_controller -e REDIS_URL=redis://redis-master:6379/0 -e \`"REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379;redis-sentinel-2:26379;redis-sentinel-3:26379\`" -e REDIS_SENTINEL_MASTER=mymaster -e SEED_ADMIN_PASSWORD=admin_password_123! -e SEED_OPERATOR_PASSWORD=operator_password_123! -e SEED_AUDITOR_PASSWORD=auditor_password_123! -e SEED_ON_STARTUP=true -e GNMI_DEFAULT_PASSWORD=NokiaSrl1! --restart unless-stopped sdn-controller_celery-worker:latest celery -A app.workers.celery_app worker --loglevel=info;"
-    $runCmds += " docker run -d --name sdn_flower --network sdn-controller_default -p 5555:5555 --restart unless-stopped sdn-controller_flower:latest celery -A app.workers.celery_app flower --port=5555 --basic_auth=admin:admin;"
+    $runCmds += " docker run -d --name sdn_controller_app --network sdn-controller_default --network-alias app -p 8000:8000 -e DATABASE_URL=postgresql://sdn_admin:sdn_secure_password@db:5432/sdn_controller -e REDIS_URL=redis://redis-master:6379/0 -e \`"REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379;redis-sentinel-2:26379;redis-sentinel-3:26379\`" -e REDIS_SENTINEL_MASTER=mymaster -e SEED_ADMIN_PASSWORD=admin_password_123! -e SEED_OPERATOR_PASSWORD=operator_password_123! -e SEED_AUDITOR_PASSWORD=auditor_password_123! -e SEED_ON_STARTUP=true -e GNMI_DEFAULT_PASSWORD=NokiaSrl1! --restart unless-stopped sdn-controller_app:latest;"
+    $runCmds += " docker run -d --name sdn_celery_worker --network sdn-controller_default --network-alias celery-worker -e DATABASE_URL=postgresql://sdn_admin:sdn_secure_password@db:5432/sdn_controller -e REDIS_URL=redis://redis-master:6379/0 -e \`"REDIS_SENTINEL_HOSTS=redis-sentinel-1:26379;redis-sentinel-2:26379;redis-sentinel-3:26379\`" -e REDIS_SENTINEL_MASTER=mymaster -e SEED_ADMIN_PASSWORD=admin_password_123! -e SEED_OPERATOR_PASSWORD=operator_password_123! -e SEED_AUDITOR_PASSWORD=auditor_password_123! -e SEED_ON_STARTUP=true -e GNMI_DEFAULT_PASSWORD=NokiaSrl1! --restart unless-stopped sdn-controller_celery-worker:latest celery -A app.workers.celery_app worker --loglevel=info;"
+    $runCmds += " docker run -d --name sdn_flower --network sdn-controller_default --network-alias flower -p 5555:5555 --restart unless-stopped sdn-controller_flower:latest celery -A app.workers.celery_app flower --port=5555 --basic_auth=admin:admin;"
 }
 if ($SYNC_FRONTEND) {
     $runCmds += " docker rm -f sdn_frontend 2>/dev/null;"
