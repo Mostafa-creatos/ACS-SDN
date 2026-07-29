@@ -74,12 +74,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       let mappedRole = (decoded.role || 'Operator') as UserRole;
       if (decoded.role === 'Tenant Operator') mappedRole = 'Operator';
       if (decoded.role === 'Tenant Auditor') mappedRole = 'Read-only';
+      const userTenants: string[] = decoded.tenants || [];
       setUser({
         email: decoded.sub || decoded.email || '',
         role: mappedRole,
-        tenants: decoded.tenants || [],
+        tenants: userTenants,
         must_change_password: decoded.must_change_password || false,
       });
+
+      // Auto-select tenant when user has exactly one; validate when multiple
+      if (userTenants.length === 1) {
+        setSelectedTenant(userTenants[0]);
+        localStorage.setItem('atlas_tenant', userTenants[0]);
+      } else if (userTenants.length > 1) {
+        const stored = localStorage.getItem('atlas_tenant');
+        if (!stored || !userTenants.includes(stored)) {
+          setSelectedTenant(userTenants[0]);
+          localStorage.setItem('atlas_tenant', userTenants[0]);
+        }
+      }
     } else {
       localStorage.removeItem('atlas_jwt');
       setUser(null);

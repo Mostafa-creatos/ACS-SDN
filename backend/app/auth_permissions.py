@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from .auth import get_current_user_claims
 from .db import get_db
@@ -9,6 +9,7 @@ from . import models
 # ---------------------------------------------------------
 # RBAC Matrix: Maps explicit actions to required roles
 # ---------------------------------------------------------
+
 
 PERMISSION_MATRIX = {
     # Users & Access
@@ -50,10 +51,40 @@ PERMISSION_MATRIX = {
 # Readonly allows everything above + readonly
 ALL_ROLES = ["readonly", "operator", "tenant_admin", "platform_admin"]
 
-def _log_audit_event(db: Session, user_id: str, tenant_id: str, action: str, resource: str, status_msg: str, detail: str = ""):
+def log_audit_event(
+    db: Session,
+    request: Request,
+    user_id: str,
+    tenant_id: str,
+    action: str,
+    resource: str,
+    status_msg: str,
+    detail: str = "",
+    payload: dict = None
+):
     try:
         u_uuid = uuid.UUID(user_id) if user_id else None
         t_uuid = uuid.UUID(tenant_id) if tenant_id and tenant_id != "None" else None
+
+        # Extract request metadata
+        ip_address = None
+        user_agent = None
+        request_method = None
+        request_url = None
+
+        if request:
+            ip_address = request.client.host if request.client else None
+            user_agent = request.headers.get("user-agent")
+            request_method = request.method
+            request_url = str(request.url.path)
+
+        # Sanitize payload if it contains password/secrets
+        safe_payload = None
+        if payload:
+            safe_payload = {
+                k: ("******" if any(s in k.lower() for s in ["password", "secret", "token", "key"]) else v)
+                for k, v in payload.items()
+            }
 
         log = models.AuditLog(
             user_id=u_uuid,
@@ -61,13 +92,18 @@ def _log_audit_event(db: Session, user_id: str, tenant_id: str, action: str, res
             action=action,
             resource=resource,
             status=status_msg,
-            detail=detail
+            detail=detail,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            request_method=request_method,
+            request_url=request_url,
+            payload=safe_payload
         )
         db.add(log)
         db.commit()
     except Exception as e:
         db.rollback()
-        print(f"[AUDIT LOG ERROR] Failed to insert audit log (likely mock user or tenant constraint): {e}")
+        print(f"[AUDIT LOG ERROR] Failed to insert audit log: {e}")
 
 
 class require_permission:
@@ -78,7 +114,7 @@ class require_permission:
     def __init__(self, permission_name: str):
         self.permission_name = permission_name
 
-    def __call__(self, claims: dict = Depends(get_current_user_claims), db: Session = Depends(get_db)):
+    def __call__(self, request: Request, claims: dict = Depends(get_current_user_claims), db: Session = Depends(get_db)):
         user_role = claims.get("role")
         user_id = claims.get("user_id")
         tenant_id = claims.get("tenant_id")
@@ -92,8 +128,9 @@ class require_permission:
 
         if user_role not in allowed_roles:
             # Log the denial
-            _log_audit_event(
+            log_audit_event(
                 db=db,
+                request=request,
                 user_id=user_id,
                 tenant_id=tenant_id,
                 action=self.permission_name,

@@ -3,6 +3,7 @@ import ipaddress
 import jwt
 import uuid
 import bcrypt
+from datetime import datetime
 from typing import List, Dict, Optional
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.responses import HTMLResponse
@@ -118,6 +119,21 @@ def migrate_db_columns(engine):
                     conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN discards_out BIGINT DEFAULT 0"))
                 if "last_flapped" not in iface_cols:
                     conn.execute(text("ALTER TABLE device_interfaces ADD COLUMN last_flapped TIMESTAMP DEFAULT NULL"))
+
+        # Migrate audit_logs columns
+        if "audit_logs" in inspector.get_table_names():
+            audit_cols = [c["name"] for c in inspector.get_columns("audit_logs")]
+            with engine.begin() as conn:
+                if "ip_address" not in audit_cols:
+                    conn.execute(text("ALTER TABLE audit_logs ADD COLUMN ip_address VARCHAR(45) DEFAULT NULL"))
+                if "user_agent" not in audit_cols:
+                    conn.execute(text("ALTER TABLE audit_logs ADD COLUMN user_agent VARCHAR(512) DEFAULT NULL"))
+                if "request_method" not in audit_cols:
+                    conn.execute(text("ALTER TABLE audit_logs ADD COLUMN request_method VARCHAR(10) DEFAULT NULL"))
+                if "request_url" not in audit_cols:
+                    conn.execute(text("ALTER TABLE audit_logs ADD COLUMN request_url VARCHAR(512) DEFAULT NULL"))
+                if "payload" not in audit_cols:
+                    conn.execute(text("ALTER TABLE audit_logs ADD COLUMN payload JSON DEFAULT NULL"))
 
     # Migration: Drop FabricBlueprint (removed in Sprint 5)
     if "fabrics" in inspector.get_table_names():
@@ -689,28 +705,101 @@ if os.path.exists("frontend/dist"):
 
 @app.get("/api/v5/admin/audit-logs")
 def get_audit_logs(
+    page: int = 1,
     limit: int = 50,
+    action: Optional[str] = None,
+    status: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = None,
     db: Session = Depends(get_db),
     claims: dict = Depends(require_permission("audit:read"))
 ):
-    logs = db.query(models.AuditLog).order_by(models.AuditLog.timestamp.desc()).limit(limit).all()
-    return [
-        {
-            "audit_id": str(l.audit_id),
-            "log_id": str(l.audit_id),
-            "timestamp": l.timestamp.isoformat() if l.timestamp else None,
-            "created_at": l.timestamp.isoformat() if l.timestamp else None,
-            "user_id": str(l.user_id) if l.user_id else None,
-            "user_email": l.user.username if l.user else "system",
-            "tenant_id": str(l.tenant_id) if l.tenant_id else None,
-            "tenant_name": l.tenant.tenant_name if l.tenant else "System",
-            "action": l.action,
-            "resource": l.resource,
-            "status": l.status,
-            "detail": l.detail,
-        }
-        for l in logs
-    ]
+    query = db.query(models.AuditLog)
+
+    # Filtering by tenant (unless requested ALL by platform admin)
+    user_tenant_id = claims.get("tenant_id")
+    user_role = claims.get("role")
+    
+    # Platform Admin can request all or specific tenant; Tenant roles are forced to their session tenant_id
+    if user_role != "platform_admin":
+        query = query.filter(models.AuditLog.tenant_id == uuid.UUID(user_tenant_id) if user_tenant_id else None)
+    elif tenant_id and tenant_id != "ALL" and tenant_id != "System":
+        try:
+            query = query.filter(models.AuditLog.tenant_id == uuid.UUID(tenant_id))
+        except:
+            pass
+
+    # Status filter
+    if status and status != "ALL":
+        query = query.filter(models.AuditLog.status == status)
+
+    # Action filter
+    if action and action != "ALL":
+        query = query.filter(models.AuditLog.action.ilike(f"%{action}%"))
+
+    # Date range filters
+    if start_date:
+        try:
+            dt_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+            query = query.filter(models.AuditLog.timestamp >= dt_start)
+        except Exception as e:
+            print("Invalid start_date:", e)
+    if end_date:
+        try:
+            dt_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+            query = query.filter(models.AuditLog.timestamp <= dt_end)
+        except Exception as e:
+            print("Invalid end_date:", e)
+
+    # Search filter
+    if search:
+        query = query.filter(
+            (models.AuditLog.detail.ilike(f"%{search}%")) |
+            (models.AuditLog.action.ilike(f"%{search}%")) |
+            (models.AuditLog.resource.ilike(f"%{search}%"))
+        )
+
+    # Get total count before pagination
+    total_count = query.count()
+
+    # Pagination execution
+    offset = (page - 1) * limit
+    logs = query.order_by(models.AuditLog.timestamp.desc()).offset(offset).limit(limit).all()
+
+    import math
+    total_pages = math.ceil(total_count / limit) if total_count > 0 else 1
+
+    return {
+        "logs": [
+            {
+                "audit_id": str(l.audit_id),
+                "log_id": str(l.audit_id),
+                "timestamp": l.timestamp.isoformat() if l.timestamp else None,
+                "created_at": l.timestamp.isoformat() if l.timestamp else None,
+                "user_id": str(l.user_id) if l.user_id else None,
+                "user_email": l.user.username if l.user else "system",
+                "tenant_id": str(l.tenant_id) if l.tenant_id else None,
+                "tenant_name": l.tenant.tenant_name if l.tenant else "System",
+                "action": l.action,
+                "resource": l.resource,
+                "status": l.status,
+                "detail": l.detail,
+                "ip_address": l.ip_address,
+                "user_agent": l.user_agent,
+                "request_method": l.request_method,
+                "request_url": l.request_url,
+                "payload": l.payload,
+            }
+            for l in logs
+        ],
+        "total_count": total_count,
+        "page": page,
+        "pages": total_pages,
+        "limit": limit
+    }
+
 
 
 @app.get("/api/v5/admin/stats")

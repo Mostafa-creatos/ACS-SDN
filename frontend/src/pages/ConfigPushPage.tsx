@@ -584,6 +584,13 @@ export const ConfigPushPage: React.FC = () => {
                     </button>
                     {switchDropdownOpen && (
                       <div className="absolute z-20 w-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                        {switches.length === 0 ? (
+                          <div className="p-6 text-center">
+                            <p className="text-xs font-bold text-slate-400">No switches available</p>
+                            <p className="text-[10px] text-slate-300 mt-1">Contact your administrator to assign this tenant to a fabric with switches.</p>
+                          </div>
+                        ) : (
+                        <>
                         <div className="p-2 border-b border-slate-100 bg-slate-50 flex justify-between">
                           <button onClick={selectAll} className="text-[10px] font-bold text-atlas-primary hover:underline">
                             Select All
@@ -614,6 +621,8 @@ export const ConfigPushPage: React.FC = () => {
                             </div>
                           </label>
                         ))}
+                        </>
+                        )}
                       </div>
                     )}
                   </div>

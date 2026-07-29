@@ -1,13 +1,13 @@
 import uuid
 import bcrypt
 import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from ..db import get_db
 from .. import models
-from ..auth_permissions import require_permission
+from ..auth_permissions import require_permission, log_audit_event
 
 router = APIRouter(prefix="/api/v5/users", tags=["users"])
 
@@ -67,9 +67,11 @@ def list_users(
 @router.post("", response_model=UserResponse)
 def create_user(
     payload: UserCreate,
+    request: Request,
     db: Session = Depends(get_db),
     claims: dict = Depends(require_permission("users:write"))
 ):
+
     """Create a user and assign them to the current tenant."""
     # A tenant_admin cannot elevate someone to platform_admin
     creator_role = claims.get("role", "")
@@ -110,6 +112,18 @@ def create_user(
 
     print(f"[USER ADMIN] Created user {new_user.username} with temp password: {temp_password}")
 
+    log_audit_event(
+        db=db,
+        request=request,
+        user_id=claims.get("user_id"),
+        tenant_id=tenant_id,
+        action="users:write",
+        resource=f"user/{new_user.username}",
+        status_msg="success",
+        detail=f"Created user '{new_user.username}' with role '{payload.role}'",
+        payload={"username": payload.username, "role": payload.role}
+    )
+
     return UserResponse(
         user_id=str(new_user.user_id),
         username=new_user.username,
@@ -123,6 +137,7 @@ def create_user(
 def update_user(
     user_id: str,
     payload: UserUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     claims: dict = Depends(require_permission("users:write"))
 ):
@@ -153,6 +168,18 @@ def update_user(
 
     db.commit()
 
+    log_audit_event(
+        db=db,
+        request=request,
+        user_id=claims.get("user_id"),
+        tenant_id=tenant_id,
+        action="users:write",
+        resource=f"user/{target_user.username}",
+        status_msg="success",
+        detail=f"Updated user '{target_user.username}' status/role",
+        payload={"user_id": user_id, "active": target_user.is_active, "role": membership.role}
+    )
+
     return UserResponse(
         user_id=str(target_user.user_id),
         username=target_user.username,
@@ -164,6 +191,7 @@ def update_user(
 @router.delete("/{user_id}")
 def deactivate_user(
     user_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     claims: dict = Depends(require_permission("users:write"))
 ):
@@ -185,6 +213,19 @@ def deactivate_user(
 
     target_user.is_active = False
     db.commit()
+
+    log_audit_event(
+        db=db,
+        request=request,
+        user_id=claims.get("user_id"),
+        tenant_id=tenant_id,
+        action="users:write",
+        resource=f"user/{target_user.username}",
+        status_msg="success",
+        detail=f"Deactivated user '{target_user.username}'",
+        payload={"user_id": user_id}
+    )
+
     return {"status": "User deactivated"}
 
 
@@ -194,6 +235,7 @@ def deactivate_user(
 def grant_tenant_access(
     user_id: str,
     payload: TenantMembershipCreate,
+    request: Request,
     db: Session = Depends(get_db),
     claims: dict = Depends(require_permission("users:grant_cross_tenant"))
 ):
@@ -219,6 +261,19 @@ def grant_tenant_access(
         db.add(membership)
     
     db.commit()
+
+    log_audit_event(
+        db=db,
+        request=request,
+        user_id=claims.get("user_id"),
+        tenant_id=claims.get("tenant_id"),
+        action="users:grant_cross_tenant",
+        resource=f"user/{target_user.username}",
+        status_msg="success",
+        detail=f"Granted user '{target_user.username}' access to tenant '{payload.tenant_id}' with role '{payload.role}'",
+        payload={"user_id": user_id, "tenant_id": payload.tenant_id, "role": payload.role}
+    )
+
     return {"status": "Tenant access granted"}
 
 
@@ -226,6 +281,7 @@ def grant_tenant_access(
 def revoke_tenant_access(
     user_id: str,
     tenant_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     claims: dict = Depends(require_permission("users:grant_cross_tenant"))
 ):
@@ -238,6 +294,21 @@ def revoke_tenant_access(
     if not membership:
         raise HTTPException(status_code=404, detail="Membership not found")
 
+    target_user = db.query(models.User).filter(models.User.user_id == user_id).first()
+
     db.delete(membership)
     db.commit()
+
+    log_audit_event(
+        db=db,
+        request=request,
+        user_id=claims.get("user_id"),
+        tenant_id=claims.get("tenant_id"),
+        action="users:grant_cross_tenant",
+        resource=f"user/{target_user.username if target_user else user_id}",
+        status_msg="success",
+        detail=f"Revoked user '{target_user.username if target_user else user_id}' access to tenant '{tenant_id}'",
+        payload={"user_id": user_id, "tenant_id": tenant_id}
+    )
+
     return {"status": "Tenant access revoked"}

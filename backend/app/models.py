@@ -441,6 +441,13 @@ class AuditLog(Base):
     status = Column(String(64), nullable=False)  # e.g., "denied", "success"
     detail = Column(String, nullable=True)
 
+    # Forensic additions
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(String(512), nullable=True)
+    request_method = Column(String(10), nullable=True)
+    request_url = Column(String(512), nullable=True)
+    payload = Column(JSON, nullable=True)
+
     user = relationship("User")
     tenant = relationship("Tenant")
 
