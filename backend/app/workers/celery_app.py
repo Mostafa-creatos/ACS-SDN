@@ -57,3 +57,7 @@ celery_app.conf.update(
 import app.workers.sync_tasks
 import app.workers.ztp_tasks
 import app.workers.config_lifecycle
+
+# Make this the default app so @shared_task calls made from the FastAPI app
+# process route through the configured sentinel broker instead of localhost.
+celery_app.set_default()

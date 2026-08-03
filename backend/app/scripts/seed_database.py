@@ -177,6 +177,69 @@ def seed_all():
             print(f"[SDN SEED] Generated admin password: {admin_pwd_str}")
             print(f"[SDN SEED] Generated operator password: {operator_pwd_str}")
             print(f"[SDN SEED] Generated auditor password: {auditor_pwd_str}")
+
+        # 4. Seed golden compliance rules if empty
+        if db.query(models.ComplianceRule).count() == 0:
+            print("[SDN SEED] Seeding golden compliance rules...")
+            rules = [
+                models.ComplianceRule(
+                    name="NTP Server Configuration",
+                    category="Security",
+                    severity="critical",
+                    match_type="contains",
+                    template_pattern="ntp server {fabric.expected_ntp_servers}",
+                    remediation_guide="Configure an NTP server pointing to the fabric NTP peer.",
+                    is_active=True
+                ),
+                models.ComplianceRule(
+                    name="DNS Name Servers",
+                    category="Security",
+                    severity="critical",
+                    match_type="contains",
+                    template_pattern="ip name-server {fabric.expected_dns_servers}",
+                    remediation_guide="Add the fabric DNS resolver under ip name-server.",
+                    is_active=True
+                ),
+                models.ComplianceRule(
+                    name="AAA Local Authentication",
+                    category="Security",
+                    severity="critical",
+                    match_type="contains",
+                    template_pattern="aaa authentication login default local",
+                    remediation_guide="Enable AAA local login authentication on the device.",
+                    is_active=True
+                ),
+                models.ComplianceRule(
+                    name="Syslog Logging Server",
+                    category="Observability",
+                    severity="warning",
+                    match_type="contains",
+                    template_pattern="logging host {fabric.expected_syslog_server}",
+                    remediation_guide="Point centralized logging at the fabric syslog collector.",
+                    is_active=True
+                ),
+                models.ComplianceRule(
+                    name="LLDP Global Enable",
+                    category="Observability",
+                    severity="warning",
+                    match_type="contains",
+                    template_pattern="lldp enable",
+                    remediation_guide="Enable LLDP globally on the switch.",
+                    is_active=True
+                ),
+                models.ComplianceRule(
+                    name="Hostname Match",
+                    category="Routing",
+                    severity="warning",
+                    match_type="contains",
+                    template_pattern="hostname {switch.hostname}",
+                    remediation_guide="Ensure the running hostname matches the controller inventory.",
+                    is_active=True
+                ),
+            ]
+            db.add_all(rules)
+            db.commit()
+            print("[SDN SEED] Compliance rules seeding completed.")
     except Exception as e:
         db.rollback()
         print(f"[SDN SEED] Failed to seed database: {e}")

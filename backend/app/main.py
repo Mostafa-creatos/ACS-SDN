@@ -1399,7 +1399,12 @@ def remediate_compliance_finding(
     f.remediation_triggered_by = claims.get("username") or claims.get("email") or "operator"
     f.remediation_triggered_at = datetime.datetime.now(datetime.timezone.utc)
     db.commit()
-    return {"status": "remediation_queued", "finding_id": str(f.finding_id)}
+
+    from .workers.config_lifecycle import apply_remediation
+    task = apply_remediation.apply_async(args=[finding_id])
+    f.remediation_task_id = task.id
+    db.commit()
+    return {"status": "remediation_queued", "finding_id": finding_id, "task_id": task.id}
 
 @app.get("/api/v5/visibility/compliance/runs/{run_id}")
 def get_compliance_run(

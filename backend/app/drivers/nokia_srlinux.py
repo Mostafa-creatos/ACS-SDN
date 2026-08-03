@@ -72,11 +72,18 @@ class NokiaSrlinuxDriver(SouthboundNetworkDriver):
                     output_lines.append(chunk)
 
                 full_output = "\n".join(output_lines)
-                error_indicators = ["Error:", "ERROR:", "invalid", "Invalid"]
-                has_error = any(ind in full_output for ind in error_indicators)
+                import re as _re
+                ansi_re = _re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+                clean_output = ansi_re.sub("", full_output)
+                clean_output = clean_output.replace("\r", "")
+                error_indicators = [
+                    "Error:", "ERROR:", "error:", "invalid", "Invalid",
+                    "Parsing error", "Unknown token", "syntax error", "unknown command"
+                ]
+                has_error = any(ind in clean_output for ind in error_indicators)
                 return {
                     "success": not has_error,
-                    "output": full_output,
+                    "output": clean_output,
                     "applied_config": config_payload
                 }
             except Exception as e:
@@ -86,6 +93,40 @@ class NokiaSrlinuxDriver(SouthboundNetworkDriver):
 
         import asyncio
         return await asyncio.to_thread(_apply)
+
+    async def fetch_config(self, host: str, username: str, password: str) -> str:
+        """Fetch the running configuration from a Nokia SR Linux switch via SSH CLI."""
+        import paramiko
+        def _fetch():
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            try:
+                client.connect(host, port=22, username=username, password=password, timeout=15, look_for_keys=False)
+                shell = client.invoke_shell()
+                import time
+                time.sleep(2)
+                if shell.recv_ready():
+                    shell.recv(65536)
+                shell.send("info from running\n")
+                time.sleep(3)
+                chunks = []
+                while shell.recv_ready():
+                    chunks.append(shell.recv(65536).decode("utf-8", errors="ignore"))
+                    time.sleep(0.3)
+                output = "".join(chunks)
+                shell.send("quit\n")
+                time.sleep(0.5)
+                import re as _re
+                ansi_re = _re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+                clean = ansi_re.sub("", output).replace("\r", "")
+                return clean
+            except Exception as e:
+                return f"! Failed to fetch Nokia config: {e}"
+            finally:
+                client.close()
+
+        import asyncio
+        return await asyncio.to_thread(_fetch)
 
     async def validate_candidate(self, host: str, username: str, password: str, candidate_config: str) -> dict:
         """Validate candidate config by comparing against running config without applying."""

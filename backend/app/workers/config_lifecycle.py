@@ -15,24 +15,78 @@ def generate_golden_config(switch: models.Switch) -> str:
     """
     if switch.vendor == "nokia":
         return (
-            "/ system ntp server 192.168.100.1 admin-state enable\n"
-            "/ system dns server 8.8.8.8 admin-state enable\n"
-            "/ system security aaa local-authentication admin-state enable\n"
-            f"/ system hostname {switch.hostname}\n"
+            "/ system ntp network-instance mgmt\n"
+            "/ system ntp admin-state enable\n"
+            "/ system ntp server 192.168.100.1\n"
+            "/ system dns-instance mgmt network-instance mgmt\n"
+            "/ system dns-instance mgmt server-list [ 8.8.8.8 ]\n"
+            "/ system logging remote-server 10.10.100.5 remote-port 514\n"
+            "/ system lldp admin-state enable\n"
+            f"/ system name host-name {switch.hostname}\n"
         )
     elif switch.vendor == "dell_os10":
         return (
             "ntp server 192.168.100.1\n"
             "ip name-server 8.8.8.8\n"
             "aaa authentication login default local\n"
+            "logging server 10.10.100.5\n"
+            "lldp enable\n"
+            "spanning-tree mode mst\n"
             f"hostname {switch.hostname}\n"
         )
     else:
         return (
             "ntp server 192.168.100.1\n"
             "ip name-server 8.8.8.8\n"
+            "logging server 10.10.100.5\n"
+            "lldp enable\n"
             f"hostname {switch.hostname}\n"
         )
+
+def _flatten_srlinux_info(config_text: str) -> str:
+    """Flatten SR Linux `info` CLI output into one full statement path per line.
+
+    e.g. nested `server-list [ 8.8.8.8 ]` becomes `... server-list 8.8.8.8`.
+    """
+    lines_out = []
+    stack = []
+    for raw in config_text.splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("!", "#", "--", "*")):
+            continue
+        indent = len(line) - len(line.lstrip())
+        depth = indent // 4
+        while stack and stack[-1][1] >= depth:
+            stack.pop()
+        if stripped in ("}", "]"):
+            continue
+        if stripped.endswith("[") or stripped.endswith("{"):
+            name = stripped[:-1].strip()
+            if len(name.split()) > 1:
+                path = " ".join(s[0] for s in stack)
+                lines_out.append(f"{path} {name}".strip() if path else name)
+            stack.append((name, depth))
+            continue
+        path = " ".join(s[0] for s in stack)
+        lines_out.append(f"{path} {stripped}".strip() if path else stripped)
+    return "\n".join(lines_out)
+
+def _adapt_nokia_expected_pattern(expected_str: str) -> str:
+    """Translate Dell-CLI style compliance patterns into SR Linux equivalents."""
+    adapted = expected_str
+    if adapted.strip() == "aaa authentication login default local":
+        adapted = "aaa"
+    replacements = [
+        ("logging server ", "logging remote-server "),
+        ("ip name-server ", "server-list "),
+        ("name-server ", "server-list "),
+        ("lldp enable", "lldp admin-state enable"),
+        ("hostname ", "host-name "),
+    ]
+    for old, new in replacements:
+        adapted = adapted.replace(old, new)
+    return adapted
 
 def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "system") -> models.ConfigSnapshot:
     """
@@ -58,12 +112,13 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
         finally:
             collector.close()
     elif switch.vendor == "nokia":
-        from app.telemetry.gnmi_client import get_nokia_config
+        from app.drivers.nokia_srlinux import NokiaSrlinuxDriver
         try:
-            raw_config = get_nokia_config(switch.management_ip, password="NokiaSrl1!")
+            driver = NokiaSrlinuxDriver()
+            raw_config = asyncio.run(driver.fetch_config(switch.management_ip, username="admin", password="NokiaSrl1!"))
             switch.running_config = raw_config
         except Exception as e:
-            raw_config = switch.running_config or "! Failed to connect to Nokia device via gNMI"
+            raw_config = switch.running_config or "! Failed to connect to Nokia device via SSH"
             print(f"[SNAPSHOT] Failed to collect real config for Nokia {switch.hostname}: {e}")
     else:
         # Fallback to whatever is in the DB
@@ -137,6 +192,11 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
         else:
             config = snapshot.raw_config or ""
 
+        # Nokia SR Linux configs are CLI `info` dumps: flatten them so Dell-style
+        # compliance patterns can be matched against full statement paths.
+        if sw.vendor == "nokia":
+            config = _flatten_srlinux_info(config)
+
         # Interpolation context dictionary
         context = {
             "fabric.expected_ntp_servers": fabric.expected_ntp_servers if fabric and fabric.expected_ntp_servers else "192.168.100.1",
@@ -156,6 +216,10 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
             expected_str = rule.template_pattern
             for key, val in context.items():
                 expected_str = expected_str.replace("{" + key + "}", val)
+
+            # Nokia SR Linux patterns use different CLI wording than the Dell-style rules
+            if sw.vendor == "nokia":
+                expected_str = _adapt_nokia_expected_pattern(expected_str)
 
             # Match evaluation
             is_compliant = False
@@ -357,6 +421,74 @@ def config_compliance_mgr():
     except Exception as e:
         db.rollback()
         print(f"[DRIFT MGR] Error: {e}")
+    finally:
+        db.close()
+
+@shared_task(bind=True, name="app.workers.config_lifecycle.apply_remediation")
+def apply_remediation(self, finding_id_str: str):
+    """
+    Celery task that pushes the golden config to the affected switch to resolve
+    a compliance finding. Updates the finding status to success/failed.
+    """
+    from ..db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        finding = db.query(models.ComplianceFinding).filter(
+            models.ComplianceFinding.finding_id == uuid.UUID(finding_id_str)
+        ).first()
+        if not finding:
+            return {"status": "FAILED", "error": "Finding not found"}
+
+        switch = db.query(models.Switch).filter(models.Switch.switch_id == finding.switch_id).first()
+        if not switch:
+            finding.remediation_status = "failed"
+            finding.remediation_error = "Switch not found"
+            db.commit()
+            return {"status": "FAILED", "error": "Switch not found"}
+
+        config_payload = generate_golden_config(switch)
+        driver = resolve_southbound_driver(switch.vendor)
+
+        import os
+        if switch.vendor in ["nokia", "nokia_srlinux", "timetra"]:
+            username, password = "admin", os.environ.get("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!")
+        else:
+            username, password = "admin", "admin"
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(
+                driver.push_config(switch.management_ip, username, password, config_payload)
+            )
+        finally:
+            loop.close()
+
+        success = result.get("success", False)
+        finding.remediation_status = "success" if success else "failed"
+        finding.remediation_error = None if success else (result.get("output", "") or "Config push failed")[:2000]
+        finding.resolved_at = datetime.datetime.now(datetime.timezone.utc) if success else None
+        db.commit()
+
+        return {
+            "status": "REMEDIATED" if success else "FAILED",
+            "finding_id": finding_id_str,
+            "output": result.get("output", "")
+        }
+    except Exception as e:
+        db.rollback()
+        error_msg = str(e)[:2000]
+        try:
+            finding = db.query(models.ComplianceFinding).filter(
+                models.ComplianceFinding.finding_id == uuid.UUID(finding_id_str)
+            ).first()
+            if finding:
+                finding.remediation_status = "failed"
+                finding.remediation_error = error_msg
+                db.commit()
+        except Exception:
+            db.rollback()
+        return {"status": "FAILED", "error": error_msg}
     finally:
         db.close()
 
