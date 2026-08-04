@@ -5,7 +5,7 @@ import datetime
 import asyncio
 from sqlalchemy.orm import Session
 from .. import models
-from ..main import resolve_southbound_driver
+
 from celery import shared_task
 import difflib
 
@@ -321,6 +321,7 @@ def restore_config_snapshot(db: Session, snapshot_id: uuid.UUID, operator_claims
         raise PermissionError("Approval Exception: High blast radius rollback requires Platform Admin authorization.")
 
     # Push config to the switch via southbound driver
+    from ..main import resolve_southbound_driver
     driver = resolve_southbound_driver(switch.vendor)
     loop = asyncio.new_event_loop()
     try:
@@ -448,6 +449,7 @@ def apply_remediation(self, finding_id_str: str):
             return {"status": "FAILED", "error": "Switch not found"}
 
         config_payload = generate_golden_config(switch)
+        from ..main import resolve_southbound_driver
         driver = resolve_southbound_driver(switch.vendor)
 
         import os

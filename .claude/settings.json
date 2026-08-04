@@ -1,0 +1,6 @@
+{
+    "claude-control.apiProvider": "openai",
+    "claude-control.baseUrl": "https://api.tokenrouter.com/v1",
+    "claude-control.apiKey": "sk-eTisBLWuMCZTjzQotAfdH02c0Fce8eOSp6eBWDkvBbvr0s4O",
+    "claude-control.model": "z-ai/glm-5-turbo"
+}

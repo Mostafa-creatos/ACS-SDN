@@ -467,6 +467,7 @@ class PolicyApproval(Base):
     status = Column(String(32), default="pending")  # 'pending', 'approved', 'rejected'
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     diff_payload = Column(String, nullable=True)
+    requested_by = Column(String(100), nullable=True, default="system")
 
     tenant = relationship("Tenant")
 
@@ -486,3 +487,34 @@ class SwitchSTPState(Base):
     collected_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     switch = relationship("Switch", back_populates="stp_state")
+
+
+class SwitchBackup(Base):
+    __tablename__ = "switch_backups"
+
+    backup_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    switch_id = Column(UUID(as_uuid=True), ForeignKey("switches.switch_id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_by = Column(String(100), nullable=False)
+    config_hash = Column(String(64), nullable=False)
+    config_content = Column(Text, nullable=False)
+    backup_type = Column(String(32), default="manual")
+    status = Column(String(32), default="completed")
+    error_message = Column(Text, nullable=True)
+
+    switch = relationship("Switch")
+
+
+class BackupSchedule(Base):
+    __tablename__ = "backup_schedules"
+
+    schedule_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    fabric_id = Column(UUID(as_uuid=True), ForeignKey("fabrics.fabric_id", ondelete="CASCADE"), nullable=True)
+    schedule_interval = Column(String(32), nullable=False)
+    cron_expression = Column(String(100), nullable=True)
+    is_active = Column(Boolean, default=True)
+    last_run = Column(DateTime, nullable=True)
+    next_run = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    fabric = relationship("Fabric")

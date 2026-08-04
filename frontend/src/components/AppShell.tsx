@@ -18,7 +18,8 @@ import {
   GitBranch,
   FileSpreadsheet,
   Send,
-  ScrollText
+  ScrollText,
+  Database
 } from 'lucide-react';
 
 export const AppShell: React.FC = () => {
@@ -63,6 +64,7 @@ export const AppShell: React.FC = () => {
     { name: 'Switches', path: '/switches', icon: Network },
     { name: 'Spanning Tree (STP)', path: '/stp', icon: GitBranch },
     { name: 'ZTP Console', path: '/ztp', icon: PlugZap },
+    { name: 'Backup & Restore', path: '/backups', icon: Database },
   ];
 
   const policyItems = [

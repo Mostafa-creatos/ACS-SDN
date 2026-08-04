@@ -122,3 +122,165 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str):
     finally:
         db.close()
 
+
+@celery_app.task(bind=True, name="app.workers.sync_tasks.backup_switch_config_task")
+def backup_switch_config_task(self, switch_id_str: str, username: str = "system", backup_type: str = "manual"):
+    """
+    Asynchronous Celery task for pulling switch running configuration and creating a snapshot.
+    """
+    import uuid
+    import os
+    import hashlib
+    from datetime import datetime, timezone
+    from ..db import SessionLocal
+    from .. import models
+
+    db = SessionLocal()
+    try:
+        sw_uuid = uuid.UUID(switch_id_str)
+        switch = db.query(models.Switch).filter(models.Switch.switch_id == sw_uuid).first()
+        if not switch:
+            return {"status": "failed", "error": "Switch not found"}
+
+        config_content = ""
+        # Pull configuration based on vendor
+        if switch.vendor.lower() in ("dell_os10", "dell"):
+            from ..drivers.dell_os10_collector import DellOS10Collector
+            ssh_user = os.environ.get("DELL_SSH_USERNAME", "admin")
+            ssh_pass = os.environ.get("DELL_SSH_PASSWORD", "admin")
+            ssh_port = int(os.environ.get("DELL_SSH_PORT", "22"))
+            
+            # Try console first, then SSH
+            try:
+                with DellOS10Collector(host=switch.management_ip, username=ssh_user, password=ssh_pass, port=5000, use_ssh=False) as collector:
+                    config_content = collector._send_command("show running-configuration")
+            except Exception:
+                try:
+                    with DellOS10Collector(host=switch.management_ip, username=ssh_user, password=ssh_pass, port=ssh_port, use_ssh=True) as collector:
+                        config_content = collector._send_command("show running-configuration")
+                except Exception as e:
+                    raise Exception(f"Failed to retrieve Dell running config: {e}")
+                    
+        elif switch.vendor.lower() == "nokia":
+            # For Nokia SRLinux, we can retrieve running config via gNMI
+            from pygnmi.client import gNMIclient
+            try:
+                with gNMIclient(target=(switch.management_ip, 57400), username="admin", password=os.getenv("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!"), skip_verify=True, gnmi_timeout=5) as gc:
+                    # Request running configuration
+                    res = gc.get(path=['/'])
+                    import json
+                    config_content = json.dumps(res, indent=2)
+            except Exception as e:
+                raise Exception(f"Failed to retrieve Nokia running config via gNMI: {e}")
+        else:
+            raise Exception(f"Unsupported vendor: {switch.vendor}")
+
+        if not config_content or len(config_content.strip()) < 10:
+            raise Exception("Retrieved configuration is empty or too short.")
+
+        # Compute checksum
+        config_hash = hashlib.sha256(config_content.encode('utf-8')).hexdigest()
+
+        # Save to database
+        backup_record = models.SwitchBackup(
+            backup_id=uuid.uuid4(),
+            switch_id=switch.switch_id,
+            created_at=datetime.now(timezone.utc),
+            created_by=username,
+            config_hash=config_hash,
+            config_content=config_content,
+            backup_type=backup_type,
+            status="completed"
+        )
+        db.add(backup_record)
+        db.commit()
+
+        # Update switch configuration fields
+        switch.running_config = config_content
+        switch.configuration_checksum = config_hash
+        db.commit()
+
+        return {
+            "status": "success",
+            "backup_id": str(backup_record.backup_id),
+            "config_hash": config_hash,
+            "switch_hostname": switch.hostname
+        }
+
+    except Exception as e:
+        db.rollback()
+        # Save failed backup record
+        try:
+            sw_uuid = uuid.UUID(switch_id_str)
+            backup_record = models.SwitchBackup(
+                backup_id=uuid.uuid4(),
+                switch_id=sw_uuid,
+                created_at=datetime.now(timezone.utc),
+                created_by=username,
+                config_hash="N/A",
+                config_content="",
+                backup_type=backup_type,
+                status="failed",
+                error_message=str(e)
+            )
+            db.add(backup_record)
+            db.commit()
+        except Exception as inner_e:
+            print(f"[BACKUP] Failed to record failure snapshot: {inner_e}")
+            
+        return {"status": "failed", "error": str(e)}
+    finally:
+        db.close()
+
+
+async def start_periodic_backup_schedule_loop():
+    """
+    Background loop that runs every 60 seconds to execute scheduled backups.
+    """
+    print("[WORKER BACKUP] Starting periodic backup scheduler loop...")
+    import uuid
+    import asyncio
+    from datetime import datetime, timezone, timedelta
+    from .. import models
+    from ..db import SessionLocal
+    
+    while True:
+        await asyncio.sleep(60)
+        db = SessionLocal()
+        try:
+            now = datetime.now(timezone.utc)
+            # Find active schedules where next_run is due
+            schedules = db.query(models.BackupSchedule).filter(
+                models.BackupSchedule.is_active == True,
+                models.BackupSchedule.next_run <= now
+            ).all()
+
+            for sched in schedules:
+                # Find switches to backup
+                if sched.fabric_id:
+                    switches = db.query(models.Switch).filter(models.Switch.fabric_id == sched.fabric_id).all()
+                else:
+                    switches = db.query(models.Switch).all()
+
+                for sw in switches:
+                    # Run the backup task in Celery worker context asynchronously
+                    backup_switch_config_task.delay(str(sw.switch_id), username="scheduler", backup_type="scheduled")
+
+                # Update schedule timeline
+                sched.last_run = now
+                interval = sched.schedule_interval.lower()
+                if interval == "daily":
+                    sched.next_run = now + timedelta(days=1)
+                elif interval == "weekly":
+                    sched.next_run = now + timedelta(weeks=1)
+                else: # Default hourly / custom fallback
+                    sched.next_run = now + timedelta(hours=1)
+            
+            if schedules:
+                db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"[WORKER BACKUP] Scheduler loop error: {e}")
+        finally:
+            db.close()
+

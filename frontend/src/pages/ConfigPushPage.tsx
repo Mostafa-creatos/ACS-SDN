@@ -17,6 +17,8 @@ import {
   AlertCircle,
   Plus,
   Terminal,
+  Eye,
+  X,
 } from 'lucide-react';
 import { CategoryPanel } from '../components/config-push/CategoryPanel';
 import { CommandForm } from '../components/config-push/CommandForm';
@@ -49,6 +51,7 @@ interface PushHistoryEntry {
   status: string;
   diff: string;
   created_at: string;
+  requested_by?: string;
 }
 
 interface DiffLine {
@@ -60,7 +63,8 @@ interface DiffLine {
 // Helper to parse unified diffs into aligned side-by-side lines
 function parseUnifiedDiff(diffText: string): { left: DiffLine[]; right: DiffLine[] } {
   if (!diffText) return { left: [], right: [] };
-  const lines = diffText.split('\n');
+  const normalized = diffText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = normalized.split('\n');
   const left: DiffLine[] = [];
   const right: DiffLine[] = [];
   
@@ -111,6 +115,8 @@ export const ConfigPushPage: React.FC = () => {
   const [switches, setSwitches] = useState<SwitchItem[]>([]);
   const [history, setHistory] = useState<PushHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [inspectPayload, setInspectPayload] = useState<string | null>(null);
+  const [inspectTitle, setInspectTitle] = useState('');
 
   // 4-Step Wizard State
   const [step, setStep] = useState(1);
@@ -497,6 +503,17 @@ export const ConfigPushPage: React.FC = () => {
       </Card>
     );
   }
+
+  const getTargetSwitchNames = (targetIdsStr: string) => {
+    if (!targetIdsStr) return "All Switches";
+    return targetIdsStr
+      .split(',')
+      .map(id => {
+        const sw = switches.find(s => s.switch_id === id);
+        return sw ? sw.hostname : id.substring(0, 8);
+      })
+      .join(', ');
+  };
 
   // Generate line count
   const linesCount = configPayload.split('\n').length || 1;
@@ -1059,30 +1076,37 @@ export const ConfigPushPage: React.FC = () => {
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="border-b border-slate-100">
-                    <th className="text-left py-2 px-3 font-bold text-slate-400 uppercase tracking-wider">Time</th>
-                    <th className="text-left py-2 px-3 font-bold text-slate-400 uppercase tracking-wider">Tenant</th>
-                    <th className="text-left py-2 px-3 font-bold text-slate-400 uppercase tracking-wider">Summary</th>
-                    <th className="text-left py-2 px-3 font-bold text-slate-400 uppercase tracking-wider">Blast</th>
-                    <th className="text-left py-2 px-3 font-bold text-slate-400 uppercase tracking-wider">Status</th>
+                  <tr className="border-b border-slate-100 bg-slate-50/50 text-slate-400 uppercase tracking-wider font-semibold text-[10px]">
+                    <th className="text-left py-3 px-3 font-bold text-slate-400 uppercase tracking-wider">Time</th>
+                    <th className="text-left py-3 px-3 font-bold text-slate-400 uppercase tracking-wider">Tenant</th>
+                    <th className="text-left py-3 px-3 font-bold text-slate-400 uppercase tracking-wider">Summary</th>
+                    <th className="text-left py-3 px-3 font-bold text-slate-400 uppercase tracking-wider">Target Switches</th>
+                    <th className="text-left py-3 px-3 font-bold text-slate-400 uppercase tracking-wider">Applied By</th>
+                    <th className="text-left py-3 px-3 font-bold text-slate-400 uppercase tracking-wider">Blast</th>
+                    <th className="text-left py-3 px-3 font-bold text-slate-400 uppercase tracking-wider">Status</th>
+                    <th className="text-right py-3 px-3 font-bold text-slate-400 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {history.map(h => (
-                    <tr key={h.id} className="border-b border-slate-50 hover:bg-slate-50/50">
-                      <td className="py-2.5 px-3 text-slate-500 font-mono">
+                    <tr key={h.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                      <td className="py-3 px-3 text-slate-500 font-mono">
                         {h.created_at ? new Date(h.created_at).toLocaleString() : '-'}
                       </td>
-                      <td className="py-2.5 px-3 text-slate-700 font-semibold">{h.tenant}</td>
-                      <td className="py-2.5 px-3 text-slate-600">{h.summary}</td>
-                      <td className="py-2.5 px-3">
+                      <td className="py-3 px-3 text-slate-700 font-semibold">{h.tenant}</td>
+                      <td className="py-3 px-3 text-slate-600">{h.summary}</td>
+                      <td className="py-3 px-3 text-slate-600 max-w-[200px] truncate" title={getTargetSwitchNames(h.target_switches)}>
+                        {getTargetSwitchNames(h.target_switches)}
+                      </td>
+                      <td className="py-3 px-3 text-slate-500 font-medium">{h.requested_by || 'system'}</td>
+                      <td className="py-3 px-3">
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                           h.blast_radius > 5 ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-500'
                         }`}>
                           {h.blast_radius}
                         </span>
                       </td>
-                      <td className="py-2.5 px-3">
+                      <td className="py-3 px-3">
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
                           h.status === 'approved' ? 'bg-emerald-50 text-emerald-600' :
                           h.status === 'rejected' ? 'bg-rose-50 text-rose-600' :
@@ -1094,6 +1118,19 @@ export const ConfigPushPage: React.FC = () => {
                            h.status}
                         </span>
                       </td>
+                      <td className="py-3 px-3 text-right">
+                        <button
+                          onClick={() => {
+                            setInspectPayload(h.diff || 'No candidate configuration payload recorded.');
+                            setInspectTitle(`${h.tenant} config push (${new Date(h.created_at).toLocaleDateString()})`);
+                          }}
+                          className="text-slate-400 hover:text-slate-700 font-bold flex items-center gap-1.5 justify-end ml-auto"
+                          title="Inspect applied configuration payload"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          Inspect
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1101,6 +1138,41 @@ export const ConfigPushPage: React.FC = () => {
             </div>
           )}
         </Card>
+      )}
+
+      {/* Inspect Payload Modal */}
+      {inspectPayload !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[80vh] shadow-2xl flex flex-col overflow-hidden border border-slate-200 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Applied Configuration Payload</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">{inspectTitle}</p>
+              </div>
+              <button 
+                onClick={() => setInspectPayload(null)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="flex-grow p-6 overflow-y-auto font-mono text-xs leading-relaxed bg-slate-950 text-slate-200 max-h-[55vh]">
+              <pre className="whitespace-pre-wrap select-text h-full overflow-x-auto text-[11px] leading-relaxed p-2">
+                {inspectPayload}
+              </pre>
+            </div>
+            
+            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end">
+              <button 
+                onClick={() => setInspectPayload(null)}
+                className="btn-secondary py-2 px-4 text-xs font-bold"
+              >
+                Close Inspector
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

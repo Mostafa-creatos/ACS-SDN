@@ -23,7 +23,7 @@ from .drivers.arista_eos import AristaEosDriver
 from .validators.config_syntax import validate_os10_syntax
 from .validators.collision_check import check_collisions
 from .admin_ui import ADMIN_HTML
-from .routers import inventory, discovery, auth, users, tenants, vrfs
+from .routers import inventory, discovery, auth, users, tenants, vrfs, backups
 from .auth import security, get_current_user_claims, verify_switch_access
 from .auth_permissions import require_permission
 
@@ -36,6 +36,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(tenants.router)
 app.include_router(vrfs.router)
+app.include_router(backups.router)
 
 def migrate_db_columns(engine):
     from sqlalchemy import inspect
@@ -135,6 +136,13 @@ def migrate_db_columns(engine):
                 if "payload" not in audit_cols:
                     conn.execute(text("ALTER TABLE audit_logs ADD COLUMN payload JSON DEFAULT NULL"))
 
+        # Migrate policy_approvals columns
+        if "policy_approvals" in inspector.get_table_names():
+            policy_cols = [c["name"] for c in inspector.get_columns("policy_approvals")]
+            with engine.begin() as conn:
+                if "requested_by" not in policy_cols:
+                    conn.execute(text("ALTER TABLE policy_approvals ADD COLUMN requested_by VARCHAR(100) DEFAULT 'system'"))
+
     # Migration: Drop FabricBlueprint (removed in Sprint 5)
     if "fabrics" in inspector.get_table_names():
         fab_cols = [c["name"] for c in inspector.get_columns("fabrics")]
@@ -194,10 +202,11 @@ def startup_db_configure():
 @app.on_event("startup")
 async def start_gnmi_discovery_background():
     import asyncio
-    from .workers.sync_tasks import start_periodic_discovery_loop, start_periodic_telemetry_loop
-    print("[gNMI STARTUP] Initiating background topology discovery and telemetry loops...")
+    from .workers.sync_tasks import start_periodic_discovery_loop, start_periodic_telemetry_loop, start_periodic_backup_schedule_loop
+    print("[gNMI STARTUP] Initiating background topology discovery, telemetry and backup scheduler loops...")
     asyncio.create_task(start_periodic_discovery_loop(30))
     asyncio.create_task(start_periodic_telemetry_loop(10))
+    asyncio.create_task(start_periodic_backup_schedule_loop())
 
 
 @app.get("/api/v5/")
@@ -825,6 +834,38 @@ def get_admin_stats(db: Session = Depends(get_db), claims: dict = Depends(requir
             "switches_count": switches_count,
             "subnets_count": subnets_count,
             "ztp_pool_count": 0,
+        }
+
+
+@app.get("/api/v5/admin/celery-stats")
+def get_admin_celery_stats(claims: dict = Depends(require_permission("global:manage"))):
+    from .workers.celery_app import celery_app
+    try:
+        inspect = celery_app.control.inspect(timeout=1.0)
+        active = inspect.active() or {}
+        reserved = inspect.reserved() or {}
+        scheduled = inspect.scheduled() or {}
+        stats = inspect.stats() or {}
+        
+        total_active = sum(len(tasks) for tasks in active.values()) if active else 0
+        total_reserved = sum(len(tasks) for tasks in reserved.values()) if reserved else 0
+        total_scheduled = sum(len(tasks) for tasks in scheduled.values()) if scheduled else 0
+        
+        return {
+            "status": "online",
+            "active_tasks_count": total_active,
+            "reserved_tasks_count": total_reserved,
+            "scheduled_tasks_count": total_scheduled,
+            "workers_count": len(stats) if stats else 0
+        }
+    except Exception as e:
+        return {
+            "status": "offline",
+            "error": str(e),
+            "active_tasks_count": 0,
+            "reserved_tasks_count": 0,
+            "scheduled_tasks_count": 0,
+            "workers_count": 0
         }
 
 
@@ -1823,7 +1864,8 @@ async def push_switch_config(
             target_switch_serials=",".join(payload.switch_ids),
             blast_radius=6,
             status="pending",
-            diff_payload=f"Config push to {len(payload.switch_ids)} switches (blast radius: {blast['total_affected']})"
+            diff_payload=f"Config push to {len(payload.switch_ids)} switches (blast radius: {blast['total_affected']})",
+            requested_by=username
         )
         db.add(approval)
         db.commit()
@@ -1913,7 +1955,8 @@ async def push_switch_config(
             target_switch_serials=",".join(payload.switch_ids),
             blast_radius=blast["total_affected"],
             status="approved",
-            diff_payload=payload.config_payload
+            diff_payload=payload.config_payload,
+            requested_by=username
         )
         db.add(approval)
         db.commit()
@@ -1960,7 +2003,8 @@ def get_config_push_history(
             "blast_radius": a.blast_radius,
             "status": a.status,
             "diff": a.diff_payload or "",
-            "created_at": a.created_at.isoformat() if a.created_at else None
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+            "requested_by": a.requested_by or "system"
         })
 
     return results

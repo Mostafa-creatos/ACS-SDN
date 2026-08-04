@@ -1,0 +1,7 @@
+---
+- name: Push Golden Configuration Baseline
+  hosts: all
+  gather_facts: no
+  connection: network_cli
+  roles:
+    - role: ../roles/base_provisioning

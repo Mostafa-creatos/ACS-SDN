@@ -20,6 +20,7 @@ import { STPPage } from './pages/STPPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { ConfigPushPage } from './pages/ConfigPushPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
+import { BackupRestorePage } from './pages/BackupRestorePage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -77,6 +78,7 @@ export const App: React.FC = () => {
               <Route path="tenants/:tenantId/mapping" element={<TenantFabricMapping />} />
               <Route path="config-push" element={<ConfigPushPage />} />
               <Route path="audit-logs" element={<AuditLogsPage />} />
+              <Route path="backups" element={<BackupRestorePage />} />
             </Route>
 
             {/* Catch-all fallback */}
