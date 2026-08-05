@@ -1360,12 +1360,28 @@ def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends
         "summary": json.loads(run.summary) if run.summary else {}
     }
 
+def _compliance_remediation_summary(db: Session, run_id: uuid.UUID) -> dict:
+    """Count findings of a compliance run by remediation status.
+
+    Computed at read time so the summary reflects remediation results that
+    land after the run has completed (Celery worker updates).
+    """
+    findings = db.query(models.ComplianceFinding).filter(
+        models.ComplianceFinding.compliance_run_id == run_id
+    ).all()
+    counts = {"open": 0, "pending": 0, "resolved": 0, "failed": 0}
+    for f in findings:
+        status = (f.remediation_status or "open").lower()
+        key = {"success": "resolved", "pending": "pending", "failed": "failed"}.get(status, "open")
+        counts[key] += 1
+    counts["total_findings"] = len(findings)
+    return counts
+
 @app.get("/api/v5/visibility/compliance/latest")
 def get_latest_compliance(
     page: int = 1,
     page_size: int = 25,
-    severity: Optional[str] = None,
-    switch_id: Optional[str] = None,
+    severity: Optional[str] = None,    switch_id: Optional[str] = None,
     status: Optional[str] = None,
     db: Session = Depends(get_db),
     claims: dict = Depends(require_permission("compliance:run"))
@@ -1410,13 +1426,16 @@ def get_latest_compliance(
             "remediation_error": f.remediation_error
         })
 
+    summary = json.loads(run.summary) if run.summary else {}
+    summary.update(_compliance_remediation_summary(db, run.run_id))
+
     return {
         "run_id": str(run.run_id),
         "started_at": run.started_at.isoformat(),
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "triggered_by": run.triggered_by,
         "status": run.status,
-        "summary": json.loads(run.summary) if run.summary else {},
+        "summary": summary,
         "findings": res,
         "pagination": {
             "page": page,
@@ -1478,13 +1497,15 @@ def get_compliance_run(
             "resolved_at": f.resolved_at.isoformat() if f.resolved_at else None,
             "remediation_error": f.remediation_error
         })
+    summary = json.loads(run.summary) if run.summary else {}
+    summary.update(_compliance_remediation_summary(db, run.run_id))
     return {
         "run_id": str(run.run_id),
         "started_at": run.started_at.isoformat(),
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "triggered_by": run.triggered_by,
         "status": run.status,
-        "summary": json.loads(run.summary) if run.summary else {},
+        "summary": summary,
         "findings": res
     }
 

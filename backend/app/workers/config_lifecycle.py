@@ -88,6 +88,52 @@ def _adapt_nokia_expected_pattern(expected_str: str) -> str:
         adapted = adapted.replace(old, new)
     return adapted
 
+def build_remediation_config(switch: models.Switch, rule_name: str, context: dict) -> str:
+    """Generate a targeted config block for the given violated compliance rule.
+
+    Only the missing block is emitted (smaller blast radius than re-pushing the
+    full golden config). Falls back to the full golden config for unknown rules.
+    """
+    name = (rule_name or "").lower()
+
+    if switch.vendor in ("nokia", "nokia_srlinux", "timetra"):
+        if "hostname" in name or "host-name" in name or "identity" in name:
+            return f"/ system name host-name {context.get('switch.hostname', switch.hostname)}\n"
+        if "ntp" in name:
+            return (
+                "/ system ntp network-instance mgmt\n"
+                "/ system ntp admin-state enable\n"
+                f"/ system ntp server {context.get('fabric.expected_ntp_servers', '192.168.100.1')}\n"
+            )
+        if "dns" in name:
+            return (
+                "/ system dns-instance mgmt network-instance mgmt\n"
+                f"/ system dns-instance mgmt server-list [ {context.get('fabric.expected_dns_servers', '8.8.8.8')} ]\n"
+            )
+        if "syslog" in name or "logging" in name:
+            return f"/ system logging remote-server {context.get('fabric.expected_syslog_server', '10.10.100.5')} remote-port 514\n"
+        if "lldp" in name:
+            return "/ system lldp admin-state enable\n"
+        if "aaa" in name:
+            return "/ system aaa authentication method local\n"
+    else:
+        if "hostname" in name or "host-name" in name or "identity" in name:
+            return f"hostname {context.get('switch.hostname', switch.hostname)}\n"
+        if "ntp" in name:
+            return f"ntp server {context.get('fabric.expected_ntp_servers', '192.168.100.1')}\n"
+        if "dns" in name:
+            return f"ip name-server {context.get('fabric.expected_dns_servers', '8.8.8.8')}\n"
+        if "syslog" in name or "logging" in name:
+            return f"logging server {context.get('fabric.expected_syslog_server', '10.10.100.5')}\n"
+        if "lldp" in name:
+            return "lldp enable\n"
+        if "aaa" in name:
+            return "aaa authentication login default local\n"
+        if "spanning" in name or "mst" in name:
+            return "spanning-tree mode mst\n"
+
+    return generate_golden_config(switch)
+
 def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "system") -> models.ConfigSnapshot:
     """
     Takes a snapshot of a switch's configuration.
@@ -98,28 +144,26 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
     if not switch:
         raise ValueError("Switch not found")
 
-    # Fetch live configuration from the device
-    from app.drivers.dell_os10_collector import DellOS10Collector
-    
+    # Fetch live configuration from the device.
+    # On transport failure we raise so callers can mark the switch as
+    # unreachable instead of treating the error text as configuration.
     if switch.vendor == "dell_os10" or switch.vendor == "dell":
-        collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
+        from app.drivers.dell_os10 import connect_os10_collector
+        collector, _transport = connect_os10_collector(switch.management_ip, "admin", "admin")
         try:
-            collector.connect()
             raw_config = collector.collect_running_config()
-        except Exception as e:
-            raw_config = switch.running_config or "! Failed to connect to device for snapshot"
-            print(f"[SNAPSHOT] Failed to collect real config for {switch.hostname}: {e}")
         finally:
             collector.close()
     elif switch.vendor == "nokia":
+        import os
         from app.drivers.nokia_srlinux import NokiaSrlinuxDriver
-        try:
-            driver = NokiaSrlinuxDriver()
-            raw_config = asyncio.run(driver.fetch_config(switch.management_ip, username="admin", password="NokiaSrl1!"))
-            switch.running_config = raw_config
-        except Exception as e:
-            raw_config = switch.running_config or "! Failed to connect to Nokia device via SSH"
-            print(f"[SNAPSHOT] Failed to collect real config for Nokia {switch.hostname}: {e}")
+        driver = NokiaSrlinuxDriver()
+        raw_config = asyncio.run(driver.fetch_config(
+            switch.management_ip,
+            username="admin",
+            password=os.environ.get("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!")
+        ))
+        switch.running_config = raw_config
     else:
         # Fallback to whatever is in the DB
         raw_config = switch.running_config or ""
@@ -172,25 +216,23 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
     total_rules = 0
     passed_rules = 0
     findings_list = []
+    unreachable_switches = []
 
     for sw in switches:
         # Load switch's associated fabric
         fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == sw.fabric_id).first()
 
-        # Always pull a fresh live configuration snapshot during compliance audit
+        # Always pull a fresh live configuration snapshot during compliance audit.
+        # An unreachable switch is reported separately instead of being audited
+        # against an empty/error config, which used to produce fake failures.
         try:
             snapshot = take_config_snapshot(db, sw.switch_id, "compliance-auditor")
         except Exception as e:
-            print(f"[COMPLIANCE] Failed to take live snapshot for {sw.hostname}, falling back to latest cache: {e}")
-            snapshot = db.query(models.ConfigSnapshot).filter(
-                models.ConfigSnapshot.switch_id == sw.switch_id
-            ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
+            print(f"[COMPLIANCE] Switch {sw.hostname} unreachable, skipping audit: {e}")
+            unreachable_switches.append(sw.hostname)
+            continue
 
-        if not snapshot:
-            # If absolutely no snapshot can be fetched or found, default to an empty config string
-            config = ""
-        else:
-            config = snapshot.raw_config or ""
+        config = snapshot.raw_config or ""
 
         # Nokia SR Linux configs are CLI `info` dumps: flatten them so Dell-style
         # compliance patterns can be matched against full statement paths.
@@ -269,6 +311,8 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
 
     summary_data = {
         "switches_audited": len(switches),
+        "switches_reachable": len(switches) - len(unreachable_switches),
+        "unreachable_switches": unreachable_switches,
         "total_checks": total_rules,
         "passed_checks": passed_rules,
         "failed_checks": total_rules - passed_rules,
@@ -448,9 +492,21 @@ def apply_remediation(self, finding_id_str: str):
             db.commit()
             return {"status": "FAILED", "error": "Switch not found"}
 
-        config_payload = generate_golden_config(switch)
         from ..main import resolve_southbound_driver
         driver = resolve_southbound_driver(switch.vendor)
+
+        fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == switch.fabric_id).first()
+        context = {
+            "fabric.expected_ntp_servers": fabric.expected_ntp_servers if fabric and fabric.expected_ntp_servers else "192.168.100.1",
+            "fabric.expected_dns_servers": fabric.expected_dns_servers if fabric and fabric.expected_dns_servers else "8.8.8.8",
+            "fabric.expected_syslog_server": fabric.expected_syslog_server if fabric and fabric.expected_syslog_server else "10.10.100.5",
+            "fabric.global_bgp_asn": str(fabric.global_bgp_asn) if fabric else "65000",
+            "switch.hostname": switch.hostname,
+            "switch.management_ip": switch.management_ip,
+            "switch.local_bgp_asn": str(switch.local_bgp_asn),
+            "switch.loopback_0_ip": switch.loopback_0_ip
+        }
+        config_payload = build_remediation_config(switch, finding.rule_name, context)
 
         import os
         if switch.vendor in ["nokia", "nokia_srlinux", "timetra"]:

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import difflib
 from typing import Optional, Dict, Any
 
@@ -7,6 +8,64 @@ from .base import SouthboundNetworkDriver
 from .dell_os10_collector import DellOS10Collector
 
 logger = logging.getLogger(__name__)
+
+# Error markers OS10 echoes when it rejects a command.
+OS10_ERROR_HINTS = (
+    "% Error",
+    "% Invalid",
+    "Invalid input",
+    "ERROR:",
+    "unknown command",
+    "Failed",
+    "% Failure",
+)
+
+_CONSOLE_PORT = 5000
+
+
+def connect_os10_collector(host: str, username: str = "admin", password: str = "admin") -> "tuple[DellOS10Collector, str]":
+    """Connect a Dell OS10 collector, trying the TCP console first then SSH.
+
+    Mirrors the backup flow in ``sync_tasks``: many deployments expose the
+    switch console over TCP on port 5000, while others only accept SSH on
+    port 22 (configurable via ``DELL_SSH_USERNAME`` / ``DELL_SSH_PASSWORD`` /
+    ``DELL_SSH_PORT``). Raises on total failure.
+    """
+    ssh_user = os.environ.get("DELL_SSH_USERNAME", "admin")
+    ssh_pass = os.environ.get("DELL_SSH_PASSWORD", "admin")
+    ssh_port = int(os.environ.get("DELL_SSH_PORT", "22"))
+
+    try:
+        collector = DellOS10Collector(host=host, username=username, password=password, port=_CONSOLE_PORT, use_ssh=False)
+        collector.connect()
+        return collector, "console"
+    except Exception as console_err:
+        logger.info("OS10 console unreachable on %s:%s (%s); trying SSH", host, _CONSOLE_PORT, console_err)
+        collector = DellOS10Collector(host=host, username=ssh_user, password=ssh_pass, port=ssh_port, use_ssh=True)
+        collector.connect()
+        return collector, "ssh"
+
+
+def _push_via_collector(collector: DellOS10Collector, transport: str, config_payload: str) -> dict:
+    """Apply a config payload and report whether OS10 accepted every line."""
+    try:
+        collector._send_command("terminal width 512")
+        collector._send_command("configure terminal")
+        for line in config_payload.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            out = collector._send_command(line, timeout=20)
+            if any(hint in out for hint in OS10_ERROR_HINTS):
+                collector._send_command("end")
+                return {"success": False, "output": f"OS10 rejected command '{line}':\n{out}", "applied_config": ""}
+        collector._send_command("end")
+        save_out = collector._send_command("copy running-config startup-config", timeout=60)
+        if any(hint in save_out for hint in OS10_ERROR_HINTS):
+            return {"success": False, "output": f"Failed to save running-config:\n{save_out}", "applied_config": ""}
+        return {"success": True, "output": f"Configuration applied and saved successfully (via {transport}).", "applied_config": config_payload}
+    except Exception as e:
+        return {"success": False, "output": str(e), "applied_config": ""}
 
 
 def merge_os10_configs(running: str, candidate_payload: str) -> str:
@@ -36,7 +95,7 @@ def merge_os10_configs(running: str, candidate_payload: str) -> str:
             running_dict.pop(target, None)
             running_dict.pop(block, None)
             continue
-            
+
         if block not in running_dict:
             running_dict[block] = sub_commands
         else:
@@ -61,7 +120,7 @@ def merge_os10_configs(running: str, candidate_payload: str) -> str:
             merged_lines.append(f" {sub}")
         if sub_commands:
             merged_lines.append("!")
-            
+
     return "\n".join(merged_lines)
 
 
@@ -98,21 +157,18 @@ class DellOS10Driver(SouthboundNetworkDriver):
         password: Optional[str] = None,
         port: int = 22,
     ) -> Dict[str, Any]:
-        """SSH into the switch and return all inventory, interface, VLAN,
+        """Connect (console-then-SSH) and return all inventory, interface, VLAN,
         LAG, VLT, environmental and config data.
 
         Runs the synchronous collector in a thread-pool so it does not
         block the async event loop.
         """
         def _run() -> Dict[str, Any]:
-            with DellOS10Collector(
-                host=host,
-                username=username or "admin",
-                password=password or "admin",
-                port=5000,
-                use_ssh=False,
-            ) as collector:
+            collector, _transport = connect_os10_collector(host, username or "admin", password or "admin")
+            try:
                 return collector.collect_all()
+            finally:
+                collector.close()
 
         return await asyncio.to_thread(_run)
 
@@ -120,64 +176,45 @@ class DellOS10Driver(SouthboundNetworkDriver):
     # Config push & validation
     # ------------------------------------------------------------------
     async def push_config(self, host: str, username: str, password: str, config_payload: str) -> dict:
-        """Push configuration to a Dell OS10 switch via TCP/console."""
+        """Push configuration to a Dell OS10 switch (console-then-SSH)."""
         def _apply():
-            with DellOS10Collector(
-                host=host,
-                username=username,
-                password=password,
-                port=5000,
-                use_ssh=False,
-            ) as collector:
+            try:
+                collector, transport = connect_os10_collector(host, username, password)
+            except Exception as e:
+                return {"success": False, "output": f"Failed to connect to switch {host}: {e}", "applied_config": ""}
+            try:
+                return _push_via_collector(collector, transport, config_payload)
+            finally:
                 try:
-                    collector.connect()
-                except Exception as e:
-                    return {"success": False, "output": f"Failed to connect to switch: {e}", "applied_config": ""}
-                try:
-                    collector._send_command("terminal width 512")
-                    collector._send_command("configure terminal")
-                    for line in config_payload.strip().splitlines():
-                        line = line.strip()
-                        if line:
-                            collector._send_command(line)
-                    collector._send_command("end")
-                    collector._send_command("copy running-config startup-config")
-                    return {"success": True, "output": "Configuration applied successfully", "applied_config": config_payload}
-                except Exception as e:
-                    return {"success": False, "output": str(e), "applied_config": ""}
-                finally:
-                    try:
-                        collector._send_command("end")
-                    except Exception:
-                        pass
+                    collector.close()
+                except Exception:
+                    pass
 
         return await asyncio.to_thread(_apply)
 
     async def validate_candidate(self, host: str, username: str, password: str, candidate_config: str) -> dict:
         """Validate candidate config by comparing against running config without applying."""
         def _validate():
-            with DellOS10Collector(
-                host=host,
-                username=username,
-                password=password,
-                port=5000,
-                use_ssh=False,
-            ) as collector:
+            try:
+                collector, _transport = connect_os10_collector(host, username, password)
+            except Exception as e:
+                return {"diff": "", "validation_status": "connection_failed", "error_detail": f"Failed to connect: {e}"}
+            try:
+                running_config = collector.collect_running_config()
+                merged_candidate = merge_os10_configs(running_config, candidate_config)
+                # Strip out all '!' separator lines and empty lines for a clean diff comparison
+                running_clean = "\n".join([line for line in running_config.splitlines() if line.strip() != "!"])
+                candidate_clean = "\n".join([line for line in merged_candidate.splitlines() if line.strip() != "!"])
+                running_lines = running_clean.splitlines(keepends=True)
+                candidate_lines = candidate_clean.splitlines(keepends=True)
+                diff = "".join(difflib.unified_diff(running_lines, candidate_lines, fromfile="running", tofile="candidate"))
+                return {"diff": diff, "validation_status": "diff_ready" if diff else "identical", "error_detail": ""}
+            except Exception as e:
+                return {"diff": "", "validation_status": "error", "error_detail": str(e)}
+            finally:
                 try:
-                    collector.connect()
-                except Exception as e:
-                    return {"diff": "", "validation_status": "connection_failed", "error_detail": f"Failed to connect: {e}"}
-                try:
-                    running_config = collector.collect_running_config()
-                    merged_candidate = merge_os10_configs(running_config, candidate_config)
-                    # Strip out all '!' separator lines and empty lines for a clean diff comparison
-                    running_clean = "\n".join([line for line in running_config.splitlines() if line.strip() != "!"])
-                    candidate_clean = "\n".join([line for line in merged_candidate.splitlines() if line.strip() != "!"])
-                    running_lines = [line + "\n" for line in running_clean.splitlines()]
-                    candidate_lines = [line + "\n" for line in candidate_clean.splitlines()]
-                    diff = "".join(difflib.unified_diff(running_lines, candidate_lines, fromfile="running", tofile="candidate"))
-                    return {"diff": diff, "validation_status": "diff_ready" if diff else "identical", "error_detail": ""}
-                except Exception as e:
-                    return {"diff": "", "validation_status": "error", "error_detail": str(e)}
+                    collector.close()
+                except Exception:
+                    pass
 
         return await asyncio.to_thread(_validate)

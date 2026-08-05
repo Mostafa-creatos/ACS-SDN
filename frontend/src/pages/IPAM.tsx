@@ -333,7 +333,14 @@ export const IPAM: React.FC = () => {
                         <strong>{sub.used_ips}</strong> / {sub.total_ips}
                       </td>
                       <td className="py-3 w-48">
-                        <ProgressBar value={percent} showLabel={false} />
+                        <div className="flex items-center gap-3 w-full">
+                          <div className="flex-1">
+                            <ProgressBar value={percent} showLabel={false} />
+                          </div>
+                          <span className="text-[10px] font-bold text-slate-500 min-w-[32px] text-right">
+                            {percent.toFixed(1)}%
+                          </span>
+                        </div>
                       </td>
                     </tr>
                   );
