@@ -302,10 +302,10 @@ export const ConfigPushPage: React.FC = () => {
     setValidationError('');
     setValidationResult(null);
     setValidationStages({
-      syntax: 'loading',
-      boundary: 'loading',
-      collision: 'loading',
-      dryrun: 'loading'
+      syntax: 'pending',
+      boundary: 'pending',
+      collision: 'pending',
+      dryrun: 'pending'
     });
 
     const stageMap: Record<string, 'syntax' | 'boundary' | 'collision' | 'dryrun'> = {
@@ -315,6 +315,8 @@ export const ConfigPushPage: React.FC = () => {
       dryrun: 'dryrun',
     };
 
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
     try {
       const headers: Record<string, string> = {
         'Authorization': `Bearer ${token}`,
@@ -322,8 +324,8 @@ export const ConfigPushPage: React.FC = () => {
       };
       if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
 
-      // Single API call — backend runs all 4 stages synchronously
-      const res = await fetch('/api/v5/switch-config/push', {
+      // Start network call in the background to avoid blocking the UI animation
+      const apiPromise = fetch('/api/v5/switch-config/push', {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -331,48 +333,60 @@ export const ConfigPushPage: React.FC = () => {
           config_payload: configPayload,
           dry_run: true
         })
+      }).then(async res => {
+        const ok = res.ok;
+        const data = await res.json();
+        return { ok, data };
       });
 
-      const data = await res.json();
+      // Run sequential visual stage transitions
+      const stagesOrder: ('syntax' | 'boundary' | 'collision' | 'dryrun')[] = ['syntax', 'boundary', 'collision', 'dryrun'];
 
-      if (res.ok) {
-        // All stages passed
-        setValidationStages({
-          syntax: 'success',
-          boundary: 'success',
-          collision: 'success',
-          dryrun: 'success'
-        });
-        setValidationResult(data);
-      } else {
-        // Backend reports which stage failed
-        const failed = data?.detail?.stage
-          ? stageMap[data.detail.stage] || 'dryrun'
-          : null;
+      for (let i = 0; i < stagesOrder.length; i++) {
+        const currentStage = stagesOrder[i];
+        
+        // 1. Set current stage state to loading immediately (instant feedback)
+        setValidationStages(prev => ({
+          ...prev,
+          [currentStage]: 'loading'
+        }));
+        
+        // 2. Delay for visualization (700ms)
+        await sleep(700);
 
-        if (failed) {
-          setValidationStages(prev => ({
-            ...prev,
-            [failed]: 'failed',
-            // Mark subsequent stages as pending (not attempted)
-            ...(failed === 'syntax' ? { boundary: 'pending', collision: 'pending', dryrun: 'pending' } : {}),
-            ...(failed === 'boundary' ? { collision: 'pending', dryrun: 'pending' } : {}),
-            ...(failed === 'collision' ? { dryrun: 'pending' } : {}),
-          }));
-        } else {
-          setValidationStages({
-            syntax: 'failed',
-            boundary: 'failed',
-            collision: 'failed',
-            dryrun: 'failed'
-          });
+        // 3. Await network call resolution to determine the outcome
+        const { ok, data } = await apiPromise;
+        
+        let failedStage: 'syntax' | 'boundary' | 'collision' | 'dryrun' | null = null;
+        if (!ok) {
+          failedStage = data?.detail?.stage
+            ? stageMap[data.detail.stage] || 'dryrun'
+            : 'syntax';
         }
 
-        const errMsg = data?.detail?.errors
-          ? (Array.isArray(data.detail.errors) ? data.detail.errors.join(', ') : String(data.detail.errors))
-          : (data?.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)) : 'Config validation failed');
-        setValidationError(errMsg);
+        // 4. Mark success or fail
+        if (failedStage === currentStage) {
+          setValidationStages(prev => ({
+            ...prev,
+            [currentStage]: 'failed'
+          }));
+          const errMsg = data?.detail?.errors
+            ? (Array.isArray(data.detail.errors) ? data.detail.errors.join(', ') : String(data.detail.errors))
+            : (data?.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)) : 'Config validation failed');
+          setValidationError(errMsg);
+          return;
+        } else {
+          setValidationStages(prev => ({
+            ...prev,
+            [currentStage]: 'success'
+          }));
+        }
       }
+
+      // If all passed successfully
+      const { data } = await apiPromise;
+      setValidationResult(data);
+
     } catch (e: any) {
       setValidationStages({
         syntax: 'failed',

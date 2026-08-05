@@ -191,8 +191,46 @@ class DellOS10Collector:
         else:
             self._client.send(data)
 
+    def _flush_input(self) -> None:
+        """Read and discard all data currently in the receive buffer."""
+        if self.use_ssh:
+            if not self._channel:
+                return
+            try:
+                old_timeout = self._channel.gettimeout()
+                self._channel.settimeout(0.05)
+                while self._recv(8192):
+                    pass
+            except socket.timeout:
+                pass
+            except Exception:
+                pass
+            finally:
+                try:
+                    self._channel.settimeout(old_timeout)
+                except Exception:
+                    pass
+        else:
+            if not self._client:
+                return
+            try:
+                old_timeout = self._client.gettimeout()
+                self._client.settimeout(0.05)
+                while self._recv(8192):
+                    pass
+            except socket.timeout:
+                pass
+            except Exception:
+                pass
+            finally:
+                try:
+                    self._client.settimeout(old_timeout)
+                except Exception:
+                    pass
+
     def _send_command(self, cmd: str, timeout: Optional[float] = None) -> str:
         """Execute a command and return the full output."""
+        self._flush_input()
         timeout = timeout or self.command_timeout
         self._send(f"{cmd}\n".encode("utf-8"))
         time.sleep(0.3)

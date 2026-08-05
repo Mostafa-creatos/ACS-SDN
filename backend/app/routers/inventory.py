@@ -629,7 +629,7 @@ def _seed_dell_interfaces(db: Session, sw: models.Switch) -> List:
             mtu=9216,
             errors_in=random.randint(0, 100) if is_up else 0,
             errors_out=random.randint(0, 50) if is_up else 0,
-            neighbor=f"spine-{idx}" if idx <= 4 else None,
+            neighbor=None,  # populated by LLDP discovery only (run_gnmi_discovery)
         )
         db.add(inf)
     db.commit()

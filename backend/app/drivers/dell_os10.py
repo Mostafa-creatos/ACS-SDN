@@ -173,8 +173,8 @@ class DellOS10Driver(SouthboundNetworkDriver):
                     # Strip out all '!' separator lines and empty lines for a clean diff comparison
                     running_clean = "\n".join([line for line in running_config.splitlines() if line.strip() != "!"])
                     candidate_clean = "\n".join([line for line in merged_candidate.splitlines() if line.strip() != "!"])
-                    running_lines = running_clean.splitlines(keepends=True)
-                    candidate_lines = candidate_clean.splitlines(keepends=True)
+                    running_lines = [line + "\n" for line in running_clean.splitlines()]
+                    candidate_lines = [line + "\n" for line in candidate_clean.splitlines()]
                     diff = "".join(difflib.unified_diff(running_lines, candidate_lines, fromfile="running", tofile="candidate"))
                     return {"diff": diff, "validation_status": "diff_ready" if diff else "identical", "error_detail": ""}
                 except Exception as e:

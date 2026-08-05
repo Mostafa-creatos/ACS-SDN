@@ -94,6 +94,12 @@ def validate_os10_syntax(config_payload: str) -> List[Tuple[int, str]]:
     errors: List[Tuple[int, str]] = []
     lines = config_payload.splitlines()
 
+    # Stateful context tracker
+    # Contexts can be: 'global', 'interface', 'vrf', 'bgp', 'bgp-af', 'qos', 'qos-class'
+    context = 'global'
+    context_line = 0
+    context_cmd = ""
+
     for i, raw in enumerate(lines):
         line = raw.strip()
         if not line or line.startswith('!'):
@@ -104,7 +110,77 @@ def validate_os10_syntax(config_payload: str) -> List[Tuple[int, str]]:
             errors.append((i + 1, f"Unrecognized OS10 command: '{line}'"))
             continue
 
-        # Inline range checks
+        # 1. State/Context transitions
+        if line.startswith('interface ') and not ('breakout' in line):
+            if context != 'global':
+                errors.append((i + 1, f"Context violation: Entered interface mode '{line}' while still in '{context}' mode (entered at line {context_line}: '{context_cmd}'). Did you forget to 'exit'?"))
+            context = 'interface'
+            context_line = i + 1
+            context_cmd = line
+            continue
+
+        elif line.startswith('ip vrf ') and not ('forwarding' in line):
+            if context != 'global':
+                errors.append((i + 1, f"Context violation: Entered VRF mode '{line}' while still in '{context}' mode (entered at line {context_line}: '{context_cmd}'). Did you forget to 'exit'?"))
+            context = 'vrf'
+            context_line = i + 1
+            context_cmd = line
+            continue
+
+        elif line.startswith('router bgp '):
+            if context != 'global':
+                errors.append((i + 1, f"Context violation: Entered BGP mode '{line}' while still in '{context}' mode (entered at line {context_line}: '{context_cmd}'). Did you forget to 'exit'?"))
+            context = 'bgp'
+            context_line = i + 1
+            context_cmd = line
+            continue
+
+        elif line.startswith('address-family '):
+            if context != 'bgp':
+                errors.append((i + 1, f"Context violation: Entered address-family mode '{line}' but not in BGP mode (current context is '{context}')."))
+            context = 'bgp-af'
+            context_line = i + 1
+            context_cmd = line
+            continue
+
+        elif line.startswith('class-map ') or line.startswith('policy-map ') or line.startswith('ip access-list '):
+            if context != 'global':
+                errors.append((i + 1, f"Context violation: Entered QoS/ACL definition '{line}' while still in '{context}' mode (entered at line {context_line}: '{context_cmd}'). Did you forget to 'exit'?"))
+            context = 'qos'
+            context_line = i + 1
+            context_cmd = line
+            continue
+
+        elif line.startswith('class '):
+            if context != 'qos':
+                errors.append((i + 1, f"Context violation: Entered class command '{line}' but not inside policy-map mode (current context is '{context}')."))
+            context = 'qos-class'
+            context_line = i + 1
+            context_cmd = line
+            continue
+
+        elif line == 'end':
+            context = 'global'
+            continue
+
+        elif line == 'exit':
+            if context == 'bgp-af':
+                context = 'bgp'
+            elif context == 'qos-class':
+                context = 'qos'
+            else:
+                context = 'global'
+            continue
+
+        # 2. Context command validation (ensure command runs in the right mode)
+        if 'ip address ' in line or 'ip vrf forwarding ' in line:
+            if context != 'interface':
+                errors.append((i + 1, f"Syntax violation: Command '{line}' must be executed inside interface configuration mode."))
+        elif 'route-target ' in line or 'rd ' in line or 'vni ' in line:
+            if context != 'vrf':
+                errors.append((i + 1, f"Syntax violation: Command '{line}' must be executed inside VRF configuration mode."))
+
+        # 3. Inline range checks
         if line.startswith('interface vlan '):
             vlan_id = int(line.split()[-1])
             if vlan_id < 2 or vlan_id > 4094:

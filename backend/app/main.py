@@ -1836,11 +1836,45 @@ async def push_switch_config(
         errors = [f"Line {ln}: {msg}" for ln, msg in syntax_errors]
         raise HTTPException(status_code=400, detail={"stage": "syntax", "errors": errors})
 
-    # Stage 2: Tenant access check
+    # Stage 2: Tenant access check & IPAM Subnet Boundary Isolation
+    import ipaddress
     for sid in payload.switch_ids:
         try:
             sw_uuid = uuid.UUID(sid)
             verify_switch_access(db, sw_uuid, claims)
+
+            # Check configuration payload for IPAM boundary violations
+            switch = db.query(models.Switch).filter(models.Switch.switch_id == sw_uuid).first()
+            if switch:
+                user_tenant_id = claims.get("tenant_id")
+                if not user_tenant_id and switch.client_tenant:
+                    t_rec = db.query(models.Tenant).filter(models.Tenant.tenant_name == switch.client_tenant).first()
+                    if t_rec:
+                        user_tenant_id = t_rec.tenant_id
+
+                if user_tenant_id:
+                    tenant_subnets = db.query(models.IpamSubnet).join(models.TenantVrf).filter(
+                        models.TenantVrf.tenant_id == uuid.UUID(str(user_tenant_id)),
+                        models.IpamSubnet.fabric_id == switch.fabric_id
+                    ).all()
+
+                    for raw_line in payload.config_payload.splitlines():
+                        line = raw_line.strip()
+                        if 'ip address ' in line and not line.startswith('!'):
+                            parts = line.split()
+                            cidr_str = parts[-1]
+                            try:
+                                configured_net = ipaddress.ip_network(cidr_str, strict=False)
+                                is_inside_boundary = False
+                                for subnet in tenant_subnets:
+                                    allocated_net = ipaddress.ip_network(subnet.subnet_cidr)
+                                    if configured_net.subnet_of(allocated_net) or configured_net.overlaps(allocated_net):
+                                        is_inside_boundary = True
+                                        break
+                                if not is_inside_boundary:
+                                    errors.append(f"Pipeline validation failed: IP address {cidr_str} is outside of the tenant's allocated IPAM CIDR boundary.")
+                            except ValueError:
+                                pass
         except HTTPException as e:
             errors.append(f"Access denied for switch {sid}: {e.detail}")
     if errors:

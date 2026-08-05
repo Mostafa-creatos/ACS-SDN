@@ -90,6 +90,52 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str):
             from ..main import LIFECYCLE_COMPLIANT
             switch.lifecycle_status = LIFECYCLE_COMPLIANT
             switch.last_successful_sync = datetime.now(timezone.utc)
+            
+            # Fetch new running config to create a config snapshot and prevent drift status
+            try:
+                new_config = ""
+                if switch.vendor.lower() in ("dell_os10", "dell"):
+                    from ..drivers.dell_os10_collector import DellOS10Collector
+                    # Try console first
+                    try:
+                        with DellOS10Collector(host=switch.management_ip, username=username, password=password, port=5000, use_ssh=False) as collector:
+                            new_config = collector.collect_running_config()
+                    except Exception:
+                        try:
+                            # Try SSH fallback
+                            ssh_port = int(os.environ.get("DELL_SSH_PORT", "22"))
+                            with DellOS10Collector(host=switch.management_ip, username=username, password=password, port=ssh_port, use_ssh=True) as collector:
+                                new_config = collector.collect_running_config()
+                        except Exception:
+                            pass
+                elif switch.vendor.lower() == "nokia":
+                    from pygnmi.client import gNMIclient
+                    import json
+                    try:
+                        with gNMIclient(target=(switch.management_ip, 57400), username="admin", password=password, skip_verify=True, gnmi_timeout=5) as gc:
+                            res = gc.get(path=['/'])
+                            new_config = json.dumps(res, indent=2)
+                    except Exception:
+                        pass
+                
+                if new_config and len(new_config.strip()) > 50:
+                    import hashlib
+                    import uuid as _uuid
+                    config_hash = hashlib.md5(new_config.encode("utf-8")).hexdigest()
+                    switch.running_config = new_config
+                    switch.configuration_checksum = config_hash
+                    
+                    snapshot = models.ConfigSnapshot(
+                        snapshot_id=_uuid.uuid4(),
+                        switch_id=switch.switch_id,
+                        taken_at=datetime.now(timezone.utc),
+                        raw_config=new_config,
+                        config_hash=config_hash,
+                        taken_by="system_config_push",
+                    )
+                    db.add(snapshot)
+            except Exception as snap_err:
+                print(f"[SYNC TASK] Failed to take post-push config snapshot: {snap_err}")
 
         # Update matching compliance findings
         if task_id:
