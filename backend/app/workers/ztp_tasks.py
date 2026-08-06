@@ -113,22 +113,120 @@ def wait_for_ssh(ip: str, port: int = 22, timeout: int = 30) -> bool:
     return False
 
 
+def run_async(coro):
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    if loop.is_running():
+        import threading
+        from queue import Queue
+        q = Queue()
+        def worker():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                res = new_loop.run_until_complete(coro)
+                q.put((True, res))
+            except Exception as e:
+                q.put((False, e))
+            finally:
+                new_loop.close()
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+        success, result = q.get()
+        if success:
+            return result
+        else:
+            raise result
+    else:
+        return loop.run_until_complete(coro)
+
+
+def append_ztp_log(db, discovery_record, message: str):
+    from datetime import datetime, timezone
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] {message}\n"
+    print(f"[ZTP WORKER LOG] {message}")
+    if discovery_record:
+        if discovery_record.ztp_logs is None:
+            discovery_record.ztp_logs = ""
+        discovery_record.ztp_logs += log_entry
+        db.commit()
+
+
 @shared_task(bind=True, max_retries=3)
 def apply_baseline_template(self, switch_id: str):
     """
-    Applies the full baseline template to a newly discovered switch using Ansible.
+    Applies the full baseline template to a newly discovered switch.
     """
+    from datetime import datetime, timezone
     db = SessionLocal()
+    discovery_record = None
     try:
         switch = db.query(Switch).filter(Switch.switch_id == switch_id).first()
         if not switch:
             raise ValueError(f"Switch not found: {switch_id}")
 
         discovery_record = db.query(ZtpDiscoveryPool).filter(ZtpDiscoveryPool.discovery_id == switch.discovery_id).first()
+        
+        # Initialize ztp_logs if empty
+        if discovery_record:
+            discovery_record.ztp_logs = f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}] --- ZTP Onboarding Started for {switch.hostname} ({switch.management_ip}) ---\n"
+            db.commit()
 
-        print(f"[ZTP WORKER] Applying baseline template to switch {switch.hostname} ({switch.management_ip})")
+        append_ztp_log(db, discovery_record, f"Device identified. Vendor: {switch.vendor}, Role: {switch.role}.")
 
+        # Determine if Nokia (transit) or Dell (active management)
+        is_nokia = "nokia" in (switch.vendor or "").lower() or "nokia" in (switch.model or "").lower()
+
+        if is_nokia:
+            append_ztp_log(db, discovery_record, "Nokia switch detected. Skipping baseline configuration push (transit switch).")
+            append_ztp_log(db, discovery_record, "Connecting to Nokia switch via SSH to retrieve running configuration...")
+            
+            from app.drivers.nokia_srlinux import NokiaSrlinuxDriver
+            driver = NokiaSrlinuxDriver()
+            try:
+                # Retrieve the running config using run_async
+                real_config = run_async(driver.fetch_config(
+                    host=switch.management_ip,
+                    username="admin",
+                    password="NokiaSrl1!"
+                ))
+                append_ztp_log(db, discovery_record, "Successfully retrieved running configuration from Nokia switch.")
+            except Exception as e:
+                real_config = f"! Fallback Nokia Config (Connection failed)\n! {switch.hostname}\n"
+                append_ztp_log(db, discovery_record, f"Warning: Failed to fetch running configuration: {e}. Using fallback config.")
+                
+            config_hash = hashlib.sha256(real_config.encode('utf-8')).hexdigest()
+            
+            # Create snapshot
+            snapshot = ConfigSnapshot(
+                switch_id=switch.switch_id,
+                raw_config=real_config,
+                config_hash=config_hash,
+                is_baseline=True,
+                taken_by="ztp_provisioning"
+            )
+            db.add(snapshot)
+            switch.running_config = real_config
+            switch.configuration_checksum = config_hash
+            switch.lifecycle_status = "compliant_active"
+            
+            if discovery_record:
+                discovery_record.onboarding_status = "provisioned"
+                discovery_record.error_message = None
+                
+            db.commit()
+            append_ztp_log(db, discovery_record, "ZTP onboarding completed successfully for Nokia transit switch.")
+            return {"status": "success", "switch_id": switch_id}
+
+        # Otherwise, process Dell switch
         # Pre-provisioning snapshot (factory default state)
+        append_ztp_log(db, discovery_record, "Taking pre-provisioning snapshot of current state...")
         pre_config = f"! Pre-provisioning snapshot for {switch.hostname}\n! Captured before Ansible baseline apply\n"
         try:
             from app.drivers.dell_os10_collector import DellOS10Collector
@@ -136,12 +234,13 @@ def apply_baseline_template(self, switch_id: str):
             try:
                 collector.connect()
                 pre_config = collector.collect_running_config()
+                append_ztp_log(db, discovery_record, "Successfully captured pre-provisioning configuration snapshot.")
             except Exception as e:
-                print(f"[ZTP WORKER] Could not collect pre-provisioning config: {e}")
+                append_ztp_log(db, discovery_record, f"Notice: Could not collect pre-provisioning config ({e}), continuing...")
             finally:
                 collector.close()
-        except ImportError:
-            pass
+        except Exception as e:
+            append_ztp_log(db, discovery_record, f"Notice: Error loading collector: {e}")
 
         pre_hash = hashlib.sha256(pre_config.encode('utf-8')).hexdigest()
         pre_snapshot = ConfigSnapshot(
@@ -154,12 +253,26 @@ def apply_baseline_template(self, switch_id: str):
         db.add(pre_snapshot)
         db.commit()
 
-        # Ensure SSH is enabled via Telnet/Console if it is a Dell switch
-        if "dell" in (switch.model or "").lower() or "spine" in (switch.hostname or "").lower() or switch.management_ip in ["172.20.20.10", "172.20.20.13"]:
-            ensure_ssh_enabled(switch.management_ip)
-            wait_for_ssh(switch.management_ip)
+        # Ensure SSH is enabled via Telnet/Console
+        append_ztp_log(db, discovery_record, "Connecting to switch console via Telnet (port 5000) to enable SSH daemon...")
+        
+        # We can try to enable SSH
+        ssh_enable_success = ensure_ssh_enabled(switch.management_ip)
+        if not ssh_enable_success:
+            append_ztp_log(db, discovery_record, "Warning: Direct console session failed. Checking if SSH is already active...")
+        else:
+            append_ztp_log(db, discovery_record, "Successfully issued SSH enablement command via console.")
 
-        # Run Ansible playbook with timeout
+        # Wait for SSH to respond
+        append_ztp_log(db, discovery_record, "Waiting for SSH service to become active on port 22...")
+        ssh_online = wait_for_ssh(switch.management_ip)
+        if not ssh_online:
+            error_msg = "Timeout waiting for SSH on port 22. Verification failed."
+            append_ztp_log(db, discovery_record, f"Error: {error_msg}")
+            raise Exception(error_msg)
+
+        append_ztp_log(db, discovery_record, "SSH service is online. Running Ansible baseline provisioning playbook...")
+
         if not os.path.isfile(ANSIBLE_PLAYBOOK):
             raise FileNotFoundError(f"Ansible playbook not found at {ANSIBLE_PLAYBOOK}")
 
@@ -168,6 +281,7 @@ def apply_baseline_template(self, switch_id: str):
         env["ANSIBLE_PERSISTENT_CONNECT_TIMEOUT"] = "60"
         env["ANSIBLE_PERSISTENT_COMMAND_TIMEOUT"] = "60"
 
+        # Execute Ansible
         result = subprocess.run(
             [
                 "ansible-playbook", ANSIBLE_PLAYBOOK,
@@ -176,28 +290,30 @@ def apply_baseline_template(self, switch_id: str):
             ],
             capture_output=True, text=True, timeout=ANSIBLE_TIMEOUT, env=env
         )
-        if result.returncode != 0:
-            print(f"[ZTP WORKER] Ansible failed. Returncode: {result.returncode}")
-            print(f"[ZTP WORKER] Stdout: {result.stdout}")
-            print(f"[ZTP WORKER] Stderr: {result.stderr}")
-            raise Exception(f"Ansible failed: {result.stderr or result.stdout}")
 
-        switch.lifecycle_status = "compliant_active"
-        
-        if discovery_record:
-            discovery_record.onboarding_status = "provisioned"
-            discovery_record.error_message = None
+        # Log Ansible output
+        if result.stdout:
+            append_ztp_log(db, discovery_record, f"Ansible Output:\n{result.stdout}")
+        if result.stderr:
+            append_ztp_log(db, discovery_record, f"Ansible Errors:\n{result.stderr}")
+
+        if result.returncode != 0:
+            error_msg = f"Ansible playbook execution failed with returncode {result.returncode}."
+            append_ztp_log(db, discovery_record, f"Error: {error_msg}")
+            raise Exception(error_msg)
+
+        append_ztp_log(db, discovery_record, "Ansible playbook execution succeeded. Retrieving final running configuration...")
 
         # Fetch actual running configuration using the existing collector
         from app.drivers.dell_os10_collector import DellOS10Collector
-        
         collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
         try:
             collector.connect()
             real_config = collector.collect_running_config()
+            append_ztp_log(db, discovery_record, "Successfully retrieved final running configuration.")
         except Exception as e:
             real_config = f"! Fallback Baseline Config (Failed to connect)\n! {switch.hostname}\nntp server 192.168.100.1\n"
-            print(f"[ZTP WORKER] Failed to collect real config: {e}")
+            append_ztp_log(db, discovery_record, f"Warning: Failed to fetch running configuration ({e}). Using fallback config.")
         finally:
             collector.close()
 
@@ -214,46 +330,35 @@ def apply_baseline_template(self, switch_id: str):
         db.add(snapshot)
         switch.running_config = real_config
         switch.configuration_checksum = config_hash
+        switch.lifecycle_status = "compliant_active"
         
+        if discovery_record:
+            discovery_record.onboarding_status = "provisioned"
+            discovery_record.error_message = None
+
         db.commit()
-        print(f"[ZTP WORKER] Successfully provisioned {switch.hostname}")
+        append_ztp_log(db, discovery_record, "ZTP onboarding completed successfully.")
         return {"status": "success", "switch_id": switch_id}
-
-    except subprocess.TimeoutExpired:
-        db.rollback()
-        print(f"[ZTP WORKER] Ansible playbook timed out for {switch_id} after {ANSIBLE_TIMEOUT}s")
-        discovery_record = db.query(ZtpDiscoveryPool).join(Switch).filter(Switch.switch_id == switch_id).first()
-        if discovery_record:
-            discovery_record.onboarding_status = "failed"
-            discovery_record.error_message = f"provisioning_error: Ansible playbook timed out after {ANSIBLE_TIMEOUT}s"
-            db.commit()
-        return {"status": "failed", "switch_id": switch_id, "error": "Ansible timeout"}
-
-    except FileNotFoundError as e:
-        db.rollback()
-        print(f"[ZTP WORKER] Ansible playbook not found: {e}")
-        discovery_record = db.query(ZtpDiscoveryPool).join(Switch).filter(Switch.switch_id == switch_id).first()
-        if discovery_record:
-            discovery_record.onboarding_status = "failed"
-            discovery_record.error_message = f"provisioning_error: {str(e)}"
-            db.commit()
-        return {"status": "failed", "switch_id": switch_id, "error": str(e)}
 
     except Exception as exc:
         db.rollback()
-        print(f"[ZTP WORKER] Error provisioning {switch_id}: {str(exc)}")
+        error_msg = str(exc)
+        print(f"[ZTP WORKER] Error provisioning {switch_id}: {error_msg}")
         
-        discovery_record = db.query(ZtpDiscoveryPool).join(Switch).filter(Switch.switch_id == switch_id).first()
+        if discovery_record is None and 'switch' in locals() and switch is not None:
+            discovery_record = db.query(ZtpDiscoveryPool).filter(ZtpDiscoveryPool.discovery_id == switch.discovery_id).first()
+
         if discovery_record:
             discovery_record.onboarding_status = "failed"
-            discovery_record.error_message = f"provisioning_error: {str(exc)}"
+            discovery_record.error_message = f"provisioning_error: {error_msg}"
+            append_ztp_log(db, discovery_record, f"ZTP FAILED: {error_msg}")
             db.commit()
             
         try:
             self.retry(exc=exc, countdown=2 ** self.request.retries)
         except self.MaxRetriesExceededError:
             print(f"[ZTP WORKER] Max retries exceeded for {switch_id}")
-            return {"status": "failed", "switch_id": switch_id, "error": str(exc)}
+            return {"status": "failed", "switch_id": switch_id, "error": error_msg}
     finally:
         db.close()
 

@@ -330,3 +330,148 @@ async def start_periodic_backup_schedule_loop():
         finally:
             db.close()
 
+
+@celery_app.task(name="app.workers.sync_tasks.auto_provision_subnet_task")
+def auto_provision_subnet_task(job_id_str: str):
+    """
+    Background Celery task for translating IPAM intent to switch configuration commands,
+    pushing to southbound drivers, updating job logs, and triggering snapshots.
+    """
+    import uuid
+    import asyncio
+    from datetime import datetime, timezone
+    from ..db import SessionLocal
+    from .. import models
+    from ..orchestrator.generator import generate_subnet_config
+    from ..main import resolve_southbound_driver
+    from .config_lifecycle import take_config_snapshot
+
+    db = SessionLocal()
+    job_uuid = uuid.UUID(job_id_str)
+    job = db.query(models.ProvisioningJob).filter(models.ProvisioningJob.job_id == job_uuid).first()
+    if not job:
+        db.close()
+        return {"status": "FAILED", "error": "ProvisioningJob not found"}
+
+    job.status = "in_progress"
+    job.started_at = datetime.now(timezone.utc)
+    job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Starting auto-provisioning orchestrator for subnet {job.subnet_cidr} inside VRF {job.vrf_name}.\n"
+    db.commit()
+
+    try:
+        # Load associated entities
+        subnet = db.query(models.IpamSubnet).filter(models.IpamSubnet.subnet_id == job.subnet_id).first()
+        if not subnet:
+            raise ValueError("Subnet segment not found in database inventory.")
+
+        vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == subnet.vrf_id).first()
+        if not vrf:
+            raise ValueError("Tenant VRF context not found in database inventory.")
+
+        fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == subnet.fabric_id).first()
+        if not fabric:
+            raise ValueError("Fabric mapping not found in database inventory.")
+
+        # Find leaf switches belonging to this fabric
+        switches = db.query(models.Switch).filter(
+            models.Switch.fabric_id == fabric.fabric_id,
+            models.Switch.role == "leaf"
+        ).all()
+        if not switches:
+            job.logs += f"[{datetime.now(timezone.utc).isoformat()}] No leaf switches registered in fabric {fabric.fabric_name}. Nothing to provision.\n"
+            job.status = "success"
+            job.device_statuses = {}
+            job.completed_at = datetime.now(timezone.utc)
+            db.commit()
+            return {"status": "SUCCESS", "message": "No leaf switches in fabric"}
+
+        # Initialize device_statuses dictionary
+        dev_status = {}
+        for sw in switches:
+            dev_status[sw.hostname] = {
+                "status": "pending",
+                "vendor": sw.vendor,
+                "management_ip": sw.management_ip,
+                "error": None,
+                "completed_at": None,
+                "commands": ""
+            }
+        job.device_statuses = dev_status
+        job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Found {len(switches)} leaf switch(es) in fabric {fabric.fabric_name} to target.\n"
+        db.commit()
+
+        any_failed = False
+        loop = asyncio.new_event_loop()
+        
+        try:
+            for sw in switches:
+                dev_status[sw.hostname]["status"] = "in_progress"
+                job.device_statuses = dict(dev_status)
+                db.commit()
+
+                job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Generating config for switch {sw.hostname} ({sw.vendor})...\n"
+                config_data = generate_subnet_config(sw, subnet, vrf)
+                dev_status[sw.hostname]["commands"] = config_data
+                job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Configuration payload:\n{config_data}\n"
+                db.commit()
+
+                driver = resolve_southbound_driver(sw.vendor)
+                username = "admin"
+                password = os.environ.get("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!") if sw.vendor in ["nokia", "nokia_srlinux", "timetra"] else "admin"
+                
+                job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Pushing config payload to switch {sw.hostname} at {sw.management_ip}...\n"
+                db.commit()
+
+                # Run async push command
+                push_res = loop.run_until_complete(
+                    driver.push_config(sw.management_ip, username, password, config_data)
+                )
+
+                if push_res.get("success", False):
+                    job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Config push to {sw.hostname} succeeded.\n"
+                    dev_status[sw.hostname]["status"] = "success"
+                    dev_status[sw.hostname]["completed_at"] = datetime.now(timezone.utc).isoformat()
+                    job.device_statuses = dict(dev_status)
+                    db.commit()
+
+                    # Trigger compliance/snapshot updates immediately
+                    try:
+                        take_config_snapshot(db, sw.switch_id, "system_auto_provision")
+                        job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Configuration snapshot successfully updated for {sw.hostname}.\n"
+                    except Exception as snap_ex:
+                        job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Warning: Post-push snapshot failed for {sw.hostname}: {snap_ex}\n"
+                else:
+                    any_failed = True
+                    job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Config push to {sw.hostname} FAILED. Error details:\n{push_res.get('output', 'Unknown error')}\n"
+                    dev_status[sw.hostname]["status"] = "failed"
+                    dev_status[sw.hostname]["error"] = push_res.get('output', 'Unknown error')
+                    dev_status[sw.hostname]["completed_at"] = datetime.now(timezone.utc).isoformat()
+                    job.device_statuses = dict(dev_status)
+                    db.commit()
+
+                db.commit()
+        finally:
+            loop.close()
+
+        if any_failed:
+            job.status = "failed"
+            job.error_message = "One or more switch configuration pushes failed."
+            job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Provisioning completed with execution errors.\n"
+        else:
+            job.status = "success"
+            job.logs += f"[{datetime.now(timezone.utc).isoformat()}] All switch configurations successfully provisioned and verified.\n"
+        
+        job.completed_at = datetime.now(timezone.utc)
+        db.commit()
+
+    except Exception as ex:
+        job.status = "failed"
+        job.error_message = str(ex)
+        job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Exception occurred during provisioning: {ex}\n"
+        job.completed_at = datetime.now(timezone.utc)
+        db.commit()
+    finally:
+        db.close()
+
+    return {"status": job.status}
+

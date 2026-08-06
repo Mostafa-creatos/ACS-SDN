@@ -1,11 +1,12 @@
 import asyncio
 import logging
 import os
+import socket
 import difflib
 from typing import Optional, Dict, Any
 
 from .base import SouthboundNetworkDriver
-from .dell_os10_collector import DellOS10Collector
+from .dell_os10_collector import DellOS10Collector, DellOS10CollectorError
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,15 @@ OS10_ERROR_HINTS = (
 _CONSOLE_PORT = 5000
 
 
+def _tcp_open(host: str, port: int, timeout: float = 3.0) -> bool:
+    """Fast TCP reachability probe — avoids long SSH/auth waits on dead switches."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def connect_os10_collector(host: str, username: str = "admin", password: str = "admin") -> "tuple[DellOS10Collector, str]":
     """Connect a Dell OS10 collector, trying the TCP console first then SSH.
 
@@ -35,15 +45,25 @@ def connect_os10_collector(host: str, username: str = "admin", password: str = "
     ssh_pass = os.environ.get("DELL_SSH_PASSWORD", "admin")
     ssh_port = int(os.environ.get("DELL_SSH_PORT", "22"))
 
-    try:
-        collector = DellOS10Collector(host=host, username=username, password=password, port=_CONSOLE_PORT, use_ssh=False)
-        collector.connect()
-        return collector, "console"
-    except Exception as console_err:
-        logger.info("OS10 console unreachable on %s:%s (%s); trying SSH", host, _CONSOLE_PORT, console_err)
-        collector = DellOS10Collector(host=host, username=ssh_user, password=ssh_pass, port=ssh_port, use_ssh=True)
-        collector.connect()
-        return collector, "ssh"
+    errors = []
+    if _tcp_open(host, _CONSOLE_PORT):
+        try:
+            collector = DellOS10Collector(host=host, username=username, password=password, port=_CONSOLE_PORT, use_ssh=False)
+            collector.connect()
+            return collector, "console"
+        except Exception as console_err:
+            errors.append(f"console:{console_err}")
+            logger.info("OS10 console unreachable on %s:%s (%s); trying SSH", host, _CONSOLE_PORT, console_err)
+    else:
+        logger.info("OS10 console port %s closed on %s; trying SSH", _CONSOLE_PORT, host)
+
+    if not _tcp_open(host, ssh_port):
+        raise DellOS10CollectorError(
+            f"Connection failed to {host}: console port {_CONSOLE_PORT} closed and SSH port {ssh_port} closed"
+        )
+    collector = DellOS10Collector(host=host, username=ssh_user, password=ssh_pass, port=ssh_port, use_ssh=True)
+    collector.connect()
+    return collector, "ssh"
 
 
 def _push_via_collector(collector: DellOS10Collector, transport: str, config_payload: str) -> dict:

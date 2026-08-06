@@ -279,3 +279,15 @@ export const updateComplianceRule = async (ruleId: string, payload: { is_active?
     }
     return res.json();
 };
+
+export const fetchProvisioningJobs = async (): Promise<any[]> => {
+    const res = await fetch('/api/v5/admin/provisioning-jobs', { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch provisioning jobs');
+    return res.json();
+};
+
+export const fetchProvisioningJobDetail = async (jobId: string): Promise<any> => {
+    const res = await fetch(`/api/v5/admin/provisioning-jobs/${jobId}`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch provisioning job details');
+    return res.json();
+};

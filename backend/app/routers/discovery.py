@@ -78,7 +78,7 @@ async def ingest_ztp_signal(
             vendor=payload.vendor,
             role="leaf",
             local_bgp_asn=65000,
-            loopback_0_ip=f"10.255.0.{int(payload.serial_number[-4:], 16) % 254 + 1}",
+            loopback_0_ip=f"10.255.0.{abs(hash(payload.serial_number)) % 254 + 1}",
             serial_number=payload.serial_number,
             lifecycle_status="discovered_raw"
         )
@@ -135,7 +135,8 @@ async def get_discovery_pool(
             "current_dhcp_ip": r.current_dhcp_ip,
             "first_seen": r.first_seen.isoformat() if r.first_seen else None,
             "onboarding_status": r.onboarding_status,
-            "error_message": r.error_message
+            "error_message": r.error_message,
+            "ztp_logs": r.ztp_logs
         }
         for r in records
     ]
@@ -185,6 +186,7 @@ async def get_ztp_record_status(
         "first_seen": record.first_seen.isoformat() if record.first_seen else None,
         "onboarding_status": record.onboarding_status,
         "error_message": record.error_message,
+        "ztp_logs": record.ztp_logs,
         "switch": {
             "switch_id": str(switch.switch_id) if switch else None,
             "hostname": switch.hostname if switch else None,
@@ -223,6 +225,7 @@ async def retry_ztp_provisioning(
 
     record.onboarding_status = "pending"
     record.error_message = None
+    record.ztp_logs = ""
     switch.lifecycle_status = "discovered_raw"
     db.commit()
 

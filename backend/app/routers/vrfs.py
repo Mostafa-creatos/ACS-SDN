@@ -4,6 +4,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 import ipaddress
 import uuid
+import datetime
 
 from .. import models
 from ..db import get_db
@@ -90,6 +91,22 @@ class SubnetCreate(BaseModel):
         except ValueError:
             raise ValueError("Invalid gateway IP address format.")
         return v
+
+class ProvisioningJobResponse(BaseModel):
+    job_id: str
+    subnet_id: str
+    vrf_name: str
+    subnet_cidr: str
+    fabric_name: str
+    status: str
+    started_at: Optional[datetime.datetime] = None
+    completed_at: Optional[datetime.datetime] = None
+    logs: str
+    error_message: Optional[str] = None
+    device_statuses: Optional[dict] = {}
+
+    class Config:
+        from_attributes = True
 
 # --- ENDPOINTS ---
 
@@ -424,6 +441,23 @@ def create_vrf_subnet(
     db.add(gateway_allocation)
     db.commit()
 
+    # Initialize auto-provisioning background job
+    job = models.ProvisioningJob(
+        job_id=uuid.uuid4(),
+        subnet_id=new_subnet.subnet_id,
+        vrf_name=vrf.vrf_name,
+        subnet_cidr=new_subnet.subnet_cidr,
+        fabric_name=fabric.fabric_name,
+        status="pending",
+        logs=""
+    )
+    db.add(job)
+    db.commit()
+
+    # Trigger Celery auto-provisioning task asynchronously
+    from app.workers.sync_tasks import auto_provision_subnet_task
+    auto_provision_subnet_task.delay(str(job.job_id))
+
     return {
         "subnet_id": str(new_subnet.subnet_id),
         "vrf_id": str(new_subnet.vrf_id),
@@ -457,3 +491,55 @@ def delete_subnet(
     
     db.delete(subnet)
     db.commit()
+
+
+@router.get("/provisioning-jobs", response_model=List[ProvisioningJobResponse])
+def list_provisioning_jobs(
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("global:manage"))
+):
+    """Retrieve all automated closed-loop provisioning status jobs."""
+    jobs = db.query(models.ProvisioningJob).order_by(models.ProvisioningJob.started_at.desc()).all()
+    res = []
+    for j in jobs:
+        res.append({
+            "job_id": str(j.job_id),
+            "subnet_id": str(j.subnet_id),
+            "vrf_name": j.vrf_name,
+            "subnet_cidr": j.subnet_cidr,
+            "fabric_name": j.fabric_name,
+            "status": j.status,
+            "started_at": j.started_at,
+            "completed_at": j.completed_at,
+            "logs": j.logs,
+            "error_message": j.error_message,
+            "device_statuses": j.device_statuses or {}
+        })
+    return res
+
+
+@router.get("/provisioning-jobs/{job_id}", response_model=ProvisioningJobResponse)
+def get_provisioning_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("global:manage"))
+):
+    """Retrieve details for a single provisioning job."""
+    j_uuid = uuid.UUID(job_id)
+    j = db.query(models.ProvisioningJob).filter(models.ProvisioningJob.job_id == j_uuid).first()
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "job_id": str(j.job_id),
+        "subnet_id": str(j.subnet_id),
+        "vrf_name": j.vrf_name,
+        "subnet_cidr": j.subnet_cidr,
+        "fabric_name": j.fabric_name,
+        "status": j.status,
+        "started_at": j.started_at,
+        "completed_at": j.completed_at,
+        "logs": j.logs,
+        "error_message": j.error_message,
+        "device_statuses": j.device_statuses or {}
+    }
+

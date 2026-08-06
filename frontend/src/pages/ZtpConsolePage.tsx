@@ -37,6 +37,7 @@ interface ZtpDetail {
   first_seen: string;
   onboarding_status: string;
   error_message?: string;
+  ztp_logs?: string;
   switch?: {
     switch_id: string;
     hostname: string;
@@ -331,40 +332,127 @@ export const ZtpConsolePage: React.FC = () => {
                             Loading details...
                           </div>
                         ) : detail ? (
-                          <div className="grid grid-cols-3 gap-4 text-xs">
-                            <div className="space-y-1.5">
-                              <div className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">Switch Info</div>
-                              {detail.switch ? (
-                                <>
-                                  <div><span className="text-slate-400">Hostname:</span> <span className="font-semibold text-slate-700">{detail.switch.hostname}</span></div>
-                                  <div><span className="text-slate-400">IP:</span> <span className="font-mono text-slate-700">{detail.switch.management_ip}</span></div>
-                                  <div><span className="text-slate-400">Lifecycle:</span> <span className="font-semibold text-slate-700">{detail.switch.lifecycle_status}</span></div>
-                                </>
-                              ) : (
-                                <div className="text-slate-400 italic">No switch record yet</div>
-                              )}
-                            </div>
-                            <div className="space-y-1.5">
-                              <div className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">Provisioning</div>
-                              <div><span className="text-slate-400">Status:</span> <span className="font-semibold text-slate-700">{detail.onboarding_status}</span></div>
-                              <div><span className="text-slate-400">First Seen:</span> <span className="text-slate-700">{detail.first_seen ? new Date(detail.first_seen).toLocaleString() : '-'}</span></div>
-                              {detail.error_message && (
-                                <div className="bg-rose-50 border border-rose-100 rounded p-2 text-rose-600 font-mono text-[10px]">
-                                  {detail.error_message}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-2 text-xs">
+                            {/* Column 1: Switch details & Stepper */}
+                            <div className="space-y-4">
+                              <div className="space-y-2 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
+                                <div className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">Switch Info</div>
+                                {detail.switch ? (
+                                  <div className="space-y-1 text-slate-700">
+                                    <div><span className="text-slate-400">Hostname:</span> <span className="font-semibold">{detail.switch.hostname}</span></div>
+                                    <div><span className="text-slate-400">Management IP:</span> <span className="font-mono">{detail.switch.management_ip}</span></div>
+                                    <div><span className="text-slate-400">Lifecycle Status:</span> <span className="font-semibold text-indigo-600">{detail.switch.lifecycle_status}</span></div>
+                                  </div>
+                                ) : (
+                                  <div className="text-slate-400 italic">No switch record created yet</div>
+                                )}
+                                <div className="border-t border-slate-100 my-2 pt-2 space-y-1 text-slate-700">
+                                  <div><span className="text-slate-400">First Seen:</span> <span>{detail.first_seen ? new Date(detail.first_seen).toLocaleString() : '-'}</span></div>
+                                  <div><span className="text-slate-400">Hardware Vendor:</span> <span className="capitalize">{detail.hardware_vendor}</span></div>
+                                  <div><span className="text-slate-400">OS Version:</span> <span className="font-mono">{detail.os_version}</span></div>
                                 </div>
-                              )}
+                                {detail.latest_snapshot && (
+                                  <div className="border-t border-slate-100 my-2 pt-2 space-y-1 text-slate-700">
+                                    <div className="font-bold text-slate-500 uppercase tracking-wider text-[10px] mb-1">Baseline Snapshot</div>
+                                    <div><span className="text-slate-400">Hash:</span> <span className="font-mono text-[10px]">{detail.latest_snapshot.config_hash?.substring(0, 12)}...</span></div>
+                                    <div><span className="text-slate-400">Taken:</span> <span>{new Date(detail.latest_snapshot.taken_at).toLocaleString()}</span></div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Progress Stepper */}
+                              <div className="space-y-3 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
+                                <div className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">Onboarding Progress</div>
+                                <div className="space-y-3">
+                                  {[
+                                    { label: 'Device Discovered', desc: 'Phone home beacon accepted' },
+                                    { label: 'SSH Enablement', desc: 'Console configuration step' },
+                                    { label: 'Baseline Config', desc: 'Ansible template execution' },
+                                    { label: 'Active Compliance', desc: 'Verification & active monitoring' }
+                                  ].map((s, idx) => {
+                                    const stepNum = idx + 1;
+                                    let currentStep = 1;
+                                    if (detail.onboarding_status === 'provisioned') {
+                                      currentStep = 4;
+                                    } else if (detail.onboarding_status === 'failed') {
+                                      if (detail.ztp_logs?.includes('Ansible') || detail.error_message?.includes('Ansible')) {
+                                        currentStep = 3;
+                                      } else if (detail.ztp_logs?.includes('console') || detail.ztp_logs?.includes('Console') || detail.error_message?.includes('console')) {
+                                        currentStep = 2;
+                                      } else {
+                                        currentStep = 1;
+                                      }
+                                    } else {
+                                      if (detail.ztp_logs?.includes('Ansible') || detail.ztp_logs?.includes('playbook')) {
+                                        currentStep = 3;
+                                      } else if (detail.ztp_logs?.includes('console') || detail.ztp_logs?.includes('Console')) {
+                                        currentStep = 2;
+                                      } else {
+                                        currentStep = 1;
+                                      }
+                                    }
+
+                                    const isCompleted = stepNum < currentStep || detail.onboarding_status === 'provisioned';
+                                    const isCurrent = stepNum === currentStep && detail.onboarding_status === 'pending';
+                                    const isFailed = stepNum === currentStep && detail.onboarding_status === 'failed';
+
+                                    const isNokia = detail.hardware_vendor?.toLowerCase().includes("nokia") || detail.switch?.hostname?.toLowerCase().includes("nokia");
+                                    let isSkipped = false;
+                                    if (isNokia && (stepNum === 2 || stepNum === 3)) {
+                                      isSkipped = true;
+                                    }
+
+                                    return (
+                                      <div key={idx} className="flex gap-3 items-start">
+                                        <div className="flex flex-col items-center">
+                                          <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                                            isCompleted ? 'bg-emerald-100 text-emerald-700' :
+                                            isFailed ? 'bg-rose-100 text-rose-700 border border-rose-300' :
+                                            isCurrent ? 'bg-amber-100 text-amber-700 animate-pulse border border-amber-300' :
+                                            isSkipped ? 'bg-slate-100 text-slate-400 italic' :
+                                            'bg-slate-100 text-slate-400'
+                                          }`}>
+                                            {isCompleted ? '✓' : isFailed ? '✗' : isSkipped ? '-' : stepNum}
+                                          </div>
+                                          {idx < 3 && <div className={`w-0.5 h-5 ${isCompleted ? 'bg-emerald-200' : 'bg-slate-200'}`} />}
+                                        </div>
+                                        <div>
+                                          <div className="text-[11px] font-semibold text-slate-800">
+                                            {s.label} {isSkipped && <span className="text-[9px] text-slate-400 font-normal italic">(Skipped for Nokia)</span>}
+                                          </div>
+                                          <div className="text-[9px] text-slate-400">{s.desc}</div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1.5">
-                              <div className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">Latest Snapshot</div>
-                              {detail.latest_snapshot ? (
-                                <>
-                                  <div><span className="text-slate-400">Hash:</span> <span className="font-mono text-[10px] text-slate-600">{detail.latest_snapshot.config_hash?.substring(0, 16)}...</span></div>
-                                  <div><span className="text-slate-400">Baseline:</span> <span className="font-semibold text-slate-700">{detail.latest_snapshot.is_baseline ? 'Yes' : 'No'}</span></div>
-                                  <div><span className="text-slate-400">Taken by:</span> <span className="text-slate-700">{detail.latest_snapshot.taken_by}</span></div>
-                                  <div><span className="text-slate-400">At:</span> <span className="text-slate-700">{detail.latest_snapshot.taken_at ? new Date(detail.latest_snapshot.taken_at).toLocaleString() : '-'}</span></div>
-                                </>
-                              ) : (
-                                <div className="text-slate-400 italic">No snapshots yet</div>
+
+                            {/* Columns 2-3: Terminal Console */}
+                            <div className="md:col-span-2 flex flex-col h-full space-y-2">
+                              <div className="flex justify-between items-center">
+                                <div className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">Orchestrator Session Logs</div>
+                                <span className={`text-[10px] px-2 py-0.5 rounded font-semibold uppercase ${
+                                  detail.onboarding_status === 'provisioned' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                                  detail.onboarding_status === 'failed' ? 'bg-rose-50 text-rose-700 border border-rose-200' :
+                                  'bg-amber-50 text-amber-700 border border-amber-200'
+                                }`}>
+                                  {detail.onboarding_status}
+                                </span>
+                              </div>
+                              
+                              <div className="bg-slate-950 border border-slate-900 rounded-xl p-4 font-mono text-[11px] text-emerald-400 overflow-y-auto h-72 whitespace-pre-wrap shadow-inner leading-relaxed flex-1 select-text">
+                                {detail.ztp_logs ? detail.ztp_logs : "Connecting to orchestrator, retrieving log sequence...\n[Waiting for initial logs]"}
+                              </div>
+                              
+                              {detail.error_message && (
+                                <div className="bg-rose-50 border border-rose-100 rounded-lg p-3 text-rose-700 text-[11px] font-semibold">
+                                  <div className="font-bold text-rose-800 mb-1">Onboarding Error Summary:</div>
+                                  <div className="font-mono bg-white/50 p-2 rounded border border-rose-200 max-h-20 overflow-y-auto">
+                                    {detail.error_message}
+                                  </div>
+                                </div>
                               )}
                             </div>
                           </div>

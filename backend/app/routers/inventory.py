@@ -223,6 +223,7 @@ def _serialize_switch(db: Session, sw: models.Switch) -> dict:
         "running_config": sw.running_config or "",
         "startup_config": sw.startup_config or "",
         "configuration_checksum": sw.configuration_checksum,
+        "configured_vrfs": sw.configured_vrfs or [],
         "interfaces": interfaces_list,
         "hardware_components": hardware_components,
         "vlans": switch_vlans,

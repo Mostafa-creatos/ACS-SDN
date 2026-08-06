@@ -76,6 +76,8 @@ def migrate_db_columns(engine):
                 conn.execute(text("ALTER TABLE switches ADD COLUMN running_config TEXT DEFAULT ''"))
             if "startup_config" not in columns:
                 conn.execute(text("ALTER TABLE switches ADD COLUMN startup_config TEXT DEFAULT ''"))
+            if "configured_vrfs" not in columns:
+                conn.execute(text("ALTER TABLE switches ADD COLUMN configured_vrfs JSON DEFAULT '[]'"))
             # Dell OS10 specific columns
             if "service_tag" not in columns:
                 conn.execute(text("ALTER TABLE switches ADD COLUMN service_tag VARCHAR(64) DEFAULT ''"))
@@ -142,6 +144,20 @@ def migrate_db_columns(engine):
             with engine.begin() as conn:
                 if "requested_by" not in policy_cols:
                     conn.execute(text("ALTER TABLE policy_approvals ADD COLUMN requested_by VARCHAR(100) DEFAULT 'system'"))
+
+        # Migrate provisioning_jobs columns
+        if "provisioning_jobs" in inspector.get_table_names():
+            job_cols = [c["name"] for c in inspector.get_columns("provisioning_jobs")]
+            with engine.begin() as conn:
+                if "device_statuses" not in job_cols:
+                    conn.execute(text("ALTER TABLE provisioning_jobs ADD COLUMN device_statuses JSON DEFAULT '{}'"))
+
+        # Migrate ztp_discovery_pool columns
+        if "ztp_discovery_pool" in inspector.get_table_names():
+            ztp_cols = [c["name"] for c in inspector.get_columns("ztp_discovery_pool")]
+            with engine.begin() as conn:
+                if "ztp_logs" not in ztp_cols:
+                    conn.execute(text("ALTER TABLE ztp_discovery_pool ADD COLUMN ztp_logs TEXT DEFAULT ''"))
 
     # Migration: Drop FabricBlueprint (removed in Sprint 5)
     if "fabrics" in inspector.get_table_names():

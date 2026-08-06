@@ -44,6 +44,7 @@ class ZtpDiscoveryPool(Base):
     last_boot_request = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     onboarding_status = Column(String(32), default="pending")  # 'pending', 'provisioned', 'failed'
     error_message = Column(String, nullable=True)
+    ztp_logs = Column(Text, nullable=True, default="")
 
     # Relationships
     switch_reference = relationship("Switch", back_populates="discovery_reference")
@@ -65,6 +66,7 @@ class Switch(Base):
     configuration_drift_category = Column(String(255), nullable=True)
     configuration_checksum = Column(String(64), nullable=True)
     last_successful_sync = Column(DateTime, nullable=True)
+    configured_vrfs = Column(JSON, default=list)
 
     # Device Inventory Extensions
     model = Column(String(100), default="S5248F-ON")
@@ -518,3 +520,22 @@ class BackupSchedule(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     fabric = relationship("Fabric")
+
+
+class ProvisioningJob(Base):
+    __tablename__ = "provisioning_jobs"
+
+    job_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    subnet_id = Column(UUID(as_uuid=True), ForeignKey("ipam_subnets.subnet_id", ondelete="CASCADE"), nullable=False)
+    vrf_name = Column(String(100), nullable=False)
+    subnet_cidr = Column(String(45), nullable=False)
+    fabric_name = Column(String(100), nullable=False)
+    status = Column(String(32), default="pending")  # 'pending', 'in_progress', 'success', 'failed'
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    completed_at = Column(DateTime, nullable=True)
+    logs = Column(Text, default="")
+    error_message = Column(Text, nullable=True)
+    device_statuses = Column(JSON, default=dict)
+
+    subnet = relationship("IpamSubnet")
+

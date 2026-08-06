@@ -1,9 +1,11 @@
 import re
+import socket
 import time
 
 from .base import SouthboundNetworkDriver
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_SSH_PORT = 22
 
 _ERROR_HINTS = (
     "Error:",
@@ -45,15 +47,18 @@ def _srlinux_read_until_prompt(channel, timeout: float = 15.0, max_chunk: int = 
         except Exception:
             break
         buf += chunk
-        lower = buf.lower()
-        if "--more--" in lower:
+        # The real device appends ANSI cursor-control sequences (bracketed
+        # paste mode, cursor movement) after the prompt marker, so the raw
+        # last line never ends with '#' or '>'. Strip escapes before checking.
+        clean = _clean(buf)
+        if "--more--" in buf.lower() or "--more--" in clean.lower():
             try:
                 channel.send(" ")
             except Exception:
                 pass
             time.sleep(0.1)
             continue
-        last_line = buf.rstrip("\r\n").splitlines()
+        last_line = clean.rstrip("\n").splitlines()
         if last_line and last_line[-1].rstrip().endswith(("#", ">")):
             return buf
     return buf
@@ -81,6 +86,15 @@ def _discard_candidate(channel) -> None:
 
 def _has_error(text: str) -> bool:
     return any(hint in text for hint in _ERROR_HINTS)
+
+
+def _tcp_open(host: str, port: int = _SSH_PORT, timeout: float = 3.0) -> bool:
+    """Fast TCP reachability probe — avoids long SSH banner/auth waits on dead switches."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 class NokiaSrlinuxDriver(SouthboundNetworkDriver):
@@ -124,6 +138,8 @@ class NokiaSrlinuxDriver(SouthboundNetworkDriver):
         import paramiko
 
         def _apply():
+            if not _tcp_open(host):
+                return {"success": False, "output": f"Failed to connect to Nokia switch ({host}:22): TCP probe failed (port 22 closed)", "applied_config": ""}
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             channel = None
@@ -212,6 +228,8 @@ class NokiaSrlinuxDriver(SouthboundNetworkDriver):
         import paramiko
 
         def _fetch():
+            if not _tcp_open(host):
+                raise ConnectionError(f"Unable to connect to Nokia switch at {host}:22 (TCP probe failed, port closed)")
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             try:
@@ -258,6 +276,8 @@ class NokiaSrlinuxDriver(SouthboundNetworkDriver):
         import paramiko
 
         def _validate():
+            if not _tcp_open(host):
+                return {"diff": "", "validation_status": "error", "error_detail": f"TCP probe failed (port 22 closed on {host})"}
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             try:

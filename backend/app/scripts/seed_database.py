@@ -38,6 +38,22 @@ def seed_all():
             db.add(tenant)
             db.flush()
 
+            # Seed default VRFs
+            vrf1 = models.TenantVrf(
+                vrf_id=uuid.UUID("22222222-2222-2222-2222-22222222222b"),
+                tenant_id=tenant.tenant_id,
+                vrf_name="VRF-Acme",
+                layer3_vni=5000
+            )
+            vrf2 = models.TenantVrf(
+                vrf_id=uuid.UUID("22222222-2222-2222-2222-22222222222c"),
+                tenant_id=tenant.tenant_id,
+                vrf_name="vrf-test-policy",
+                layer3_vni=5001
+            )
+            db.add(vrf1)
+            db.add(vrf2)
+
             fabric = models.Fabric(
                 fabric_id=uuid.UUID("33333333-3333-3333-3333-33333333333c"),
                 fabric_name="DataCenter-East",
@@ -45,7 +61,7 @@ def seed_all():
             )
             db.add(fabric)
             db.commit()
-            print("[SDN SEED] Default tenant and fabric seeding completed.")
+            print("[SDN SEED] Default tenant, VRFs, and fabric seeding completed.")
 
         # 2. Seed detailed multi-vendor switches if missing
         if db.query(models.Switch).filter(models.Switch.hostname == "spine-01").count() == 0:

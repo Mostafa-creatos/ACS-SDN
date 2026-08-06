@@ -3,6 +3,7 @@ import hashlib
 import json
 import datetime
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy.orm import Session
 from .. import models
 
@@ -134,7 +135,38 @@ def build_remediation_config(switch: models.Switch, rule_name: str, context: dic
 
     return generate_golden_config(switch)
 
-def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "system") -> models.ConfigSnapshot:
+def _strip_control_nuls(text: str) -> str:
+    """PostgreSQL text columns reject NUL (0x00) bytes; raw device output
+    (notably Dell console streams) can contain them."""
+    return text.replace("\x00", "")
+
+def _fetch_switch_running_config(switch: models.Switch) -> str:
+    """Fetch a switch's live running config from the device.
+
+    Pure network I/O with no DB access, so it is safe to run concurrently from
+    worker threads. Raises on transport failure so callers can mark the switch
+    as unreachable instead of treating error text as configuration.
+    """
+    if switch.vendor == "dell_os10" or switch.vendor == "dell":
+        from app.drivers.dell_os10 import connect_os10_collector
+        collector, _transport = connect_os10_collector(switch.management_ip, "admin", "admin")
+        try:
+            return collector.collect_running_config()
+        finally:
+            collector.close()
+    elif switch.vendor == "nokia":
+        import os
+        from app.drivers.nokia_srlinux import NokiaSrlinuxDriver
+        driver = NokiaSrlinuxDriver()
+        return asyncio.run(driver.fetch_config(
+            switch.management_ip,
+            username="admin",
+            password=os.environ.get("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!")
+        ))
+    else:
+        return switch.running_config or ""
+
+def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "system", raw_config: str = None) -> models.ConfigSnapshot:
     """
     Takes a snapshot of a switch's configuration.
     If the switch is online, connects via gNMI / NETCONF to dump config.
@@ -144,29 +176,13 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
     if not switch:
         raise ValueError("Switch not found")
 
-    # Fetch live configuration from the device.
-    # On transport failure we raise so callers can mark the switch as
-    # unreachable instead of treating the error text as configuration.
-    if switch.vendor == "dell_os10" or switch.vendor == "dell":
-        from app.drivers.dell_os10 import connect_os10_collector
-        collector, _transport = connect_os10_collector(switch.management_ip, "admin", "admin")
-        try:
-            raw_config = collector.collect_running_config()
-        finally:
-            collector.close()
-    elif switch.vendor == "nokia":
-        import os
-        from app.drivers.nokia_srlinux import NokiaSrlinuxDriver
-        driver = NokiaSrlinuxDriver()
-        raw_config = asyncio.run(driver.fetch_config(
-            switch.management_ip,
-            username="admin",
-            password=os.environ.get("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!")
-        ))
-        switch.running_config = raw_config
-    else:
-        # Fallback to whatever is in the DB
-        raw_config = switch.running_config or ""
+    # Fetch live configuration from the device unless the caller already pulled
+    # it (parallel audit fetch). On transport failure we raise so callers can
+    # mark the switch as unreachable instead of treating error text as config.
+    if raw_config is None:
+        raw_config = _fetch_switch_running_config(switch)
+    raw_config = _strip_control_nuls(raw_config)
+    switch.running_config = raw_config
     config_hash = hashlib.sha256(raw_config.encode('utf-8')).hexdigest()
 
     snapshot = models.ConfigSnapshot(
@@ -183,6 +199,27 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
     switch.configuration_checksum = config_hash
     switch.last_successful_sync = datetime.datetime.now(datetime.timezone.utc)
     switch.lifecycle_status = "compliant_active"
+    
+    # Parse active VRF names from configuration
+    vrfs_found = []
+    vendor_lower = (switch.vendor or "").lower()
+    if vendor_lower in ("dell", "dell_os10"):
+        import re
+        for match in re.finditer(r'^ip vrf (\S+)', raw_config, re.MULTILINE):
+            name = match.group(1).strip()
+            if name.lower() not in ("default", "mgmt"):
+                vrfs_found.append(name)
+    elif vendor_lower in ("nokia", "nokia_srlinux"):
+        import re
+        # Nokia configs can have "/ network-instance name" or "network-instance name"
+        for match in re.finditer(r'(?:/ )?network-instance (\S+)', raw_config):
+            name = match.group(1).strip()
+            # Clean braces or semicolons
+            name = name.replace("{", "").replace("}", "").replace(";", "").strip()
+            if name.lower() not in ("default", "mgmt") and name not in vrfs_found:
+                if name:
+                    vrfs_found.append(name)
+    switch.configured_vrfs = list(set(vrfs_found))
     
     db.commit()
     db.refresh(snapshot)
@@ -217,20 +254,34 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
     passed_rules = 0
     findings_list = []
     unreachable_switches = []
+    unreachable_switch_ids = set()
+
+    # Fetch every switch's running config concurrently: dead switches (their
+    # SSH/console ports are closed) now fail their 3s TCP probe in parallel
+    # instead of stacking 10-30s connect timeouts sequentially.
+    fetched_configs = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {ex.submit(_fetch_switch_running_config, sw): sw for sw in switches}
+        for fut in futures:
+            sw = futures[fut]
+            try:
+                fetched_configs[sw.switch_id] = fut.result()
+            except Exception as e:
+                print(f"[COMPLIANCE] Switch {sw.hostname} unreachable, skipping audit: {e}")
+                unreachable_switches.append(sw.hostname)
+                unreachable_switch_ids.add(sw.switch_id)
 
     for sw in switches:
+        if sw.switch_id in unreachable_switch_ids:
+            continue
+
         # Load switch's associated fabric
         fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == sw.fabric_id).first()
 
         # Always pull a fresh live configuration snapshot during compliance audit.
         # An unreachable switch is reported separately instead of being audited
         # against an empty/error config, which used to produce fake failures.
-        try:
-            snapshot = take_config_snapshot(db, sw.switch_id, "compliance-auditor")
-        except Exception as e:
-            print(f"[COMPLIANCE] Switch {sw.hostname} unreachable, skipping audit: {e}")
-            unreachable_switches.append(sw.hostname)
-            continue
+        snapshot = take_config_snapshot(db, sw.switch_id, "compliance-auditor", raw_config=fetched_configs[sw.switch_id])
 
         config = snapshot.raw_config or ""
 

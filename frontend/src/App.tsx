@@ -21,6 +21,7 @@ import { ReportsPage } from './pages/ReportsPage';
 import { ConfigPushPage } from './pages/ConfigPushPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
 import { BackupRestorePage } from './pages/BackupRestorePage';
+import { ProvisioningStatus } from './pages/ProvisioningStatus';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,6 +80,7 @@ export const App: React.FC = () => {
               <Route path="config-push" element={<ConfigPushPage />} />
               <Route path="audit-logs" element={<AuditLogsPage />} />
               <Route path="backups" element={<BackupRestorePage />} />
+              <Route path="provisioning-status" element={<ProvisioningStatus />} />
             </Route>
 
             {/* Catch-all fallback */}
