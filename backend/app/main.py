@@ -165,6 +165,10 @@ def migrate_db_columns(engine):
         with engine.begin() as conn:
             if "blueprint_id" in fab_cols:
                 conn.execute(text("ALTER TABLE fabrics DROP COLUMN blueprint_id"))
+            if "loopback_pool" not in fab_cols:
+                conn.execute(text("ALTER TABLE fabrics ADD COLUMN loopback_pool VARCHAR(255) DEFAULT '10.200.1.0/24'"))
+            if "vtep_pool" not in fab_cols:
+                conn.execute(text("ALTER TABLE fabrics ADD COLUMN vtep_pool VARCHAR(255) DEFAULT '10.250.1.0/24'"))
     if "fabric_blueprints" in inspector.get_table_names():
         with engine.begin() as conn:
             conn.execute(text("DROP TABLE fabric_blueprints"))

@@ -65,38 +65,44 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
   const isEdit = !!editSwitch;
 
   const [fabrics, setFabrics] = useState<any[]>([]);
-  const [form, setForm] = useState<FormData>(() => {
-    if (editSwitch) {
-      return {
-        hostname: editSwitch.hostname,
-        management_ip: editSwitch.management_ip,
-        vendor: editSwitch.vendor,
-        role: editSwitch.role,
-        local_bgp_asn: editSwitch.local_bgp_asn as number || 65000,
-        loopback_0_ip: editSwitch.loopback_0_ip as string || '',
-        vtep_ip: editSwitch.vtep_ip as string || '',
-        model: editSwitch.model,
-        os_version: editSwitch.os_version,
-        serial_number: editSwitch.serial_number,
-        service_tag: editSwitch.service_tag,
-        part_number: editSwitch.part_number,
-        ppid: editSwitch.ppid,
-        management_mac: editSwitch.management_mac,
-        location: editSwitch.location,
-        device_type: editSwitch.device_type,
-        os_type: editSwitch.os_type,
-        client_tenant: editSwitch.client_tenant,
-        ports_up: editSwitch.ports_up,
-        ports_all: editSwitch.ports_all,
-        chassis_status: editSwitch.chassis_status,
-        fabric_id: (editSwitch as any).fabric_id || '',
-      };
-    }
-    return { ...initialForm, loopback_0_ip: `10.200.1.${Math.floor(Math.random() * 200 + 50)}` };
-  });
-
+  const [form, setForm] = useState<FormData>({ ...initialForm });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Sync Form State when editSwitch or open changes
+  useEffect(() => {
+    if (open) {
+      if (editSwitch) {
+        setForm({
+          hostname: editSwitch.hostname || '',
+          management_ip: editSwitch.management_ip || '',
+          vendor: editSwitch.vendor || 'dell_os10',
+          role: editSwitch.role || 'leaf',
+          local_bgp_asn: editSwitch.local_bgp_asn as number || 65000,
+          loopback_0_ip: editSwitch.loopback_0_ip as string || '',
+          vtep_ip: editSwitch.vtep_ip as string || '',
+          model: editSwitch.model || '',
+          os_version: editSwitch.os_version || '',
+          serial_number: editSwitch.serial_number || '',
+          service_tag: editSwitch.service_tag || '',
+          part_number: editSwitch.part_number || '',
+          ppid: editSwitch.ppid || '',
+          management_mac: editSwitch.management_mac || '',
+          location: editSwitch.location || '',
+          device_type: editSwitch.device_type || 'Switch',
+          os_type: editSwitch.os_type || 'OS10',
+          client_tenant: editSwitch.client_tenant || '',
+          ports_up: editSwitch.ports_up || 0,
+          ports_all: editSwitch.ports_all || 0,
+          chassis_status: editSwitch.chassis_status || 'Ready',
+          fabric_id: (editSwitch as any).fabric_id || '',
+        });
+      } else {
+        setForm({ ...initialForm, loopback_0_ip: `10.200.1.${Math.floor(Math.random() * 200 + 50)}` });
+      }
+      setError(null);
+    }
+  }, [open, editSwitch]);
 
   // Fetch Fabrics on Modal Mount
   useEffect(() => {
@@ -228,7 +234,12 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
               </div>
               <div>
                 <label className={labelCls}>Vendor</label>
-                <select className={inputCls} value={form.vendor} onChange={e => set('vendor', e.target.value)}>
+                <select 
+                  className={`${inputCls} disabled:opacity-60 disabled:bg-slate-100 disabled:cursor-not-allowed`} 
+                  value={form.vendor} 
+                  onChange={e => set('vendor', e.target.value)}
+                  disabled={isEdit}
+                >
                   <option value="dell_os10">Dell OS10</option>
                   <option value="nokia">Nokia</option>
                   <option value="arista">Arista</option>
@@ -254,8 +265,13 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
               </div>
               <div>
                 <label className={labelCls}>Model</label>
-                <input className={inputCls} placeholder="S5248F-ON"
-                  value={form.model} onChange={e => set('model', e.target.value)} />
+                <input 
+                  className={`${inputCls} disabled:opacity-60 disabled:bg-slate-100 disabled:cursor-not-allowed`} 
+                  placeholder="S5248F-ON"
+                  value={form.model} 
+                  onChange={e => set('model', e.target.value)} 
+                  disabled={isEdit}
+                />
               </div>
             </div>
           </div>
@@ -281,7 +297,12 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
               </div>
               <div>
                 <label className={labelCls}>OS Type</label>
-                <select className={inputCls} value={form.os_type} onChange={e => set('os_type', e.target.value)}>
+                <select 
+                  className={`${inputCls} disabled:opacity-60 disabled:bg-slate-100 disabled:cursor-not-allowed`} 
+                  value={form.os_type} 
+                  onChange={e => set('os_type', e.target.value)}
+                  disabled={isEdit}
+                >
                   <option value="OS10">OS10</option>
                   <option value="SRLinux">SR Linux</option>
                   <option value="EOS">EOS</option>
@@ -296,13 +317,23 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className={labelCls}>Serial Number</label>
-                <input className={inputCls} placeholder="SN-..."
-                  value={form.serial_number} onChange={e => set('serial_number', e.target.value)} />
+                <input 
+                  className={`${inputCls} disabled:opacity-60 disabled:bg-slate-100 disabled:cursor-not-allowed`} 
+                  placeholder="SN-..."
+                  value={form.serial_number} 
+                  onChange={e => set('serial_number', e.target.value)} 
+                  disabled={isEdit}
+                />
               </div>
               <div>
                 <label className={labelCls}>Service Tag</label>
-                <input className={inputCls} placeholder="ABC1234"
-                  value={form.service_tag} onChange={e => set('service_tag', e.target.value)} />
+                <input 
+                  className={`${inputCls} disabled:opacity-60 disabled:bg-slate-100 disabled:cursor-not-allowed`} 
+                  placeholder="ABC1234"
+                  value={form.service_tag} 
+                  onChange={e => set('service_tag', e.target.value)} 
+                  disabled={isEdit}
+                />
               </div>
             </div>
           </div>

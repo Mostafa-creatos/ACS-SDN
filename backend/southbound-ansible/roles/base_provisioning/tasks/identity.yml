@@ -2,7 +2,7 @@
 - name: Configure hostname
   dellos10_command:
     commands:
-      - hostname {{ inventory_hostname }}
+      - hostname {{ hostname_assigned | default(inventory_hostname) }}
 
 - name: Configure MOTD banner
   dellos10_command:

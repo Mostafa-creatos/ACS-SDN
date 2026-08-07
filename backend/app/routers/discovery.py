@@ -125,8 +125,10 @@ async def get_discovery_pool(
             models.ZtpDiscoveryPool.first_seen.desc()
         ).all()
 
-    return [
-        {
+    response_data = []
+    for r in records:
+        switch = db.query(models.Switch).filter(models.Switch.discovery_id == r.discovery_id).first()
+        response_data.append({
             "discovery_id": str(r.discovery_id),
             "mac_address": r.mac_address,
             "serial_number": r.serial_number,
@@ -136,10 +138,12 @@ async def get_discovery_pool(
             "first_seen": r.first_seen.isoformat() if r.first_seen else None,
             "onboarding_status": r.onboarding_status,
             "error_message": r.error_message,
-            "ztp_logs": r.ztp_logs
-        }
-        for r in records
-    ]
+            "ztp_logs": r.ztp_logs,
+            "fabric_id": str(switch.fabric_id) if switch and switch.fabric_id else None,
+            "switch_hostname": switch.hostname if switch else None,
+            "switch_role": switch.role if switch else None,
+        })
+    return response_data
 
 
 @router.get("/pool/{discovery_id}/status", status_code=status.HTTP_200_OK)
@@ -232,6 +236,155 @@ async def retry_ztp_provisioning(
     apply_baseline_template.delay(str(switch.switch_id))
 
     return {"status": "RETRY_QUEUED", "discovery_id": discovery_id, "switch_id": str(switch.switch_id)}
+
+
+class AssignFabricPayload(BaseModel):
+    fabric_id: str = Field(..., description="UUID of the fabric to assign this switch to")
+    role: Optional[str] = Field("leaf", description="Switch role: 'spine' or 'leaf'")
+    hostname: Optional[str] = Field(None, description="Override hostname (leave blank to keep current)")
+
+
+@router.patch("/pool/{discovery_id}/assign-fabric", status_code=status.HTTP_200_OK)
+async def assign_switch_to_fabric(
+    discovery_id: str,
+    payload: AssignFabricPayload,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("inventory:write"))
+):
+    """
+    Assign a newly-discovered switch to a fabric.
+    This dynamically calculates and allocates:
+    - Next available BGP ASN from the fabric global ASN.
+    - Loopback IP from fabric.loopback_pool.
+    - VTEP IP from fabric.vtep_pool.
+    Automatically re-triggers the ZTP baseline provisioning task.
+    """
+    import uuid as _uuid
+    import ipaddress
+    try:
+        did = _uuid.UUID(discovery_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid discovery_id format")
+
+    try:
+        fabric_uuid = _uuid.UUID(payload.fabric_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid fabric_id format")
+
+    record = db.query(models.ZtpDiscoveryPool).filter(
+        models.ZtpDiscoveryPool.discovery_id == did
+    ).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Discovery record not found")
+
+    fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == fabric_uuid).first()
+    if not fabric:
+        raise HTTPException(status_code=404, detail="Fabric not found")
+
+    switch = db.query(models.Switch).filter(models.Switch.discovery_id == did).first()
+    if not switch:
+        raise HTTPException(status_code=404, detail="No switch record associated with this discovery record")
+
+    # 1. Hostname update
+    final_hostname = switch.hostname
+    if payload.hostname and payload.hostname.strip():
+        final_hostname = payload.hostname.strip()
+        # Verify hostname is unique
+        existing_host = db.query(models.Switch).filter(
+            models.Switch.hostname == final_hostname,
+            models.Switch.switch_id != switch.switch_id
+        ).first()
+        if existing_host:
+            raise HTTPException(status_code=400, detail=f"Hostname '{final_hostname}' is already in use.")
+
+    # 2. ASN Allocation
+    if payload.role == "spine":
+        assigned_asn = fabric.global_bgp_asn
+    else:
+        # Calculate next leaf ASN: global_bgp_asn + max(increment of existing leaf ASNs) + 1
+        existing_switches = db.query(models.Switch).filter(
+            models.Switch.fabric_id == fabric_uuid
+        ).all()
+        leaf_asns = [
+            sw.local_bgp_asn for sw in existing_switches 
+            if sw.role == "leaf" and sw.local_bgp_asn and sw.local_bgp_asn > fabric.global_bgp_asn
+        ]
+        if leaf_asns:
+            assigned_asn = max(leaf_asns) + 1
+        else:
+            assigned_asn = fabric.global_bgp_asn + 1
+
+    # 3. IPAM Allocation
+    # Fetch all used IPs to prevent duplicate allocation
+    used_loopbacks = {sw.loopback_0_ip for sw in db.query(models.Switch).filter(models.Switch.loopback_0_ip != None).all()}
+    used_vteps = {sw.vtep_ip for sw in db.query(models.Switch).filter(models.Switch.vtep_ip != None).all()}
+
+    # Allocate loopback IP
+    l_pool_str = fabric.loopback_pool or "10.200.1.0/24"
+    allocated_loopback = None
+    try:
+        l_net = ipaddress.ip_network(l_pool_str, strict=False)
+        # Iterate over hosts in the subnet
+        for host in l_net.hosts():
+            host_str = str(host)
+            if host_str not in used_loopbacks:
+                allocated_loopback = host_str
+                break
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid fabric loopback pool network '{l_pool_str}': {e}")
+
+    if not allocated_loopback:
+        raise HTTPException(status_code=400, detail=f"No free IP addresses remaining in fabric loopback pool '{l_pool_str}'")
+
+    # Allocate VTEP IP
+    v_pool_str = fabric.vtep_pool or "10.250.1.0/24"
+    allocated_vtep = None
+    try:
+        v_net = ipaddress.ip_network(v_pool_str, strict=False)
+        for host in v_net.hosts():
+            host_str = str(host)
+            if host_str not in used_vteps:
+                allocated_vtep = host_str
+                break
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid fabric VTEP pool network '{v_pool_str}': {e}")
+
+    if not allocated_vtep:
+        raise HTTPException(status_code=400, detail=f"No free IP addresses remaining in fabric VTEP pool '{v_pool_str}'")
+
+    # 4. Save updates to switch
+    switch.fabric_id = fabric_uuid
+    switch.role = payload.role or "leaf"
+    switch.hostname = final_hostname
+    switch.local_bgp_asn = assigned_asn
+    switch.loopback_0_ip = allocated_loopback
+    switch.vtep_ip = allocated_vtep
+    switch.lifecycle_status = "discovered_raw"
+
+    # Reset discovery pool record to re-run
+    record.onboarding_status = "pending"
+    record.error_message = None
+    record.ztp_logs = f"[ZTP ASSIGNMENT] Switch assigned to fabric '{fabric.fabric_name}' (role: {switch.role}).\n[IPAM] Allocated Loopback: {allocated_loopback}, VTEP: {allocated_vtep}, BGP ASN: {assigned_asn}.\nRe-triggering onboarding baseline task...\n"
+
+    db.commit()
+    db.refresh(switch)
+
+    # Re-trigger Celery onboarding baseline
+    apply_baseline_template.delay(str(switch.switch_id))
+
+    return {
+        "status": "FABRIC_ASSIGNED",
+        "discovery_id": discovery_id,
+        "switch_id": str(switch.switch_id),
+        "fabric_id": str(fabric_uuid),
+        "fabric_name": fabric.fabric_name,
+        "hostname": switch.hostname,
+        "role": switch.role,
+        "local_bgp_asn": switch.local_bgp_asn,
+        "loopback_0_ip": switch.loopback_0_ip,
+        "vtep_ip": switch.vtep_ip
+    }
+
 
 
 @router.delete("/pool/{discovery_id}", status_code=status.HTTP_200_OK)

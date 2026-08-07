@@ -33,6 +33,21 @@ def _tcp_open(host: str, port: int, timeout: float = 3.0) -> bool:
         return False
 
 
+def _ssh_handshake_ok(host: str, port: int, timeout: float = 5.0) -> bool:
+    """True if the port accepts TCP and answers with an SSH version banner.
+
+    A dead SSH daemon (e.g. a missing host key) can accept connections but never
+    send the ``SSH-2.0-`` banner, which would otherwise stall the SSH collector.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            data = s.recv(64)
+            return data.startswith(b"SSH-2.0-")
+    except OSError:
+        return False
+
+
 def connect_os10_collector(host: str, username: str = "admin", password: str = "admin") -> "tuple[DellOS10Collector, str]":
     """Connect a Dell OS10 collector, trying the TCP console first then SSH.
 
@@ -57,9 +72,9 @@ def connect_os10_collector(host: str, username: str = "admin", password: str = "
     else:
         logger.info("OS10 console port %s closed on %s; trying SSH", _CONSOLE_PORT, host)
 
-    if not _tcp_open(host, ssh_port):
+    if not _ssh_handshake_ok(host, ssh_port):
         raise DellOS10CollectorError(
-            f"Connection failed to {host}: console port {_CONSOLE_PORT} closed and SSH port {ssh_port} closed"
+            f"Connection failed to {host}: console port {_CONSOLE_PORT} closed and SSH port {ssh_port} not speaking SSH (no banner)"
         )
     collector = DellOS10Collector(host=host, username=ssh_user, password=ssh_pass, port=ssh_port, use_ssh=True)
     collector.connect()

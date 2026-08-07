@@ -20,19 +20,24 @@ export const TenantsPage: React.FC = () => {
     const [newFabricNtp, setNewFabricNtp] = useState('192.168.100.1');
     const [newFabricDns, setNewFabricDns] = useState('8.8.8.8');
     const [newFabricSyslog, setNewFabricSyslog] = useState('10.10.100.5');
+    const [newFabricLoopbackPool, setNewFabricLoopbackPool] = useState('10.200.1.0/24');
+    const [newFabricVtepPool, setNewFabricVtepPool] = useState('10.250.1.0/24');
     const [editingFabricId, setEditingFabricId] = useState<string | null>(null);
 
     const isPlatformAdmin = user?.role === 'Platform Admin' || user?.role === 'platform_admin';
+    const isOperator = user?.role === 'Operator';
 
     useEffect(() => {
-        if (isPlatformAdmin) {
-            loadTenants();
+        if (isPlatformAdmin || isOperator) {
+            if (isPlatformAdmin) {
+                loadTenants();
+            }
             loadFabrics();
         } else {
             setLoading(false);
             setFabricsLoading(false);
         }
-    }, [isPlatformAdmin]);
+    }, [isPlatformAdmin, isOperator]);
 
     const loadTenants = async () => {
         try {
@@ -77,6 +82,8 @@ export const TenantsPage: React.FC = () => {
         setNewFabricNtp(fabric.expected_ntp_servers || '192.168.100.1');
         setNewFabricDns(fabric.expected_dns_servers || '8.8.8.8');
         setNewFabricSyslog(fabric.expected_syslog_server || '10.10.100.5');
+        setNewFabricLoopbackPool(fabric.loopback_pool || '10.200.1.0/24');
+        setNewFabricVtepPool(fabric.vtep_pool || '10.250.1.0/24');
         setShowFabricModal(true);
     };
 
@@ -89,10 +96,20 @@ export const TenantsPage: React.FC = () => {
                     global_bgp_asn: Number(newFabricAsn),
                     expected_ntp_servers: newFabricNtp,
                     expected_dns_servers: newFabricDns,
-                    expected_syslog_server: newFabricSyslog
+                    expected_syslog_server: newFabricSyslog,
+                    loopback_pool: newFabricLoopbackPool,
+                    vtep_pool: newFabricVtepPool
                 });
             } else {
-                await createFabric(newFabricName, Number(newFabricAsn), newFabricNtp, newFabricDns, newFabricSyslog);
+                await createFabric(
+                    newFabricName, 
+                    Number(newFabricAsn), 
+                    newFabricNtp, 
+                    newFabricDns, 
+                    newFabricSyslog,
+                    newFabricLoopbackPool,
+                    newFabricVtepPool
+                );
             }
             setShowFabricModal(false);
             setEditingFabricId(null);
@@ -101,9 +118,24 @@ export const TenantsPage: React.FC = () => {
             setNewFabricNtp('192.168.100.1');
             setNewFabricDns('8.8.8.8');
             setNewFabricSyslog('10.10.100.5');
+            setNewFabricLoopbackPool('10.200.1.0/24');
+            setNewFabricVtepPool('10.250.1.0/24');
             loadFabrics();
         } catch (e: any) {
             alert(e.message || 'Failed to save fabric. Ensure name is unique.');
+        }
+    };
+
+    const handleDeleteFabric = async (id: string, name: string) => {
+        if (window.confirm(`Are you sure you want to delete fabric ${name}? This action cannot be undone.`)) {
+            try {
+                // Use imported deleteFabric from lib/api
+                const { deleteFabric } = await import('../lib/api');
+                await deleteFabric(id);
+                loadFabrics();
+            } catch (e: any) {
+                alert(e.message || 'Failed to delete fabric.');
+            }
         }
     };
 
@@ -118,7 +150,7 @@ export const TenantsPage: React.FC = () => {
         }
     };
 
-    if (!isPlatformAdmin) {
+    if (!isPlatformAdmin && !isOperator) {
         return <div className="p-8 text-center text-slate-500">You do not have permission to view this page.</div>;
     }
 
@@ -138,73 +170,77 @@ export const TenantsPage: React.FC = () => {
                         <Plus className="w-4 h-4" />
                         Create Fabric
                     </button>
-                    <button 
-                        onClick={() => setShowTenantModal(true)}
-                        className="flex items-center gap-2 bg-atlas-primary hover:bg-atlas-primary/95 text-white px-4 py-2.5 rounded-lg font-semibold text-xs transition-all shadow-sm"
-                    >
-                        <Plus className="w-4 h-4" />
-                        Create Tenant
-                    </button>
+                    {isPlatformAdmin && (
+                        <button 
+                            onClick={() => setShowTenantModal(true)}
+                            className="flex items-center gap-2 bg-atlas-primary hover:bg-atlas-primary/95 text-white px-4 py-2.5 rounded-lg font-semibold text-xs transition-all shadow-sm"
+                        >
+                            <Plus className="w-4 h-4" />
+                            Create Tenant
+                        </button>
+                    )}
                 </div>
             </div>
 
             {/* Two-Column Grid: Left (Tenants), Right (Fabrics) */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className={`grid grid-cols-1 ${isPlatformAdmin ? 'lg:grid-cols-3' : 'lg:grid-cols-1'} gap-8`}>
                 {/* Tenants Column (Takes 2 cols) */}
-                <div className="lg:col-span-2 space-y-4">
-                    <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider px-1">Registered Tenants</h3>
-                    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                        <table className="w-full text-left text-sm text-slate-600">
-                            <thead className="bg-slate-50 text-slate-500 border-b border-slate-100">
-                                <tr>
-                                    <th className="px-6 py-4 font-medium">Tenant Name</th>
-                                    <th className="px-6 py-4 font-medium">Tenant ID</th>
-                                    <th className="px-6 py-4 font-medium text-right">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {loading ? (
-                                    <tr><td colSpan={3} className="p-6 text-center text-slate-400">Loading tenants...</td></tr>
-                                ) : tenants.length === 0 ? (
-                                    <tr><td colSpan={3} className="p-6 text-center text-slate-400">No tenants found.</td></tr>
-                                ) : tenants.map(t => (
-                                    <tr key={t.tenant_id} className="hover:bg-slate-50/50 transition">
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-3">
-                                                <div className="bg-indigo-50 p-2 rounded-lg text-indigo-500 border border-indigo-100/50">
-                                                    <Building2 className="w-5 h-5" />
-                                                </div>
-                                                <span className="font-semibold text-slate-800">{t.tenant_name}</span>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 font-mono text-xs text-slate-400">
-                                            {t.tenant_id}
-                                        </td>
-                                        <td className="px-6 py-4 text-right space-x-1">
-                                            <Link 
-                                                to={`/tenants/${t.tenant_id}/mapping`}
-                                                className="text-slate-400 hover:text-atlas-primary transition-colors p-2 rounded-lg hover:bg-slate-50 inline-block align-middle"
-                                                title="Manage VRF and Fabric Mapping"
-                                            >
-                                                <Network className="w-4 h-4" />
-                                            </Link>
-                                            <button 
-                                                onClick={() => handleDeleteTenant(t.tenant_id, t.tenant_name)}
-                                                className="text-slate-400 hover:text-red-500 transition-colors p-2 rounded-lg hover:bg-red-50 inline-block align-middle"
-                                                title="Delete Tenant"
-                                            >
-                                                <Trash2 className="w-4 h-4" />
-                                            </button>
-                                        </td>
+                {isPlatformAdmin && (
+                    <div className="lg:col-span-2 space-y-4">
+                        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider px-1">Registered Tenants</h3>
+                        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                            <table className="w-full text-left text-sm text-slate-600">
+                                <thead className="bg-slate-50 text-slate-500 border-b border-slate-100">
+                                    <tr>
+                                        <th className="px-6 py-4 font-medium">Tenant Name</th>
+                                        <th className="px-6 py-4 font-medium">Tenant ID</th>
+                                        <th className="px-6 py-4 font-medium text-right">Actions</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {loading ? (
+                                        <tr><td colSpan={3} className="p-6 text-center text-slate-400">Loading tenants...</td></tr>
+                                    ) : tenants.length === 0 ? (
+                                        <tr><td colSpan={3} className="p-6 text-center text-slate-400">No tenants found.</td></tr>
+                                    ) : tenants.map(t => (
+                                        <tr key={t.tenant_id} className="hover:bg-slate-50/50 transition">
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="bg-indigo-50 p-2 rounded-lg text-indigo-500 border border-indigo-100/50">
+                                                        <Building2 className="w-5 h-5" />
+                                                    </div>
+                                                    <span className="font-semibold text-slate-800">{t.tenant_name}</span>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4 font-mono text-xs text-slate-400">
+                                                {t.tenant_id}
+                                            </td>
+                                            <td className="px-6 py-4 text-right space-x-1">
+                                                <Link 
+                                                    to={`/tenants/${t.tenant_id}/mapping`}
+                                                    className="text-slate-400 hover:text-atlas-primary transition-colors p-2 rounded-lg hover:bg-slate-50 inline-block align-middle"
+                                                    title="Manage VRF and Fabric Mapping"
+                                                >
+                                                    <Network className="w-4 h-4" />
+                                                </Link>
+                                                <button 
+                                                    onClick={() => handleDeleteTenant(t.tenant_id, t.tenant_name)}
+                                                    className="text-slate-400 hover:text-red-500 transition-colors p-2 rounded-lg hover:bg-red-50 inline-block align-middle"
+                                                    title="Delete Tenant"
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
-                </div>
+                )}
 
                 {/* Fabrics Column (Takes 1 col) */}
-                <div className="space-y-4">
+                <div className={`${isPlatformAdmin ? 'lg:col-span-1' : 'w-full'} space-y-4`}>
                     <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider px-1">Network Fabrics</h3>
                     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-4">
                         {fabricsLoading ? (
@@ -222,15 +258,27 @@ export const TenantsPage: React.FC = () => {
                                             <div>
                                                 <div className="font-semibold text-xs text-slate-800">{f.fabric_name}</div>
                                                 <div className="text-[10px] text-slate-400 font-mono mt-0.5">ASN: {f.global_bgp_asn}</div>
+                                                <div className="text-[9px] text-slate-400 font-sans mt-0.5">
+                                                    Loopback: {f.loopback_pool} | VTEP: {f.vtep_pool}
+                                                </div>
                                             </div>
                                         </div>
-                                        <button 
-                                            onClick={() => handleStartEditFabric(f)}
-                                            className="text-slate-400 hover:text-slate-600 p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
-                                            title="Edit Fabric Properties"
-                                        >
-                                            <Pencil className="w-3.5 h-3.5" />
-                                        </button>
+                                        <div className="flex items-center gap-1">
+                                            <button 
+                                                onClick={() => handleStartEditFabric(f)}
+                                                className="text-slate-400 hover:text-slate-600 p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
+                                                title="Edit Fabric Properties"
+                                            >
+                                                <Pencil className="w-3.5 h-3.5" />
+                                            </button>
+                                            <button 
+                                                onClick={() => handleDeleteFabric(f.fabric_id, f.fabric_name)}
+                                                className="text-slate-400 hover:text-rose-500 p-1.5 hover:bg-rose-50 rounded-lg transition-colors"
+                                                title="Delete Fabric"
+                                            >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -332,7 +380,7 @@ export const TenantsPage: React.FC = () => {
                                     onChange={e => setNewFabricDns(e.target.value)}
                                 />
                             </div>
-                            <div>
+                             <div>
                                 <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Expected Syslog Server IP</label>
                                 <input 
                                     type="text" 
@@ -340,6 +388,26 @@ export const TenantsPage: React.FC = () => {
                                     placeholder="e.g. 10.10.100.5"
                                     value={newFabricSyslog}
                                     onChange={e => setNewFabricSyslog(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Loopback IP Pool</label>
+                                <input 
+                                    type="text" 
+                                    className="w-full border border-slate-200 rounded-lg px-4 py-2 text-xs outline-none focus:border-atlas-primary transition-all font-sans"
+                                    placeholder="e.g. 10.200.1.0/24"
+                                    value={newFabricLoopbackPool}
+                                    onChange={e => setNewFabricLoopbackPool(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">VTEP IP Pool</label>
+                                <input 
+                                    type="text" 
+                                    className="w-full border border-slate-200 rounded-lg px-4 py-2 text-xs outline-none focus:border-atlas-primary transition-all font-sans"
+                                    placeholder="e.g. 10.250.1.0/24"
+                                    value={newFabricVtepPool}
+                                    onChange={e => setNewFabricVtepPool(e.target.value)}
                                 />
                             </div>
                         </div>

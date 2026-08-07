@@ -21,6 +21,8 @@ class FabricResponse(BaseModel):
     expected_ntp_servers: Optional[str] = "192.168.100.1"
     expected_dns_servers: Optional[str] = "8.8.8.8"
     expected_syslog_server: Optional[str] = "10.10.100.5"
+    loopback_pool: Optional[str] = "10.200.1.0/24"
+    vtep_pool: Optional[str] = "10.250.1.0/24"
 
 class FabricCreate(BaseModel):
     fabric_name: str = Field(..., min_length=1)
@@ -28,6 +30,8 @@ class FabricCreate(BaseModel):
     expected_ntp_servers: Optional[str] = "192.168.100.1"
     expected_dns_servers: Optional[str] = "8.8.8.8"
     expected_syslog_server: Optional[str] = "10.10.100.5"
+    loopback_pool: Optional[str] = "10.200.1.0/24"
+    vtep_pool: Optional[str] = "10.250.1.0/24"
 
 class FabricUpdate(BaseModel):
     fabric_name: Optional[str] = Field(None, min_length=1)
@@ -35,6 +39,8 @@ class FabricUpdate(BaseModel):
     expected_ntp_servers: Optional[str] = None
     expected_dns_servers: Optional[str] = None
     expected_syslog_server: Optional[str] = None
+    loopback_pool: Optional[str] = None
+    vtep_pool: Optional[str] = None
 
 class VrfResponse(BaseModel):
     vrf_id: str
@@ -113,9 +119,9 @@ class ProvisioningJobResponse(BaseModel):
 @router.get("/fabrics", response_model=List[FabricResponse])
 def list_fabrics(
     db: Session = Depends(get_db),
-    claims: dict = Depends(require_permission("global:manage"))
+    claims: dict = Depends(require_permission("inventory:read"))
 ):
-    """List all fabrics in the system."""
+    """List all fabrics in the system. Accessible by all operators."""
     fabrics = db.query(models.Fabric).all()
     return [
         {
@@ -124,7 +130,9 @@ def list_fabrics(
             "global_bgp_asn": f.global_bgp_asn,
             "expected_ntp_servers": f.expected_ntp_servers,
             "expected_dns_servers": f.expected_dns_servers,
-            "expected_syslog_server": f.expected_syslog_server
+            "expected_syslog_server": f.expected_syslog_server,
+            "loopback_pool": f.loopback_pool,
+            "vtep_pool": f.vtep_pool
         }
         for f in fabrics
     ]
@@ -133,9 +141,9 @@ def list_fabrics(
 def create_fabric(
     payload: FabricCreate,
     db: Session = Depends(get_db),
-    claims: dict = Depends(require_permission("global:manage"))
+    claims: dict = Depends(require_permission("inventory:write"))
 ):
-    """Create a new Fabric infrastructure domain."""
+    """Create a new Fabric infrastructure domain. Tenant Operator / Platform Admin."""
     # Check if a fabric with same name already exists
     existing = db.query(models.Fabric).filter(models.Fabric.fabric_name == payload.fabric_name).first()
     if existing:
@@ -147,7 +155,9 @@ def create_fabric(
         global_bgp_asn=payload.global_bgp_asn,
         expected_ntp_servers=payload.expected_ntp_servers,
         expected_dns_servers=payload.expected_dns_servers,
-        expected_syslog_server=payload.expected_syslog_server
+        expected_syslog_server=payload.expected_syslog_server,
+        loopback_pool=payload.loopback_pool or "10.200.1.0/24",
+        vtep_pool=payload.vtep_pool or "10.250.1.0/24"
     )
     db.add(fabric)
     db.commit()
@@ -158,7 +168,9 @@ def create_fabric(
         "global_bgp_asn": fabric.global_bgp_asn,
         "expected_ntp_servers": fabric.expected_ntp_servers,
         "expected_dns_servers": fabric.expected_dns_servers,
-        "expected_syslog_server": fabric.expected_syslog_server
+        "expected_syslog_server": fabric.expected_syslog_server,
+        "loopback_pool": fabric.loopback_pool,
+        "vtep_pool": fabric.vtep_pool
     }
 
 @router.patch("/fabrics/{fabric_id}", response_model=FabricResponse)
@@ -166,7 +178,7 @@ def update_fabric(
     fabric_id: uuid.UUID,
     payload: FabricUpdate,
     db: Session = Depends(get_db),
-    claims: dict = Depends(require_permission("global:manage"))
+    claims: dict = Depends(require_permission("inventory:write"))
 ):
     """Update an existing Fabric infrastructure domain."""
     fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == fabric_id).first()
@@ -191,6 +203,12 @@ def update_fabric(
         
     if payload.expected_syslog_server is not None:
         fabric.expected_syslog_server = payload.expected_syslog_server
+
+    if payload.loopback_pool is not None:
+        fabric.loopback_pool = payload.loopback_pool
+
+    if payload.vtep_pool is not None:
+        fabric.vtep_pool = payload.vtep_pool
         
     db.commit()
     db.refresh(fabric)
@@ -200,8 +218,32 @@ def update_fabric(
         "global_bgp_asn": fabric.global_bgp_asn,
         "expected_ntp_servers": fabric.expected_ntp_servers,
         "expected_dns_servers": fabric.expected_dns_servers,
-        "expected_syslog_server": fabric.expected_syslog_server
+        "expected_syslog_server": fabric.expected_syslog_server,
+        "loopback_pool": fabric.loopback_pool,
+        "vtep_pool": fabric.vtep_pool
     }
+
+@router.delete("/fabrics/{fabric_id}", status_code=status.HTTP_200_OK)
+def delete_fabric(
+    fabric_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("inventory:write"))
+):
+    """Delete a Fabric configuration. Rejects if any switches are assigned to it."""
+    fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == fabric_id).first()
+    if not fabric:
+        raise HTTPException(status_code=404, detail="Fabric not found.")
+
+    switches_count = db.query(models.Switch).filter(models.Switch.fabric_id == fabric_id).count()
+    if switches_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete fabric '{fabric.fabric_name}': {switches_count} switch(es) are still assigned. Re-assign or remove them first."
+        )
+
+    db.delete(fabric)
+    db.commit()
+    return {"status": "DELETED", "fabric_id": str(fabric_id), "fabric_name": fabric.fabric_name}
 
 @router.get("/vrfs", response_model=List[VrfResponse])
 def list_vrfs(

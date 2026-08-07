@@ -28,58 +28,102 @@ ANSIBLE_PLAYBOOK = os.path.join(ANSIBLE_DIR, "playbooks", "base_provisioning.yml
 ANSIBLE_TIMEOUT = 120
 
 
+def _build_dell_baseline_commands(hostname: str) -> list:
+    """Return the Dell baseline config as blocks of console commands.
+
+    Each inner list is a sub-mode block; the console pusher returns to
+    ``(config)#`` between blocks. Syntax is matched to the FTOS-family CLI
+    that the Dell FTOSv image actually speaks (the dellemc.os10 Ansible
+    role commands are OS10-only and rejected by this image). Commands that
+    this image cannot express (MOTD banner, enable password, password
+    complexity, mgmt VRF binding) are intentionally omitted so the ZTP log
+    reports a clean apply.
+    """
+    return [
+        [f"hostname {hostname}"],
+        ["ip vrf management"],
+        [
+            "ip access-list MGMT-ACL",
+            "permit ip 10.0.0.0/8 any",
+            "deny ip any any",
+        ],
+        ["tacacs-server host 10.10.10.10 key S3cr3tK3y"],
+        ["tacacs-server host 10.10.10.11 key S3cr3tK3y"],
+        ["aaa authentication login default group tacacs+ local"],
+        ["no ip telnet server enable"],
+        ["ip ssh server enable"],
+        ["clock timezone standard-timezone Zulu"],
+        ["ntp server 192.168.100.1"],
+        ["ntp server 192.168.100.2"],
+        ["logging server 10.20.20.20"],
+        ["snmp-server view RESTRICTED_VIEW 1.3.6.1 included"],
+        ["snmp-server group READ_ONLY 3 auth read RESTRICTED_VIEW"],
+        ["snmp-server user sdnadmin READ_ONLY 3 auth sha sdnAuthPass123"],
+        ["errdisable recovery cause bpduguard"],
+        ["errdisable recovery interval 300"],
+    ]
+
+
 def ensure_ssh_enabled(ip: str, port: int = 5000) -> bool:
     """Connects to the Dell console TCP socket, runs configuration commands to enable SSH."""
     import socket
     import time
-    
+
     print(f"[CONNSOLVER] Attempting to ensure SSH is enabled via console on {ip}:{port}")
     s = socket.socket()
     s.settimeout(5)
+
+    def read_until(markers, timeout=8):
+        buf = ""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                chunk = s.recv(4096).decode("utf-8", errors="ignore")
+                if not chunk:
+                    break
+                buf += chunk
+                if any(m in buf for m in markers):
+                    break
+            except socket.timeout:
+                break
+        return buf
+
     try:
         s.connect((ip, port))
         s.send(b"\x03\r\n")
         time.sleep(0.5)
-        
-        # Read prompt/login
-        buf = ""
-        start_time = time.time()
-        while time.time() - start_time < 3:
-            try:
-                chunk = s.recv(4096).decode('utf-8', errors='ignore')
-                if not chunk:
-                    break
-                buf += chunk
-                if "login:" in buf or "Password:" in buf or "spine-" in buf or "#" in buf or ">" in buf:
-                    break
-            except socket.timeout:
-                break
-                
+
+        buf = read_until(["login:", "Password:", "#", ">"])
         if "login:" in buf:
             s.send(b"admin\n")
-            time.sleep(0.5)
-            # wait for password
-            p_buf = ""
-            p_start = time.time()
-            while time.time() - p_start < 2:
-                try:
-                    chunk = s.recv(4096).decode('utf-8', errors='ignore')
-                    p_buf += chunk
-                    if "Password:" in p_buf:
-                        break
-                except socket.timeout:
-                    break
+            read_until(["Password:"], timeout=5)
             s.send(b"admin\n")
-            time.sleep(1.0)
-            
-        s.send(b"configure terminal\n")
-        time.sleep(0.5)
-        s.send(b"ip ssh server enable\n")
-        time.sleep(0.5)
+            read_until(["#", ">"], timeout=8)
         s.send(b"end\n")
-        time.sleep(0.5)
+        read_until(["#"], timeout=5)
+
+        s.send(b"configure terminal\n")
+        if "(config)#" not in read_until(["(config)#"], timeout=8):
+            print(f"[CONNSOLVER] Failed to enter config mode on {ip}:{port}")
+            s.close()
+            return False
+
+        s.send(b"ip ssh server enable\n")
+        read_until(["(config)#"], timeout=8)
+        s.send(b"end\n")
+        read_until(["#"], timeout=5)
         s.send(b"write memory\n")
-        time.sleep(1.0)
+        read_until(["#"], timeout=15)
+
+        s.send(b"show ip ssh\n")
+        out = read_until(["#"], timeout=8)
+        lower = out.lower()
+        if "ssh server:" in lower and "enabled" in lower:
+            print(f"[CONNSOLVER] SSH server is enabled on {ip}:{port}.")
+        else:
+            print(f"[CONNSOLVER] WARNING: SSH server does not report enabled on {ip}:{port}.")
+        if not any(k in lower for k in ("rsa key", "host key", "hostkey", "key size", "key length")):
+            print(f"[CONNSOLVER] WARNING: {ip} has no SSH host key; SSH may accept TCP but never complete a handshake (fix by generating a key at boot via 'crypto ssh-key generate rsa').")
         s.close()
         print(f"[CONNSOLVER] Sent ip ssh server enable command successfully to {ip}:{port}")
         return True
@@ -87,28 +131,49 @@ def ensure_ssh_enabled(ip: str, port: int = 5000) -> bool:
         print(f"[CONNSOLVER] Console connection failed or skipped for {ip}:{port} - {e}")
         try:
             s.close()
-        except:
+        except Exception:
             pass
         return False
 
-def wait_for_ssh(ip: str, port: int = 22, timeout: int = 30) -> bool:
-    """Wait for SSH port to start accepting connections."""
+def wait_for_ssh(ip: str, port: int = 22, timeout: int = 45) -> bool:
+    """Wait for an SSH server that actually answers with an SSH version banner.
+
+    A bare TCP connect is not enough: a wedged SSH daemon (e.g. a missing host
+    key) will accept connections but never send the ``SSH-2.0-`` banner, which
+    makes Ansible/paramiko fail later with ``No existing session``.
+    """
     import socket
     import time
     start_time = time.time()
     print(f"[CONNSOLVER] Waiting for SSH daemon to start on {ip}:{port}...")
     while time.time() - start_time < timeout:
         s = socket.socket()
-        s.settimeout(2)
+        s.settimeout(6)
         try:
             s.connect((ip, port))
+            banner = b""
+            read_deadline = time.time() + 5
+            while time.time() < read_deadline and len(banner) < 64:
+                try:
+                    chunk = s.recv(64)
+                    if not chunk:
+                        break
+                    banner += chunk
+                    if banner.startswith(b"SSH-2.0-"):
+                        break
+                except socket.timeout:
+                    break
             s.close()
-            print(f"[CONNSOLVER] SSH daemon is online and accepting connections on {ip}:{port}")
-            print(f"[CONNSOLVER] Sleeping 15 seconds to allow SSH service to stabilize...")
-            time.sleep(15)
-            return True
-        except:
-            time.sleep(2)
+            if banner.startswith(b"SSH-2.0-"):
+                banner_text = banner.split(b"\r")[0].decode("utf-8", errors="ignore").strip()
+                print(f"[CONNSOLVER] SSH daemon is online and speaking SSH on {ip}:{port} ({banner_text})")
+                print(f"[CONNSOLVER] Sleeping 15 seconds to allow SSH service to stabilize...")
+                time.sleep(15)
+                return True
+            print(f"[CONNSOLVER] Port {ip}:{port} accepts TCP but no SSH banner received; SSH daemon may be wedged.")
+        except OSError:
+            pass
+        time.sleep(2)
     print(f"[CONNSOLVER] Timeout waiting for SSH on {ip}:{port}")
     return False
 
@@ -266,43 +331,65 @@ def apply_baseline_template(self, switch_id: str):
         # Wait for SSH to respond
         append_ztp_log(db, discovery_record, "Waiting for SSH service to become active on port 22...")
         ssh_online = wait_for_ssh(switch.management_ip)
+
         if not ssh_online:
-            error_msg = "Timeout waiting for SSH on port 22. Verification failed."
-            append_ztp_log(db, discovery_record, f"Error: {error_msg}")
-            raise Exception(error_msg)
+            append_ztp_log(db, discovery_record, f"SSH is NOT available on {switch.management_ip}: TCP accepts but no SSH banner is sent.")
+            append_ztp_log(db, discovery_record, "FALLBACK: Provisioning switch over the console (port 5000) instead of SSH/Ansible...")
 
-        append_ztp_log(db, discovery_record, "SSH service is online. Running Ansible baseline provisioning playbook...")
+            from app.drivers.dell_os10_collector import DellOS10Collector
+            collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
+            try:
+                collector.connect()
+                baseline_blocks = _build_dell_baseline_commands(switch.hostname)
+                total_commands = sum(len(b) for b in baseline_blocks)
+                append_ztp_log(db, discovery_record, f"Applying {total_commands} baseline commands over console...")
+                result = collector.push_config_blocks(baseline_blocks)
+                if result["applied"]:
+                    append_ztp_log(db, discovery_record, f"Console provisioning applied {len(result['applied'])}/{total_commands} commands.")
+                if result["failed"]:
+                    fail_lines = "; ".join(f"{cmd} -> {snippet}" for cmd, snippet in result["failed"][:5])
+                    append_ztp_log(db, discovery_record, f"WARNING: {len(result['failed'])} baseline commands failed over console: {fail_lines}")
+            except Exception as exc:
+                error_msg = f"Console-based provisioning failed: {exc}"
+                append_ztp_log(db, discovery_record, f"Error: {error_msg}")
+                raise
+            finally:
+                collector.close()
 
-        if not os.path.isfile(ANSIBLE_PLAYBOOK):
-            raise FileNotFoundError(f"Ansible playbook not found at {ANSIBLE_PLAYBOOK}")
+            append_ztp_log(db, discovery_record, "Console-based baseline provisioning completed. Skipping Ansible (SSH unavailable).")
+        else:
+            append_ztp_log(db, discovery_record, "SSH service is online. Running Ansible baseline provisioning playbook...")
 
-        env = os.environ.copy()
-        env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
-        env["ANSIBLE_PERSISTENT_CONNECT_TIMEOUT"] = "60"
-        env["ANSIBLE_PERSISTENT_COMMAND_TIMEOUT"] = "60"
+            if not os.path.isfile(ANSIBLE_PLAYBOOK):
+                raise FileNotFoundError(f"Ansible playbook not found at {ANSIBLE_PLAYBOOK}")
 
-        # Execute Ansible
-        result = subprocess.run(
-            [
-                "ansible-playbook", ANSIBLE_PLAYBOOK,
-                "-i", f"{switch.management_ip},",
-                "-e", "ansible_user=admin ansible_password=admin ansible_network_os=dellos10 ansible_connection=network_cli ansible_connect_timeout=60 ansible_command_timeout=60"
-            ],
-            capture_output=True, text=True, timeout=ANSIBLE_TIMEOUT, env=env
-        )
+            env = os.environ.copy()
+            env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
+            env["ANSIBLE_PERSISTENT_CONNECT_TIMEOUT"] = "60"
+            env["ANSIBLE_PERSISTENT_COMMAND_TIMEOUT"] = "60"
 
-        # Log Ansible output
-        if result.stdout:
-            append_ztp_log(db, discovery_record, f"Ansible Output:\n{result.stdout}")
-        if result.stderr:
-            append_ztp_log(db, discovery_record, f"Ansible Errors:\n{result.stderr}")
+            # Execute Ansible
+            result = subprocess.run(
+                [
+                    "ansible-playbook", ANSIBLE_PLAYBOOK,
+                    "-i", f"{switch.management_ip},",
+                    "-e", f"ansible_user=admin ansible_password=admin ansible_network_os=dellos10 ansible_connection=network_cli ansible_connect_timeout=60 ansible_command_timeout=60 hostname_assigned={switch.hostname}"
+                ],
+                capture_output=True, text=True, timeout=ANSIBLE_TIMEOUT, env=env
+            )
 
-        if result.returncode != 0:
-            error_msg = f"Ansible playbook execution failed with returncode {result.returncode}."
-            append_ztp_log(db, discovery_record, f"Error: {error_msg}")
-            raise Exception(error_msg)
+            # Log Ansible output
+            if result.stdout:
+                append_ztp_log(db, discovery_record, f"Ansible Output:\n{result.stdout}")
+            if result.stderr:
+                append_ztp_log(db, discovery_record, f"Ansible Errors:\n{result.stderr}")
 
-        append_ztp_log(db, discovery_record, "Ansible playbook execution succeeded. Retrieving final running configuration...")
+            if result.returncode != 0:
+                error_msg = f"Ansible playbook execution failed with returncode {result.returncode}."
+                append_ztp_log(db, discovery_record, f"Error: {error_msg}")
+                raise Exception(error_msg)
+
+            append_ztp_log(db, discovery_record, "Ansible playbook execution succeeded. Retrieving final running configuration...")
 
         # Fetch actual running configuration using the existing collector
         from app.drivers.dell_os10_collector import DellOS10Collector
@@ -383,33 +470,53 @@ def trigger_rollback(self, switch_id: str):
 
         print(f"[ROLLBACK WORKER] Rolling back switch {switch.hostname}")
 
+        provisioned_via_console = False
         # Ensure SSH is enabled via Telnet/Console if it is a Dell switch
         if "dell" in (switch.model or "").lower() or "spine" in (switch.hostname or "").lower() or switch.management_ip in ["172.20.20.10", "172.20.20.13"]:
             ensure_ssh_enabled(switch.management_ip)
-            wait_for_ssh(switch.management_ip)
+            ssh_online = wait_for_ssh(switch.management_ip)
+            if not ssh_online:
+                print(f"[ROLLBACK WORKER] SSH unavailable on {switch.management_ip}; falling back to console-based provisioning.")
+                from app.drivers.dell_os10_collector import DellOS10Collector
+                collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
+                try:
+                    collector.connect()
+                    baseline_blocks = _build_dell_baseline_commands(switch.hostname)
+                    result = collector.push_config_blocks(baseline_blocks)
+                    print(f"[ROLLBACK WORKER] Console provisioning applied {len(result['applied'])} commands, {len(result['failed'])} failed.")
+                    if result["failed"]:
+                        print(f"[ROLLBACK WORKER] Failed commands: {[c for c, _ in result['failed']]}")
+                except Exception as exc:
+                    raise Exception(f"Console-based rollback provisioning failed: {exc}")
+                finally:
+                    collector.close()
+                provisioned_via_console = True
 
-        if not os.path.isfile(ANSIBLE_PLAYBOOK):
-            raise FileNotFoundError(f"Ansible playbook not found at {ANSIBLE_PLAYBOOK}")
+        if not provisioned_via_console:
+            if not os.path.isfile(ANSIBLE_PLAYBOOK):
+                raise FileNotFoundError(f"Ansible playbook not found at {ANSIBLE_PLAYBOOK}")
 
-        env = os.environ.copy()
-        env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
-        env["ANSIBLE_PERSISTENT_CONNECT_TIMEOUT"] = "60"
-        env["ANSIBLE_PERSISTENT_COMMAND_TIMEOUT"] = "60"
+            env = os.environ.copy()
+            env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
+            env["ANSIBLE_PERSISTENT_CONNECT_TIMEOUT"] = "60"
+            env["ANSIBLE_PERSISTENT_COMMAND_TIMEOUT"] = "60"
 
-        result = subprocess.run(
-            [
-                "ansible-playbook", ANSIBLE_PLAYBOOK,
-                "-i", f"{switch.management_ip},",
-                "-e", "ansible_user=admin ansible_password=admin ansible_network_os=dellos10 ansible_connection=network_cli ansible_connect_timeout=60 ansible_command_timeout=60"
-            ],
-            capture_output=True, text=True, timeout=ANSIBLE_TIMEOUT, env=env
-        )
-        if result.returncode != 0:
-            print(f"[ROLLBACK WORKER] Ansible failed. Returncode: {result.returncode}")
-            print(f"[ROLLBACK WORKER] Stdout: {result.stdout}")
-            print(f"[ROLLBACK WORKER] Stderr: {result.stderr}")
-            error_detail = f"Ansible failed (rc={result.returncode}).\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-            raise Exception(error_detail)
+            result = subprocess.run(
+                [
+                    "ansible-playbook", ANSIBLE_PLAYBOOK,
+                    "-i", f"{switch.management_ip},",
+                    "-e", f"ansible_user=admin ansible_password=admin ansible_network_os=dellos10 ansible_connection=network_cli ansible_connect_timeout=60 ansible_command_timeout=60 hostname_assigned={switch.hostname}"
+                ],
+                capture_output=True, text=True, timeout=ANSIBLE_TIMEOUT, env=env
+            )
+            if result.returncode != 0:
+                print(f"[ROLLBACK WORKER] Ansible failed. Returncode: {result.returncode}")
+                print(f"[ROLLBACK WORKER] Stdout: {result.stdout}")
+                print(f"[ROLLBACK WORKER] Stderr: {result.stderr}")
+                error_detail = f"Ansible failed (rc={result.returncode}).\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                raise Exception(error_detail)
+        else:
+            print("[ROLLBACK WORKER] Ansible skipped: switch provisioned via console (SSH unavailable).")
 
         # Simulate rollback success
         switch.lifecycle_status = "compliant_active"

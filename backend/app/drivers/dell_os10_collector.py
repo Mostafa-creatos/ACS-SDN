@@ -182,8 +182,8 @@ class DellOS10Collector:
 
     def _recv(self, n: int = 8192) -> str:
         if self.use_ssh:
-            return self._channel.recv(n).decode("utf-8", errors="replace")
-        return self._client.recv(n).decode("utf-8", errors="replace")
+            return self._channel.recv(n).decode("utf-8", errors="replace").replace("\x00", "")
+        return self._client.recv(n).decode("utf-8", errors="replace").replace("\x00", "")
 
     def _send(self, data: bytes) -> None:
         if self.use_ssh:
@@ -1053,6 +1053,93 @@ class DellOS10Collector:
             lines.pop()
             
         return "\n".join(lines)
+
+    def push_config_blocks(self, blocks: List[List[str]], timeout_per_command: float = 15.0) -> Dict[str, Any]:
+        """Push config blocks over the current session.
+
+        Each block is a list of commands sent without leaving its sub-mode;
+        between blocks the session is normalized back to ``(config)#``.
+        Commands that error are collected instead of aborting the whole push.
+
+        Returns ``{"applied": [...], "failed": [(command, error_snippet), ...]}``.
+        """
+        applied: List[str] = []
+        failed: List[tuple] = []
+        error_patterns = ("% Error", "% Invalid", "% Unrecognized", "% Ambiguous", "Invalid input")
+        idempotent_patterns = ("already exists", "Duplicate")
+
+        if not blocks:
+            return {"applied": applied, "failed": failed}
+
+        self._send_command("end", timeout=5)
+        out = self._send_command("configure terminal", timeout=8)
+        if "(config" not in out:
+            return {"applied": applied, "failed": [(blocks[0][0], "could not enter config mode")]}
+
+        def back_to_config() -> bool:
+            self._flush_input()
+            for _ in range(10):
+                self._send(b"\r\n")
+                time.sleep(0.25)
+                prompt = self._last_line(self._read_until_idle())
+                if prompt.endswith("(config)#"):
+                    return True
+                if prompt.endswith("#"):
+                    self._send(b"exit\n" if "(config" in prompt else b"configure terminal\n")
+                    time.sleep(0.3)
+                elif prompt.endswith(">"):
+                    self._send(b"enable\n")
+                    time.sleep(0.3)
+            return False
+
+        for block in blocks:
+            if not back_to_config():
+                failed.append((block[0], "failed to return to config mode"))
+                break
+            for cmd in block:
+                out = self._send_command(cmd, timeout=timeout_per_command)
+                if any(p in out for p in error_patterns):
+                    if any(ip in out for ip in idempotent_patterns):
+                        applied.append(cmd)
+                    else:
+                        snippet = next(
+                            (ln.strip() for ln in out.splitlines() if any(p in ln for p in error_patterns)),
+                            out.strip()[:120],
+                        )
+                        failed.append((cmd, snippet))
+                else:
+                    applied.append(cmd)
+
+        back_to_config()
+        self._send_command("end", timeout=8)
+        self._send_command("write memory", timeout=30)
+        return {"applied": applied, "failed": failed}
+
+    def _last_line(self, text: str) -> str:
+        for ln in reversed(text.splitlines()):
+            ln = ln.strip()
+            if ln:
+                return ln
+        return ""
+
+    def _read_until_idle(self, idle: float = 0.3, max_wait: float = 3.0) -> str:
+        buf = ""
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            try:
+                if self._channel:
+                    self._channel.settimeout(idle)
+                else:
+                    self._client.settimeout(idle)
+                chunk = self._recv(8192)
+                if not chunk:
+                    break
+                buf += chunk
+            except socket.timeout:
+                break
+            except Exception:
+                break
+        return buf
 
     # ------------------------------------------------------------------
     # Orchestrator

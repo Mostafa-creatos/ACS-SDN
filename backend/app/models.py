@@ -26,6 +26,9 @@ class Fabric(Base):
     expected_dns_servers = Column(String(255), default="8.8.8.8")
     expected_syslog_server = Column(String(255), default="10.10.100.5")
 
+    loopback_pool = Column(String(255), default="10.200.1.0/24")
+    vtep_pool = Column(String(255), default="10.250.1.0/24")
+
     # Relationships
     switches = relationship("Switch", back_populates="fabric", cascade="all, delete-orphan")
     subnets = relationship("IpamSubnet", back_populates="fabric", cascade="all, delete-orphan")

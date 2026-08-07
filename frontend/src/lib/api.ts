@@ -138,7 +138,9 @@ export const createFabric = async (
     globalBgpAsn: number,
     expectedNtpServers?: string,
     expectedDnsServers?: string,
-    expectedSyslogServer?: string
+    expectedSyslogServer?: string,
+    loopbackPool?: string,
+    vtepPool?: string
 ): Promise<any> => {
     const res = await fetch('/api/v5/admin/fabrics', {
         method: 'POST',
@@ -148,7 +150,9 @@ export const createFabric = async (
             global_bgp_asn: globalBgpAsn,
             expected_ntp_servers: expectedNtpServers || '192.168.100.1',
             expected_dns_servers: expectedDnsServers || '8.8.8.8',
-            expected_syslog_server: expectedSyslogServer || '10.10.100.5'
+            expected_syslog_server: expectedSyslogServer || '10.10.100.5',
+            loopback_pool: loopbackPool || '10.200.1.0/24',
+            vtep_pool: vtepPool || '10.250.1.0/24'
         })
     });
     if (!res.ok) {
@@ -255,6 +259,17 @@ export const updateFabric = async (fabricId: string, payload: any): Promise<any>
         throw new Error(errorData.detail || 'Failed to update fabric');
     }
     return res.json();
+};
+
+export const deleteFabric = async (fabricId: string): Promise<void> => {
+    const res = await fetch(`/api/v5/admin/fabrics/${fabricId}`, {
+        method: 'DELETE',
+        headers: getHeaders()
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to delete fabric');
+    }
 };
 
 export const fetchComplianceRules = async (): Promise<any[]> => {
