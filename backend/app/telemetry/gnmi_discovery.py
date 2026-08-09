@@ -817,75 +817,10 @@ def run_gnmi_discovery(db: Session):
             if remote_sw is None:
                 remote_sw = host_to_sw.get(remote_name)
             # Auto-create switch record if discovered via LLDP but not yet in DB
+            # Skip auto-creation of switch records if discovered via LLDP but not yet in DB
+            # We only manage switches explicitly registered via ZTP or manually added.
             if remote_sw is None and remote_name:
-                remote_ip = l.get("remote_ip", "")
-                logger.info(f"[DISCOVERY] Auto-creating new switch from LLDP: {remote_name} (ip={remote_ip})")
-                import uuid as _uuid
-                def _stable_host_id(name: str, mod: int = 200) -> int:
-                    return _uuid.uuid5(_uuid.NAMESPACE_DNS, name).int % mod + 1
-                # Determine vendor from remote system description if available
-                remote_desc = l.get("remote_desc", "").lower()
-                if "nokia" in remote_desc or "srl" in remote_desc or "7220" in remote_desc:
-                    vendor = "nokia"
-                    model = "7220 IXR-D2L"
-                    os_version = "v26.3.2"
-                elif "dell" in remote_desc or "os10" in remote_desc or "ftos" in remote_desc:
-                    vendor = "dell_os10"
-                    model = "S5248F-ON"
-                    os_version = "OS10 10.5.4"
-                else:
-                    vendor = "unknown"
-                    model = "Unknown"
-                    os_version = "Unknown"
-
-                # Determine role from name
-                role = "spine" if "spine" in remote_name.lower() else "leaf"
-
-                # Get fabric_id from local switch
-                fabric_id = local_sw.fabric_id
-
-                new_uuid = _uuid.uuid4()
-                loopback = f"10.200.99.{_stable_host_id(remote_name)}"
-                vtep = f"10.250.99.{_stable_host_id(remote_name)}"
-
-                new_sw = models.Switch(
-                    switch_id=new_uuid,
-                    fabric_id=fabric_id,
-                    hostname=remote_name,
-                    management_ip=remote_ip or f"10.200.1.{_stable_host_id(remote_name, 254)}",
-                    vendor=vendor,
-                    role=role,
-                    local_bgp_asn=65000 + _stable_host_id(remote_name, 100),
-                    loopback_0_ip=loopback,
-                    lifecycle_status="discovered_raw",
-                    model=model,
-                    os_version=os_version,
-                    status="Up",
-                    serial_number="",
-                    location="Auto-discovered",
-                    device_type="Switch",
-                    os_type="IOS-XE",
-                    client_tenant=local_sw.client_tenant,
-                    credentials_status="Unknown",
-                    ports_up=0,
-                    ports_all=0,
-                    chassis_status="Unknown",
-                )
-                # Avoid duplicate loopback_0_ip conflicts
-                existing_loopback = db.query(models.Switch).filter(
-                    models.Switch.loopback_0_ip == loopback
-                ).first()
-                if not existing_loopback:
-                    db.add(new_sw)
-                    try:
-                        db.commit()
-                        remote_sw = new_sw
-                        host_to_sw[normalize_hostname(remote_name)] = remote_sw
-                        ip_to_sw[new_sw.management_ip] = remote_sw
-                        logger.info(f"[DISCOVERY] Auto-created switch: {remote_name}")
-                    except Exception as e:
-                        db.rollback()
-                        logger.info(f"[DISCOVERY] Failed to auto-create {remote_name}: {e}")
+                logger.info(f"[DISCOVERY] Discovered unmanaged neighbor switch: {remote_name} - skipping auto-creation")
             
         if local_sw and remote_sw:
             # Format a sorted key to identify unique edge
