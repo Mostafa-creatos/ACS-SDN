@@ -100,7 +100,7 @@ services:
       - SEED_ADMIN_PASSWORD=admin_password_123!
       - SEED_OPERATOR_PASSWORD=operator_password_123!
       - SEED_AUDITOR_PASSWORD=auditor_password_123!
-      - SEED_ON_STARTUP=true
+      - SEED_ON_STARTUP=false
       - GNMI_DEFAULT_PASSWORD=NokiaSrl1!
     ports:
       - "8000:8000"
@@ -126,7 +126,7 @@ services:
       - SEED_ADMIN_PASSWORD=admin_password_123!
       - SEED_OPERATOR_PASSWORD=operator_password_123!
       - SEED_AUDITOR_PASSWORD=auditor_password_123!
-      - SEED_ON_STARTUP=true
+      - SEED_ON_STARTUP=false
       - GNMI_DEFAULT_PASSWORD=NokiaSrl1!
     depends_on:
       - db

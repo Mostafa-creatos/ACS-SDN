@@ -818,7 +818,32 @@ def run_gnmi_discovery(db: Session):
             # Fallback: try the raw name too
             if remote_sw is None:
                 remote_sw = host_to_sw.get(remote_name)
-            # Auto-create switch record if discovered via LLDP but not yet in DB
+            # Fallback: resolve containerlab default names mapping to database hostnames
+            if remote_sw is None:
+                norm_rem = normalize_hostname(remote_name).lower().replace("-", "").replace("_", "")
+                for hname, sw_obj in host_to_sw.items():
+                    norm_h = normalize_hostname(hname).lower().replace("-", "").replace("_", "")
+                    if norm_rem in norm_h or norm_h in norm_rem:
+                        remote_sw = sw_obj
+                        break
+                    if ("leaf1" in norm_rem or "eaf1" in norm_rem) and ("leaf1" in norm_h or "eaf1" in norm_h):
+                        remote_sw = sw_obj
+                        break
+                    if ("leaf2" in norm_rem or "eaf2" in norm_rem) and ("leaf2" in norm_h or "eaf2" in norm_h):
+                        remote_sw = sw_obj
+                        break
+                    if ("leaf3" in norm_rem or "eaf3" in norm_rem) and ("leaf3" in norm_h or "eaf3" in norm_h):
+                        remote_sw = sw_obj
+                        break
+                    if ("leaf4" in norm_rem or "eaf4" in norm_rem) and ("leaf4" in norm_h or "eaf4" in norm_h):
+                        remote_sw = sw_obj
+                        break
+                    if ("spine1" in norm_rem or "ine1" in norm_rem) and ("spine1" in norm_h or "ine1" in norm_h):
+                        remote_sw = sw_obj
+                        break
+                    if ("spine2" in norm_rem or "ine2" in norm_rem) and ("spine2" in norm_h or "ine2" in norm_h):
+                        remote_sw = sw_obj
+                        break
             # Skip auto-creation of switch records if discovered via LLDP but not yet in DB
             # We only manage switches explicitly registered via ZTP or manually added.
             if remote_sw is None and remote_name:
