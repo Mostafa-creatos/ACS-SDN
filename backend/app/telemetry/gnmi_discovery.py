@@ -206,19 +206,21 @@ def discover_dell_switch(sw, db: Session):
         # 3. Store raw config and check for configuration drift
         if running_config:
             sw.running_config = running_config
-            latest_snap = db.query(models.ConfigSnapshot).filter(
-                models.ConfigSnapshot.switch_id == sw.switch_id
-            ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
-            
-            if latest_snap:
-                def normalize_cfg(c: str) -> str:
-                    return "\n".join([l.strip() for l in c.replace("\r\n", "\n").split("\n") if l.strip()])
-                if normalize_cfg(running_config) != normalize_cfg(latest_snap.raw_config):
-                    sw.lifecycle_status = "configuration_drifted"
+            # Only update compliance lifecycle status if switch is already managed (not discovered_raw)
+            if sw.lifecycle_status != "discovered_raw":
+                latest_snap = db.query(models.ConfigSnapshot).filter(
+                    models.ConfigSnapshot.switch_id == sw.switch_id
+                ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
+                
+                if latest_snap:
+                    def normalize_cfg(c: str) -> str:
+                        return "\n".join([l.strip() for l in c.replace("\r\n", "\n").split("\n") if l.strip()])
+                    if normalize_cfg(running_config) != normalize_cfg(latest_snap.raw_config):
+                        sw.lifecycle_status = "configuration_drifted"
+                    else:
+                        sw.lifecycle_status = "compliant_active"
                 else:
                     sw.lifecycle_status = "compliant_active"
-            else:
-                sw.lifecycle_status = "compliant_active"
                 
         # Store VLANs, LAGs, and Hardware Components in DB
         db.query(models.SwitchVlan).filter(models.SwitchVlan.switch_id == sw.switch_id).delete()
