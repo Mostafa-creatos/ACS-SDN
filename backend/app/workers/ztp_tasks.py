@@ -28,7 +28,7 @@ ANSIBLE_PLAYBOOK = os.path.join(ANSIBLE_DIR, "playbooks", "base_provisioning.yml
 ANSIBLE_TIMEOUT = 120
 
 
-def _build_dell_baseline_commands(hostname: str) -> list:
+def _build_dell_baseline_commands(hostname: str, is_fallback: bool = False) -> list:
     """Return the Dell baseline config as blocks of console commands.
 
     Each inner list is a sub-mode block; the console pusher returns to
@@ -39,7 +39,7 @@ def _build_dell_baseline_commands(hostname: str) -> list:
     complexity, mgmt VRF binding) are intentionally omitted so the ZTP log
     reports a clean apply.
     """
-    return [
+    commands = [
         [f"hostname {hostname}"],
         ["ip vrf management"],
         [
@@ -50,7 +50,10 @@ def _build_dell_baseline_commands(hostname: str) -> list:
         ["tacacs-server host 10.10.10.10 key S3cr3tK3y"],
         ["tacacs-server host 10.10.10.11 key S3cr3tK3y"],
         ["aaa authentication login default group tacacs+ local"],
-        ["no ip telnet server enable"],
+    ]
+    if not is_fallback:
+        commands.append(["no ip telnet server enable"])
+    commands.extend([
         ["ip ssh server enable"],
         ["clock timezone standard-timezone Zulu"],
         ["ntp server 192.168.100.1"],
@@ -61,7 +64,8 @@ def _build_dell_baseline_commands(hostname: str) -> list:
         ["snmp-server user sdnadmin READ_ONLY 3 auth sha sdnAuthPass123"],
         ["errdisable recovery cause bpduguard"],
         ["errdisable recovery interval 300"],
-    ]
+    ])
+    return commands
 
 
 def ensure_ssh_enabled(ip: str, port: int = 5000) -> bool:
@@ -340,7 +344,7 @@ def apply_baseline_template(self, switch_id: str):
             collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
             try:
                 collector.connect()
-                baseline_blocks = _build_dell_baseline_commands(switch.hostname)
+                baseline_blocks = _build_dell_baseline_commands(switch.hostname, is_fallback=True)
                 total_commands = sum(len(b) for b in baseline_blocks)
                 append_ztp_log(db, discovery_record, f"Applying {total_commands} baseline commands over console...")
                 result = collector.push_config_blocks(baseline_blocks)
@@ -481,7 +485,7 @@ def trigger_rollback(self, switch_id: str):
                 collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
                 try:
                     collector.connect()
-                    baseline_blocks = _build_dell_baseline_commands(switch.hostname)
+                    baseline_blocks = _build_dell_baseline_commands(switch.hostname, is_fallback=True)
                     result = collector.push_config_blocks(baseline_blocks)
                     print(f"[ROLLBACK WORKER] Console provisioning applied {len(result['applied'])} commands, {len(result['failed'])} failed.")
                     if result["failed"]:
