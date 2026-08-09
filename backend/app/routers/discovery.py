@@ -36,6 +36,14 @@ async def ingest_ztp_signal(
         (models.ZtpDiscoveryPool.mac_address == payload.mac_address)
     ).first()
     
+    # Check if a Switch row already exists and has a fabric assigned
+    switch = db.query(models.Switch).filter(
+        models.Switch.serial_number == payload.serial_number
+    ).first()
+
+    has_fabric = (switch is not None) and (switch.fabric_id is not None)
+    initial_status = "pending" if has_fabric else "unassigned"
+
     # Use provided management_ip if available, else fallback to client IP
     client_ip = payload.management_ip if payload.management_ip else (request.client.host if request.client else "127.0.0.1")
 
@@ -44,7 +52,7 @@ async def ingest_ztp_signal(
         record.base_os_version = payload.os_version
         record.hardware_vendor = payload.vendor
         record.hardware_model = "Unknown"
-        record.onboarding_status = "pending"
+        record.onboarding_status = initial_status
         record.error_message = None
     else:
         record = models.ZtpDiscoveryPool(
@@ -54,7 +62,7 @@ async def ingest_ztp_signal(
             hardware_model="Unknown",
             current_dhcp_ip=client_ip,
             base_os_version=payload.os_version,
-            onboarding_status="pending"
+            onboarding_status=initial_status
         )
         db.add(record)
     
@@ -62,14 +70,8 @@ async def ingest_ztp_signal(
     db.refresh(record)
 
     # Upsert a Switch row with lifecycle_state='DiscoveredRaw'
-    switch = db.query(models.Switch).filter(
-        models.Switch.serial_number == payload.serial_number
-    ).first()
-
     if not switch:
         # Create a new bare-minimum switch row
-        # Provide dummy required fields for now
-        # It needs hostname, management_ip, vendor, role, local_bgp_asn, loopback_0_ip
         hostname = f"switch-{payload.serial_number[-4:]}"
         switch = models.Switch(
             discovery_id=record.discovery_id,
@@ -90,10 +92,13 @@ async def ingest_ztp_signal(
     db.commit()
     db.refresh(switch)
 
-    # Enqueue Celery task
-    apply_baseline_template.delay(str(switch.switch_id))
+    # Only enqueue Celery task if fabric is assigned
+    if has_fabric:
+        apply_baseline_template.delay(str(switch.switch_id))
+        print(f"[ZTP INGESTION] Auto-provisioning triggered for switch serial: {payload.serial_number} at IP: {client_ip} (Fabric Assigned)")
+    else:
+        print(f"[ZTP INGESTION] Discovered bare-metal switch serial: {payload.serial_number} at IP: {client_ip} (Pending Fabric Assignment)")
 
-    print(f"[ZTP INGESTION] Discovered bare-metal switch serial: {payload.serial_number} at IP: {client_ip}")
     return {"status": "DISCOVERY_INGESTION_ACCEPTED", "serial_number": payload.serial_number, "switch_id": str(switch.switch_id)}
 
 @router.get("/pool", status_code=status.HTTP_200_OK)

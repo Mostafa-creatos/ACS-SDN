@@ -13,7 +13,8 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
-  Loader2
+  Loader2,
+  HelpCircle
 } from 'lucide-react';
 
 interface ZtpRecord {
@@ -24,7 +25,7 @@ interface ZtpRecord {
   os_version: string;
   current_dhcp_ip: string;
   first_seen: string;
-  onboarding_status: 'pending' | 'provisioned' | 'failed';
+  onboarding_status: 'pending' | 'provisioned' | 'failed' | 'unassigned';
   error_message?: string;
   fabric_id?: string | null;
   switch_hostname?: string | null;
@@ -351,6 +352,12 @@ export const ZtpConsolePage: React.FC = () => {
                           <>
                             <XCircle className="w-4 h-4 text-rose-500" />
                             <span className="text-sm font-medium text-rose-600">Failed</span>
+                          </>
+                        )}
+                        {r.onboarding_status === 'unassigned' && (
+                          <>
+                            <HelpCircle className="w-4 h-4 text-slate-400" />
+                            <span className="text-sm font-medium text-slate-500">Unassigned</span>
                           </>
                         )}
                       </div>

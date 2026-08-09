@@ -98,10 +98,20 @@ if ($SYNC_BACKEND) {
 
 # Step 3: Sync frontend
 if ($SYNC_FRONTEND) {
+    Write-Host "`n[3/4] Building frontend locally..." -ForegroundColor Blue
+    Push-Location $LOCAL_FRONT
+    & npm run build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[ERROR] Frontend local build failed" -ForegroundColor Red
+        Pop-Location
+        exit 1
+    }
+    Pop-Location
+
     Write-Host "`n[3/4] Syncing frontend..." -ForegroundColor Blue
     Sync-Dir -LocalPath $LOCAL_FRONT `
              -RemotePath "$REMOTE_DIR/frontend" `
-             -Excludes @("node_modules", "dist", ".git", "trash", ".cache")
+             -Excludes @("node_modules", ".git", "trash", ".cache")
 } else {
     Write-Host "`n[3/4] Skipping frontend sync (-BackendOnly specified)" -ForegroundColor DarkGray
 }
@@ -135,7 +145,7 @@ if ($SYNC_FRONTEND) {
     $runCmds += " docker run -d --name sdn_frontend --network sdn-controller_default -p 8080:80 --restart unless-stopped sdn-controller_frontend:latest;"
 }
 
-Invoke-SSH "cd $REMOTE_DIR && nohup sh -c '$runCmds' > deploy.log 2>&1 & tail --pid=`$! -f deploy.log"
+Invoke-SSH "cd $REMOTE_DIR && nohup sh -c '$runCmds' > deploy.log 2>&1 & sleep 8 && cat deploy.log | tail -n 20"
 
 
 # ─── Final status ─────────────────────────────────────────────────

@@ -182,8 +182,8 @@ def startup_db_configure():
 
     # Seed database only when SEED_ON_STARTUP=true (dev/demo environments)
     if os.getenv("SEED_ON_STARTUP", "false").lower() == "true":
-        from .scripts.seed_database import seed_all
-        seed_all()
+        from .scripts.clean_and_seed_new_fabrics import clean_and_seed
+        clean_and_seed()
 
     # Self-healing database sync: migrate legacy users with tenant_id to user_tenant_memberships
     try:
