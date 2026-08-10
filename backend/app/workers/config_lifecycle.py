@@ -287,6 +287,14 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
     # Fetch active compliance rules
     rules = db.query(models.ComplianceRule).filter(models.ComplianceRule.is_active == True).all()
 
+    # Load findings from the previous run to carry forward history (remediation statuses/errors)
+    prev_run = db.query(models.ComplianceRun).order_by(models.ComplianceRun.started_at.desc()).offset(1).first()
+    prev_findings_map = {}
+    if prev_run:
+        prev_findings = db.query(models.ComplianceFinding).filter(models.ComplianceFinding.compliance_run_id == prev_run.run_id).all()
+        for pf in prev_findings:
+            prev_findings_map[(pf.switch_id, pf.rule_name)] = pf
+
     query = db.query(models.Switch)
     if fabric_id:
         query = query.filter(models.Switch.fabric_id == fabric_id)
@@ -345,6 +353,12 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
         }
 
         for rule in rules:
+            # Skip vendor-specific rules that don't apply to this switch
+            if "vlt" in rule.name.lower() and sw.vendor not in ["dell", "dell_os10"]:
+                continue
+            if ("spanning" in rule.name.lower() or "mst" in rule.name.lower()) and sw.vendor not in ["dell", "dell_os10"]:
+                continue
+
             total_rules += 1
 
             # Interpolate variables in pattern
@@ -361,6 +375,11 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
             if sw.vendor in ["dell_os10", "dell"] and expected_str == "lldp enable":
                 # On Dell OS10, LLDP is enabled by default. It is compliant unless disabled explicitly.
                 is_compliant = "disable" not in config.lower() and "no protocol lldp" not in config.lower()
+            elif sw.vendor in ["dell_os10", "dell"] and "logging host" in expected_str:
+                # Dell OS10 configures "logging server X.X.X.X" instead of "logging host X.X.X.X"
+                adapted_dell = expected_str.replace("logging host", "logging server")
+                is_compliant = (adapted_dell in config or adapted_dell.lower() in config.lower() or 
+                                expected_str in config or expected_str.lower() in config.lower())
             elif rule.match_type == "contains":
                 is_compliant = expected_str in config or expected_str.lower() in config.lower()
             elif rule.match_type == "not_contains":
@@ -388,6 +407,21 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
                 elif "lldp" in rule.name.lower():
                     detail_msg = "LLDP protocol is not enabled globally on this device."
 
+                # Carry forward previous remediation info if it failed or was pending
+                prev_f = prev_findings_map.get((sw.switch_id, rule.name))
+                rem_status = None
+                rem_error = None
+                rem_task_id = None
+                rem_trig_by = None
+                rem_trig_at = None
+                if prev_f:
+                    if prev_f.remediation_status in ("failed", "pending"):
+                        rem_status = prev_f.remediation_status
+                        rem_error = prev_f.remediation_error
+                        rem_task_id = prev_f.remediation_task_id
+                        rem_trig_by = prev_f.remediation_triggered_by
+                        rem_trig_at = prev_f.remediation_triggered_at
+
                 finding = models.ComplianceFinding(
                     finding_id=uuid.uuid4(),
                     compliance_run_id=run.run_id,
@@ -395,11 +429,37 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
                     rule_name=rule.name,
                     severity=rule.severity,
                     detail=detail_msg,
-                    expected=expected_str
+                    expected=expected_str,
+                    remediation_status=rem_status,
+                    remediation_error=rem_error,
+                    remediation_task_id=rem_task_id,
+                    remediation_triggered_by=rem_trig_by,
+                    remediation_triggered_at=rem_trig_at
                 )
                 db.add(finding)
                 findings_list.append(finding)
             else:
+                # If it is compliant now, but was successfully remediated in the previous run,
+                # carry it forward as a 'success' finding so it continues to display as 'Fixed' in the UI.
+                prev_f = prev_findings_map.get((sw.switch_id, rule.name))
+                if prev_f and prev_f.remediation_status == "success":
+                    finding = models.ComplianceFinding(
+                        finding_id=uuid.uuid4(),
+                        compliance_run_id=run.run_id,
+                        switch_id=sw.switch_id,
+                        rule_name=rule.name,
+                        severity=rule.severity,
+                        detail="Compliant (Remediated)",
+                        expected=expected_str,
+                        remediation_status="success",
+                        remediation_triggered_by=prev_f.remediation_triggered_by,
+                        remediation_triggered_at=prev_f.remediation_triggered_at,
+                        resolved_at=prev_f.resolved_at,
+                        remediation_task_id=prev_f.remediation_task_id
+                    )
+                    db.add(finding)
+                    findings_list.append(finding)
+                
                 passed_rules += 1
 
     summary_data = {
