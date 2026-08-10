@@ -1,6 +1,8 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from .config import settings
+from app.core.logging_config import get_logger
+logger = get_logger(__name__)
 
 # Attempt to connect to PostgreSQL. If it fails, fallback to local SQLite for offline testing.
 try:
@@ -10,9 +12,9 @@ try:
     # Test connection
     with engine.connect() as conn:
         pass
-    print("[SDN DATABASE] Connected to PostgreSQL clustered backend.")
+    logger.info("[SDN DATABASE] Connected to PostgreSQL clustered backend.")
 except Exception:
-    print("[SDN DATABASE] PostgreSQL offline. Falling back to local development SQLite (sdn_dev.db).")
+    logger.warning("[SDN DATABASE] PostgreSQL offline. Falling back to local development SQLite (sdn_dev.db).")
     SQLALCHEMY_DATABASE_URL = "sqlite:///./sdn_dev.db"
     engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 

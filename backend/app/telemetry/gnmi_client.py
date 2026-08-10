@@ -1,5 +1,7 @@
 import json
 from pygnmi.client import gNMIclient
+from app.core.logging_config import get_logger
+logger = get_logger(__name__)
 
 def get_switch_lldp(ip: str, password: str = "NokiaSrl1!", port: int = 57400) -> dict:
     """
@@ -9,7 +11,7 @@ def get_switch_lldp(ip: str, password: str = "NokiaSrl1!", port: int = 57400) ->
         with gNMIclient(target=(ip, port), username="admin", password=password, skip_verify=True, gnmi_timeout=2) as gc:
             return gc.get(path=['/system/lldp'])
     except Exception as e:
-        print(f"[gNMI CLIENT] Failed to fetch LLDP from {ip}: {e}")
+        logger.error(f"[gNMI CLIENT] Failed to fetch LLDP from {ip}: {e}")
         return {}
 
 def parse_lldp_neighbors(lldp_data: dict, local_ip: str) -> list:
@@ -81,6 +83,6 @@ def get_nokia_config(ip: str, password: str = "NokiaSrl1!", port: int = 57400) -
             config_data = gc.get(path=['/'])
             return json.dumps(config_data, indent=2)
     except Exception as e:
-        print(f"[gNMI CLIENT] Failed to fetch config from {ip}: {e}")
+        logger.error(f"[gNMI CLIENT] Failed to fetch config from {ip}: {e}")
         return ""
 

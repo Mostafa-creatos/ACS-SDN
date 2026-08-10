@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 from pydantic import BaseModel
+import uuid
 
 from .. import models, schemas
 from ..db import get_db
@@ -41,8 +42,16 @@ def create_tenant(
     # Automatically add the creator (platform_admin) as a member so they can switch to it
     user_id = claims.get("user_id")
     if user_id:
+        try:
+            member_user_id = uuid.UUID(user_id)
+        except (ValueError, TypeError, AttributeError):
+            member_user_id = None
+    else:
+        member_user_id = None
+
+    if member_user_id:
         membership = models.UserTenantMembership(
-            user_id=user_id,
+            user_id=member_user_id,
             tenant_id=new_tenant.tenant_id,
             role="platform_admin"
         )

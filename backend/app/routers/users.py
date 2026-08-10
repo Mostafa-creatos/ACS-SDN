@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from .. import models
 from ..auth_permissions import require_permission, log_audit_event
+from app.core.logging_config import get_logger
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v5/users", tags=["users"])
 
@@ -110,7 +112,7 @@ def create_user(
     db.commit()
     db.refresh(new_user)
 
-    print(f"[USER ADMIN] Created user {new_user.username} with temp password: {temp_password}")
+    logger.info("Temporary password generated for user %s", new_user.username)
 
     log_audit_event(
         db=db,

@@ -5,6 +5,8 @@ from app import models, schemas
 from app.auth_permissions import require_permission
 from pydantic import BaseModel, Field
 from typing import Optional
+from app.core.logging_config import get_logger
+logger = get_logger(__name__)
 
 # We will import apply_baseline_template later to avoid circular imports if needed
 from app.workers.ztp_tasks import apply_baseline_template
@@ -95,9 +97,9 @@ async def ingest_ztp_signal(
     # Only enqueue Celery task if fabric is assigned
     if has_fabric:
         apply_baseline_template.delay(str(switch.switch_id))
-        print(f"[ZTP INGESTION] Auto-provisioning triggered for switch serial: {payload.serial_number} at IP: {client_ip} (Fabric Assigned)")
+        logger.info(f"[ZTP INGESTION] Auto-provisioning triggered for switch serial: {payload.serial_number} at IP: {client_ip} (Fabric Assigned)")
     else:
-        print(f"[ZTP INGESTION] Discovered bare-metal switch serial: {payload.serial_number} at IP: {client_ip} (Pending Fabric Assignment)")
+        logger.info(f"[ZTP INGESTION] Discovered bare-metal switch serial: {payload.serial_number} at IP: {client_ip} (Pending Fabric Assignment)")
 
     return {"status": "DISCOVERY_INGESTION_ACCEPTED", "serial_number": payload.serial_number, "switch_id": str(switch.switch_id)}
 

@@ -6,6 +6,8 @@ import os
 import json
 import uuid
 import hashlib
+from app.core.logging_config import get_logger
+logger = get_logger(__name__)
 
 
 def _resolve_ansible_dir() -> str:
@@ -73,7 +75,7 @@ def ensure_ssh_enabled(ip: str, port: int = 5000) -> bool:
     import socket
     import time
 
-    print(f"[CONNSOLVER] Attempting to ensure SSH is enabled via console on {ip}:{port}")
+    logger.info(f"[CONNSOLVER] Attempting to ensure SSH is enabled via console on {ip}:{port}")
     s = socket.socket()
     s.settimeout(5)
 
@@ -108,7 +110,7 @@ def ensure_ssh_enabled(ip: str, port: int = 5000) -> bool:
 
         s.send(b"configure terminal\n")
         if "(config)#" not in read_until(["(config)#"], timeout=8):
-            print(f"[CONNSOLVER] Failed to enter config mode on {ip}:{port}")
+            logger.error(f"[CONNSOLVER] Failed to enter config mode on {ip}:{port}")
             s.close()
             return False
 
@@ -123,16 +125,16 @@ def ensure_ssh_enabled(ip: str, port: int = 5000) -> bool:
         out = read_until(["#"], timeout=8)
         lower = out.lower()
         if "ssh server:" in lower and "enabled" in lower:
-            print(f"[CONNSOLVER] SSH server is enabled on {ip}:{port}.")
+            logger.info(f"[CONNSOLVER] SSH server is enabled on {ip}:{port}.")
         else:
-            print(f"[CONNSOLVER] WARNING: SSH server does not report enabled on {ip}:{port}.")
+            logger.warning(f"[CONNSOLVER] WARNING: SSH server does not report enabled on {ip}:{port}.")
         if not any(k in lower for k in ("rsa key", "host key", "hostkey", "key size", "key length")):
-            print(f"[CONNSOLVER] WARNING: {ip} has no SSH host key; SSH may accept TCP but never complete a handshake (fix by generating a key at boot via 'crypto ssh-key generate rsa').")
+            logger.warning(f"[CONNSOLVER] WARNING: {ip} has no SSH host key; SSH may accept TCP but never complete a handshake (fix by generating a key at boot via 'crypto ssh-key generate rsa').")
         s.close()
-        print(f"[CONNSOLVER] Sent ip ssh server enable command successfully to {ip}:{port}")
+        logger.info(f"[CONNSOLVER] Sent ip ssh server enable command successfully to {ip}:{port}")
         return True
     except Exception as e:
-        print(f"[CONNSOLVER] Console connection failed or skipped for {ip}:{port} - {e}")
+        logger.warning(f"[CONNSOLVER] Console connection failed or skipped for {ip}:{port} - {e}")
         try:
             s.close()
         except Exception:
@@ -149,7 +151,7 @@ def wait_for_ssh(ip: str, port: int = 22, timeout: int = 45) -> bool:
     import socket
     import time
     start_time = time.time()
-    print(f"[CONNSOLVER] Waiting for SSH daemon to start on {ip}:{port}...")
+    logger.info(f"[CONNSOLVER] Waiting for SSH daemon to start on {ip}:{port}...")
     while time.time() - start_time < timeout:
         s = socket.socket()
         s.settimeout(6)
@@ -170,15 +172,15 @@ def wait_for_ssh(ip: str, port: int = 22, timeout: int = 45) -> bool:
             s.close()
             if banner.startswith(b"SSH-2.0-"):
                 banner_text = banner.split(b"\r")[0].decode("utf-8", errors="ignore").strip()
-                print(f"[CONNSOLVER] SSH daemon is online and speaking SSH on {ip}:{port} ({banner_text})")
-                print(f"[CONNSOLVER] Sleeping 15 seconds to allow SSH service to stabilize...")
+                logger.info(f"[CONNSOLVER] SSH daemon is online and speaking SSH on {ip}:{port} ({banner_text})")
+                logger.info(f"[CONNSOLVER] Sleeping 15 seconds to allow SSH service to stabilize...")
                 time.sleep(15)
                 return True
-            print(f"[CONNSOLVER] Port {ip}:{port} accepts TCP but no SSH banner received; SSH daemon may be wedged.")
+            logger.warning(f"[CONNSOLVER] Port {ip}:{port} accepts TCP but no SSH banner received; SSH daemon may be wedged.")
         except OSError:
             pass
         time.sleep(2)
-    print(f"[CONNSOLVER] Timeout waiting for SSH on {ip}:{port}")
+    logger.warning(f"[CONNSOLVER] Timeout waiting for SSH on {ip}:{port}")
     return False
 
 
@@ -219,7 +221,7 @@ def append_ztp_log(db, discovery_record, message: str):
     from datetime import datetime, timezone
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     log_entry = f"[{timestamp}] {message}\n"
-    print(f"[ZTP WORKER LOG] {message}")
+    logger.info(f"[ZTP WORKER LOG] {message}")
     if discovery_record:
         if discovery_record.ztp_logs is None:
             discovery_record.ztp_logs = ""
@@ -434,7 +436,7 @@ def apply_baseline_template(self, switch_id: str):
     except Exception as exc:
         db.rollback()
         error_msg = str(exc)
-        print(f"[ZTP WORKER] Error provisioning {switch_id}: {error_msg}")
+        logger.error(f"[ZTP WORKER] Error provisioning {switch_id}: {error_msg}")
         
         if discovery_record is None and 'switch' in locals() and switch is not None:
             discovery_record = db.query(ZtpDiscoveryPool).filter(ZtpDiscoveryPool.discovery_id == switch.discovery_id).first()
@@ -448,7 +450,7 @@ def apply_baseline_template(self, switch_id: str):
         try:
             self.retry(exc=exc, countdown=2 ** self.request.retries)
         except self.MaxRetriesExceededError:
-            print(f"[ZTP WORKER] Max retries exceeded for {switch_id}")
+            logger.error(f"[ZTP WORKER] Max retries exceeded for {switch_id}")
             return {"status": "failed", "switch_id": switch_id, "error": error_msg}
     finally:
         db.close()
@@ -472,7 +474,7 @@ def trigger_rollback(self, switch_id: str):
                 db.commit()
             raise ValueError(f"Switch not found: {switch_id}")
 
-        print(f"[ROLLBACK WORKER] Rolling back switch {switch.hostname}")
+        logger.info(f"[ROLLBACK WORKER] Rolling back switch {switch.hostname}")
 
         provisioned_via_console = False
         # Ensure SSH is enabled via Telnet/Console if it is a Dell switch
@@ -480,16 +482,16 @@ def trigger_rollback(self, switch_id: str):
             ensure_ssh_enabled(switch.management_ip)
             ssh_online = wait_for_ssh(switch.management_ip)
             if not ssh_online:
-                print(f"[ROLLBACK WORKER] SSH unavailable on {switch.management_ip}; falling back to console-based provisioning.")
+                logger.warning(f"[ROLLBACK WORKER] SSH unavailable on {switch.management_ip}; falling back to console-based provisioning.")
                 from app.drivers.dell_os10_collector import DellOS10Collector
                 collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
                 try:
                     collector.connect()
                     baseline_blocks = _build_dell_baseline_commands(switch.hostname, is_fallback=True)
                     result = collector.push_config_blocks(baseline_blocks)
-                    print(f"[ROLLBACK WORKER] Console provisioning applied {len(result['applied'])} commands, {len(result['failed'])} failed.")
+                    logger.info(f"[ROLLBACK WORKER] Console provisioning applied {len(result['applied'])} commands, {len(result['failed'])} failed.")
                     if result["failed"]:
-                        print(f"[ROLLBACK WORKER] Failed commands: {[c for c, _ in result['failed']]}")
+                        logger.warning(f"[ROLLBACK WORKER] Failed commands: {[c for c, _ in result['failed']]}")
                 except Exception as exc:
                     raise Exception(f"Console-based rollback provisioning failed: {exc}")
                 finally:
@@ -514,13 +516,13 @@ def trigger_rollback(self, switch_id: str):
                 capture_output=True, text=True, timeout=ANSIBLE_TIMEOUT, env=env
             )
             if result.returncode != 0:
-                print(f"[ROLLBACK WORKER] Ansible failed. Returncode: {result.returncode}")
-                print(f"[ROLLBACK WORKER] Stdout: {result.stdout}")
-                print(f"[ROLLBACK WORKER] Stderr: {result.stderr}")
+                logger.error(f"[ROLLBACK WORKER] Ansible failed. Returncode: {result.returncode}")
+                logger.info(f"[ROLLBACK WORKER] Stdout: {result.stdout}")
+                logger.info(f"[ROLLBACK WORKER] Stderr: {result.stderr}")
                 error_detail = f"Ansible failed (rc={result.returncode}).\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
                 raise Exception(error_detail)
         else:
-            print("[ROLLBACK WORKER] Ansible skipped: switch provisioned via console (SSH unavailable).")
+            logger.warning("[ROLLBACK WORKER] Ansible skipped: switch provisioned via console (SSH unavailable).")
 
         # Simulate rollback success
         switch.lifecycle_status = "compliant_active"
@@ -533,7 +535,7 @@ def trigger_rollback(self, switch_id: str):
             real_config = collector.collect_running_config()
         except Exception as e:
             real_config = "! Fallback Baseline Config (Rolled back)\nntp server 192.168.100.1\n"
-            print(f"[ROLLBACK WORKER] Failed to collect real config: {e}")
+            logger.error(f"[ROLLBACK WORKER] Failed to collect real config: {e}")
         finally:
             collector.close()
 
@@ -558,7 +560,7 @@ def trigger_rollback(self, switch_id: str):
                 "resolved_at": datetime.now(timezone.utc)
             })
         db.commit()
-        print(f"[ROLLBACK WORKER] Successfully rolled back {switch.hostname}")
+        logger.info(f"[ROLLBACK WORKER] Successfully rolled back {switch.hostname}")
         return {"status": "success", "switch_id": switch_id}
     except Exception as exc:
         db.rollback()
@@ -571,7 +573,7 @@ def trigger_rollback(self, switch_id: str):
                 db.commit()
             except Exception:
                 db.rollback()
-        print(f"[ROLLBACK WORKER] Error rolling back {switch_id}: {error_msg}")
+        logger.error(f"[ROLLBACK WORKER] Error rolling back {switch_id}: {error_msg}")
         return {"status": "failed", "switch_id": switch_id, "error": error_msg}
     finally:
         db.close()

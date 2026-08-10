@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from .. import models
 from .gnmi_client import gNMIclient
 from .gnmi_discovery import clean_and_login_dell_console, parse_dell_console_output
+from app.core.logging_config import get_logger
+logger = get_logger(__name__)
 
 class GnmiTelemetryCollector:
     """
@@ -73,7 +75,7 @@ class GnmiTelemetryCollector:
                                         if mem_util is not None:
                                             metrics["memory_utilization"] = float(mem_util)
                     except Exception as e:
-                        print(f"[Telemetry Nokia] Failed to collect metrics for {sw.hostname}: {e}")
+                        logger.error(f"[Telemetry Nokia] Failed to collect metrics for {sw.hostname}: {e}")
                 
                 # 2. Dell Switch Ingestion (SSH)
                 elif sw.vendor.lower() in ("dell_os10", "dell"):
@@ -102,7 +104,7 @@ class GnmiTelemetryCollector:
                                 mem_out = collector._send_command("show processes memory")
                                 collector_success = True
                         except Exception as ce:
-                            print(f"[Telemetry Dell] Console port 5000 connection timed out/failed on {sw.hostname}: {ce}. Falling back to SSH port 22...")
+                            logger.warning(f"[Telemetry Dell] Console port 5000 connection timed out/failed on {sw.hostname}: {ce}. Falling back to SSH port 22...")
                             try:
                                 with DellOS10Collector(
                                     host=sw.management_ip,
@@ -146,7 +148,7 @@ class GnmiTelemetryCollector:
                             if mem_match:
                                 metrics["memory_utilization"] = float(mem_match.group(1))
                     except Exception as e:
-                        print(f"[Telemetry Dell] Failed to collect metrics for {sw.hostname}: {e}")
+                        logger.error(f"[Telemetry Dell] Failed to collect metrics for {sw.hostname}: {e}")
                 
                 # Update switch table columns directly
                 if "cpu_utilization" in metrics:
@@ -167,9 +169,9 @@ class GnmiTelemetryCollector:
             
             if switches:
                 db.commit()
-                print(f"[Telemetry] Metric recording completed successfully.")
+                logger.info(f"[Telemetry] Metric recording completed successfully.")
         except Exception as e:
             db.rollback()
-            print(f"[Telemetry] Collection loop error: {e}")
+            logger.error(f"[Telemetry] Collection loop error: {e}")
         finally:
             db.close()

@@ -3,8 +3,9 @@ import sys
 import unittest
 import subprocess
 
-# Determine if we are running inside the Docker container
-IN_CONTAINER = os.path.exists("/workspace")
+# Determine if we are running inside the Docker container (SDN_TEST_LOCAL=1
+# forces the in-process code path so the suite can also run locally)
+IN_CONTAINER = os.path.exists("/workspace") or os.environ.get("SDN_TEST_LOCAL") == "1"
 
 if not IN_CONTAINER:
     class TestDeviceInventory(unittest.TestCase):
@@ -12,7 +13,7 @@ if not IN_CONTAINER:
             cmd = [
                 "ssh", "-i", "C:\\Users\\mosta\\.ssh\\id_rsa",
                 "-o", "StrictHostKeyChecking=no",
-                "mostafafaouzi89@34.90.176.247",
+                "alkhairplateforme@34.32.194.240",
                 f"docker exec sdn_controller_app python3 -m unittest tests.test_device_inventory.TestDeviceInventory.{test_name}"
             ]
             res = subprocess.run(cmd, capture_output=True, text=True)
@@ -58,12 +59,21 @@ else:
     class TestDeviceInventory(unittest.TestCase):
         @classmethod
         def setUpClass(cls):
-            # Create database tables
+            # Recreate database tables from scratch so stale state from an
+            # interrupted run can never leak into the next run
+            Base.metadata.drop_all(bind=engine)
             Base.metadata.create_all(bind=engine)
+            cls._prev_override = app.dependency_overrides.get(get_db)
+            app.dependency_overrides[get_db] = override_get_db
             cls.client = TestClient(app)
 
         @classmethod
         def tearDownClass(cls):
+            # Restore whatever dependency override was active before this class
+            if cls._prev_override is not None:
+                app.dependency_overrides[get_db] = cls._prev_override
+            else:
+                app.dependency_overrides.pop(get_db, None)
             # Cleanup
             Base.metadata.drop_all(bind=engine)
             if os.path.exists("test_inventory.db"):

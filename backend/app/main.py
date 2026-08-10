@@ -14,15 +14,19 @@ from sqlalchemy import text
 from .config import settings
 from .db import get_db, Base, engine, SessionLocal
 from . import models, schemas
+from app.core.logging_config import get_logger
+from app.core.constants import (
+    LIFECYCLE_COMPLIANT,
+    LIFECYCLE_DRIFTED,
+    LIFECYCLE_DISCOVERED,
+)
+logger = get_logger(__name__)
 
-LIFECYCLE_COMPLIANT = "compliant_active"
-LIFECYCLE_DRIFTED = "configuration_drifted"
-LIFECYCLE_DISCOVERED = "discovered_raw"
 from .drivers.dell_os10 import DellOS10Driver
 from .drivers.arista_eos import AristaEosDriver
+from .drivers.factory import resolve_southbound_driver
 from .validators.config_syntax import validate_os10_syntax
 from .validators.collision_check import check_collisions
-from .admin_ui import ADMIN_HTML
 from .routers import inventory, discovery, auth, users, tenants, vrfs, backups
 from .auth import security, get_current_user_claims, verify_switch_access
 from .auth_permissions import require_permission
@@ -210,20 +214,20 @@ def startup_db_configure():
                     role=role
                 )
                 db_sync.add(membership)
-                print(f"[STARTUP SYNC] Created UserTenantMembership for user {u.username} in tenant {u.tenant_id} as {role}")
+                logger.info(f"[STARTUP SYNC] Created UserTenantMembership for user {u.username} in tenant {u.tenant_id} as {role}")
                 synced = True
         if synced:
             db_sync.commit()
         db_sync.close()
     except Exception as e:
-        print(f"[STARTUP SYNC ERROR] Failed to sync user tenant memberships: {e}")
+        logger.error(f"[STARTUP SYNC ERROR] Failed to sync user tenant memberships: {e}")
 
 
 @app.on_event("startup")
 async def start_gnmi_discovery_background():
     import asyncio
     from .workers.sync_tasks import start_periodic_discovery_loop, start_periodic_telemetry_loop, start_periodic_backup_schedule_loop
-    print("[gNMI STARTUP] Initiating background topology discovery, telemetry and backup scheduler loops...")
+    logger.info("[gNMI STARTUP] Initiating background topology discovery, telemetry and backup scheduler loops...")
     asyncio.create_task(start_periodic_discovery_loop(30))
     asyncio.create_task(start_periodic_telemetry_loop(10))
     asyncio.create_task(start_periodic_backup_schedule_loop())
@@ -236,18 +240,6 @@ async def start_gnmi_discovery_background():
 def api_v5_root():
     return {"status": "ok", "message": "Enterprise SDN API Gateway"}
 
-
-def resolve_southbound_driver(vendor: str):
-    v = vendor.lower()
-    if v == "dell_os10":
-        return DellOS10Driver()
-    elif v == "arista_eos":
-        return AristaEosDriver()
-    elif v in ["nokia", "nokia_srlinux", "timetra"]:
-        from .drivers.nokia_srlinux import NokiaSrlinuxDriver
-        return NokiaSrlinuxDriver()
-    else:
-        raise ValueError(f"Southbound network driver not implemented for vendor: {vendor}")
 
 @app.post("/api/v5/orchestrator/policy-enforcement", status_code=status.HTTP_202_ACCEPTED)
 async def process_policy_intent_pipeline(
@@ -452,7 +444,7 @@ async def process_policy_intent_pipeline(
     db.commit()
 
     # Simulate dispatching to the Celery worker queue
-    print(f"[CELERY DISPATCH] Enqueued config sync jobs to southbound queue for switch serials: {payload.target_switch_serials}")
+    logger.info(f"[CELERY DISPATCH] Enqueued config sync jobs to southbound queue for switch serials: {payload.target_switch_serials}")
 
     return {
         "orchestrator_node_executed": settings.NODE_NAME_ID,
@@ -532,7 +524,7 @@ async def process_policy_reconciliation(
     db.delete(subnet)
     db.commit()
 
-    print(f"[RECONCILIATION] Cleaned up state and enqueued rollbacks for subnet CIDR: {payload.subnet_cidr}")
+    logger.info(f"[RECONCILIATION] Cleaned up state and enqueued rollbacks for subnet CIDR: {payload.subnet_cidr}")
 
     return {
         "orchestrator_node_executed": settings.NODE_NAME_ID,
@@ -545,27 +537,6 @@ async def process_policy_reconciliation(
 # ==========================================
 # ADMINISTRATIVE ENDPOINTS
 # ==========================================
-
-@app.post("/api/v5/admin/tenants", status_code=status.HTTP_201_CREATED)
-def create_tenant(
-    payload: schemas.TenantCreate,
-    db: Session = Depends(get_db),
-    claims: dict = Depends(require_permission("tenants:create"))
-):
-    # Check if tenant name already exists
-    existing = db.query(models.Tenant).filter(models.Tenant.tenant_name == payload.tenant_name).first()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Tenant with this name already exists."
-        )
-    
-    new_tenant = models.Tenant(tenant_name=payload.tenant_name)
-    db.add(new_tenant)
-    db.commit()
-    db.refresh(new_tenant)
-    return {"tenant_id": str(new_tenant.tenant_id), "tenant_name": new_tenant.tenant_name}
-
 
 @app.get("/api/v5/orchestrator/approvals/count")
 def get_pending_approvals_count(
@@ -685,7 +656,7 @@ def approve_policy_intent(
     approval.status = "approved"
     db.commit()
 
-    print(f"[CELERY DISPATCH] Enqueued authorized config sync jobs for serials: {serials}")
+    logger.info(f"[CELERY DISPATCH] Enqueued authorized config sync jobs for serials: {serials}")
 
     return {
         "status": "APPROVED_COMMITTED",
@@ -725,7 +696,21 @@ async def serve_admin_dashboard():
     if os.path.exists("frontend/dist/index.html"):
         from fastapi.responses import FileResponse
         return FileResponse("frontend/dist/index.html")
-    return ADMIN_HTML
+    return _ADMIN_FALLBACK_HTML
+
+
+_ADMIN_FALLBACK_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="0; url=/docs">
+  <title>SDN Controller</title>
+</head>
+<body>
+  <p>Enterprise SDN Controller API is running. The web UI is available once the frontend is built. <a href="/docs">Open API docs</a>.</p>
+</body>
+</html>
+"""
 
 # Mount React frontend static assets if the folder is present
 from fastapi.staticfiles import StaticFiles
@@ -774,13 +759,13 @@ def get_audit_logs(
             dt_start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
             query = query.filter(models.AuditLog.timestamp >= dt_start)
         except Exception as e:
-            print("Invalid start_date:", e)
+            logger.error("Invalid start_date: %s", e)
     if end_date:
         try:
             dt_end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
             query = query.filter(models.AuditLog.timestamp <= dt_end)
         except Exception as e:
-            print("Invalid end_date:", e)
+            logger.error("Invalid end_date: %s", e)
 
     # Search filter
     if search:
@@ -887,12 +872,6 @@ def get_admin_celery_stats(claims: dict = Depends(require_permission("global:man
             "scheduled_tasks_count": 0,
             "workers_count": 0
         }
-
-
-@app.get("/api/v5/admin/tenants")
-def get_admin_tenants(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
-    tenants = db.query(models.Tenant).all()
-    return [{"tenant_id": str(t.tenant_id), "tenant_name": t.tenant_name} for t in tenants]
 
 
 @app.get("/api/v5/admin/switches")
@@ -1094,7 +1073,7 @@ async def get_admin_topology(db: Session = Depends(get_db), claims: dict = Depen
                 })
         return res
     except Exception as e:
-        print("[ADMIN TOPOLOGY] DB fetch failed, returning fallback:", e)
+        logger.warning("[ADMIN TOPOLOGY] DB fetch failed, returning fallback: %s", e)
         return [
             {"ip": "172.20.20.10", "port": "ethernet-1/1", "remote_ip": "172.20.20.11", "remote_port": "ethernet-1/1", "protocol": "LLDP", "state": "up"},
             {"ip": "172.20.20.10", "port": "ethernet-1/2", "remote_ip": "172.20.20.12", "remote_port": "ethernet-1/1", "protocol": "LLDP", "state": "up"},
@@ -1183,7 +1162,7 @@ async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depen
             "edges": edges_list
         }
     except Exception as err:
-        print("[TOPOLOGY GRAPH] Failed to build graph data:", err)
+        logger.error("[TOPOLOGY GRAPH] Failed to build graph data: %s", err)
         return {"nodes": [], "edges": []}
 
 

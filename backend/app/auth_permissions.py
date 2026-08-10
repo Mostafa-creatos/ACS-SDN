@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from .auth import get_current_user_claims
 from .db import get_db
 from . import models
+from app.core.logging_config import get_logger
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------
 # RBAC Matrix: Maps explicit actions to required roles
@@ -103,7 +105,7 @@ def log_audit_event(
         db.commit()
     except Exception as e:
         db.rollback()
-        print(f"[AUDIT LOG ERROR] Failed to insert audit log: {e}")
+        logger.error(f"[AUDIT LOG ERROR] Failed to insert audit log: {e}")
 
 
 class require_permission:

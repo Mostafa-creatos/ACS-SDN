@@ -9,6 +9,8 @@ from app.models import Switch, ConfigSnapshot, ZtpDiscoveryPool
 
 client = TestClient(app)
 
+ADMIN_HEADERS = {"Authorization": "Bearer mock-token-admin"}
+
 def test_config_compliance_mgr_drift_detection(db_session):
     # This is a unit test directly for the categorize_drift function
     from app.workers.config_lifecycle import categorize_drift
@@ -37,7 +39,7 @@ def test_rollback_spine_requires_approval(db_session):
     db_session.add(sw)
     db_session.commit()
 
-    response = client.post(f"/api/v5/switches/{switch_id}/rollback")
+    response = client.post(f"/api/v5/switches/{switch_id}/rollback", headers=ADMIN_HEADERS)
     assert response.status_code == 202
     data = response.json()
     assert data["status"] == "APPROVAL_REQUIRED"
@@ -59,7 +61,7 @@ def test_rollback_leaf_initiates_immediately(db_session):
     db_session.commit()
 
     with patch("app.workers.ztp_tasks.trigger_rollback.delay") as mock_delay:
-        response = client.post(f"/api/v5/switches/{switch_id}/rollback")
+        response = client.post(f"/api/v5/switches/{switch_id}/rollback", headers=ADMIN_HEADERS)
         assert response.status_code == 202
         data = response.json()
         assert data["status"] == "ROLLBACK_INITIATED"

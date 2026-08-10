@@ -9,6 +9,8 @@ from .. import models
 
 from celery import shared_task
 import difflib
+from app.core.logging_config import get_logger
+logger = get_logger(__name__)
 
 def generate_golden_config(switch: models.Switch) -> str:
     """
@@ -317,7 +319,7 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
             try:
                 fetched_configs[sw.switch_id] = fut.result()
             except Exception as e:
-                print(f"[COMPLIANCE] Switch {sw.hostname} unreachable, skipping audit: {e}")
+                logger.warning(f"[COMPLIANCE] Switch {sw.hostname} unreachable, skipping audit: {e}")
                 unreachable_switches.append(sw.hostname)
                 unreachable_switch_ids.add(sw.switch_id)
 
@@ -518,7 +520,7 @@ def restore_config_snapshot(db: Session, snapshot_id: uuid.UUID, operator_claims
         raise PermissionError("Approval Exception: High blast radius rollback requires Platform Admin authorization.")
 
     # Push config to the switch via southbound driver
-    from ..main import resolve_southbound_driver
+    from ..drivers.factory import resolve_southbound_driver
     driver = resolve_southbound_driver(switch.vendor)
     loop = asyncio.new_event_loop()
     try:
@@ -602,7 +604,7 @@ def config_compliance_mgr():
             # 3. Check for drift
             if current_config != baseline_snapshot.raw_config:
                 # Drift detected!
-                from ..main import LIFECYCLE_DRIFTED
+                from ..core.constants import LIFECYCLE_DRIFTED
                 switch.lifecycle_status = LIFECYCLE_DRIFTED
                 
                 # Simple diff
@@ -613,12 +615,12 @@ def config_compliance_mgr():
                 category = categorize_drift(diff)
                 switch.configuration_drift_category = category
                 
-                print(f"[DRIFT DETECTED] Switch {switch.hostname} drifted in category: {category}")
+                logger.warning(f"[DRIFT DETECTED] Switch {switch.hostname} drifted in category: {category}")
         
         db.commit()
     except Exception as e:
         db.rollback()
-        print(f"[DRIFT MGR] Error: {e}")
+        logger.error(f"[DRIFT MGR] Error: {e}")
     finally:
         db.close()
 
@@ -645,7 +647,7 @@ def apply_remediation(self, finding_id_str: str):
             db.commit()
             return {"status": "FAILED", "error": "Switch not found"}
 
-        from ..main import resolve_southbound_driver
+        from ..drivers.factory import resolve_southbound_driver
         driver = resolve_southbound_driver(switch.vendor)
 
         fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == switch.fabric_id).first()

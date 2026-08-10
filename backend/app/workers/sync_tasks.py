@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from ..db import SessionLocal
 from ..telemetry.gnmi_discovery import run_gnmi_discovery
 from ..telemetry.metrics_collector import GnmiTelemetryCollector
+from app.core.logging_config import get_logger
+logger = get_logger(__name__)
 
 async def run_topology_discovery_sync(db: Session):
     """
@@ -12,19 +14,19 @@ async def run_topology_discovery_sync(db: Session):
     try:
         await asyncio.to_thread(run_gnmi_discovery, db)
     except Exception as e:
-        print(f"[WORKER DISCOVERY] Topology discovery loop failed: {e}")
+        logger.error(f"[WORKER DISCOVERY] Topology discovery loop failed: {e}")
 
 async def start_periodic_discovery_loop(interval_sec: int):
     """
     A continuous background loop running gNMI topology discovery.
     """
-    print(f"[WORKER DISCOVERY] Starting background discovery task loop every {interval_sec} seconds...")
+    logger.info(f"[WORKER DISCOVERY] Starting background discovery task loop every {interval_sec} seconds...")
     while True:
         db = SessionLocal()
         try:
             await run_topology_discovery_sync(db)
         except Exception as e:
-            print(f"[WORKER DISCOVERY] Background execution error: {e}")
+            logger.error(f"[WORKER DISCOVERY] Background execution error: {e}")
         finally:
             db.close()
             
@@ -34,13 +36,13 @@ async def start_periodic_telemetry_loop(interval_sec: int):
     """
     A continuous background loop querying and recording switch metrics.
     """
-    print(f"[WORKER TELEMETRY] Starting background telemetry loop every {interval_sec} seconds...")
+    logger.info(f"[WORKER TELEMETRY] Starting background telemetry loop every {interval_sec} seconds...")
     collector = GnmiTelemetryCollector(SessionLocal)
     while True:
         try:
             await asyncio.to_thread(collector.collect_switch_metrics)
         except Exception as e:
-            print(f"[WORKER TELEMETRY] Background execution error: {e}")
+            logger.error(f"[WORKER TELEMETRY] Background execution error: {e}")
             
         await asyncio.sleep(interval_sec)
 
@@ -57,7 +59,7 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str):
     from datetime import datetime, timezone
     from ..db import SessionLocal
     from .. import models
-    from ..main import resolve_southbound_driver
+    from ..drivers.factory import resolve_southbound_driver
 
     db = SessionLocal()
     task_id = str(self.request.id) if self.request.id else None
@@ -87,7 +89,7 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str):
 
         success = result.get("success", False)
         if success:
-            from ..main import LIFECYCLE_COMPLIANT
+            from ..core.constants import LIFECYCLE_COMPLIANT
             switch.lifecycle_status = LIFECYCLE_COMPLIANT
             switch.last_successful_sync = datetime.now(timezone.utc)
             
@@ -135,7 +137,7 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str):
                     )
                     db.add(snapshot)
             except Exception as snap_err:
-                print(f"[SYNC TASK] Failed to take post-push config snapshot: {snap_err}")
+                logger.error(f"[SYNC TASK] Failed to take post-push config snapshot: {snap_err}")
 
         # Update matching compliance findings
         if task_id:
@@ -272,7 +274,7 @@ def backup_switch_config_task(self, switch_id_str: str, username: str = "system"
             db.add(backup_record)
             db.commit()
         except Exception as inner_e:
-            print(f"[BACKUP] Failed to record failure snapshot: {inner_e}")
+            logger.error(f"[BACKUP] Failed to record failure snapshot: {inner_e}")
             
         return {"status": "failed", "error": str(e)}
     finally:
@@ -283,7 +285,7 @@ async def start_periodic_backup_schedule_loop():
     """
     Background loop that runs every 60 seconds to execute scheduled backups.
     """
-    print("[WORKER BACKUP] Starting periodic backup scheduler loop...")
+    logger.info("[WORKER BACKUP] Starting periodic backup scheduler loop...")
     import uuid
     import asyncio
     from datetime import datetime, timezone, timedelta
@@ -326,7 +328,7 @@ async def start_periodic_backup_schedule_loop():
                 db.commit()
         except Exception as e:
             db.rollback()
-            print(f"[WORKER BACKUP] Scheduler loop error: {e}")
+            logger.error(f"[WORKER BACKUP] Scheduler loop error: {e}")
         finally:
             db.close()
 
@@ -343,7 +345,7 @@ def auto_provision_subnet_task(job_id_str: str):
     from ..db import SessionLocal
     from .. import models
     from ..orchestrator.generator import generate_subnet_config
-    from ..main import resolve_southbound_driver
+    from ..drivers.factory import resolve_southbound_driver
     from .config_lifecycle import take_config_snapshot
 
     db = SessionLocal()
