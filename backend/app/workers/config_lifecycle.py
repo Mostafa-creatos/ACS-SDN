@@ -87,6 +87,10 @@ def _adapt_nokia_expected_pattern(expected_str: str) -> str:
         ("name-server ", "server-list "),
         ("lldp enable", "lldp admin-state enable"),
         ("hostname ", "host-name "),
+        ("ip ssh server enable", "ssh-server"),
+        ("ip telnet server enable", "telnet-server"),
+        ("router bgp ", "protocols bgp"),
+        ("snmp-server community ", "snmp community"),
     ]
     for old, new in replacements:
         adapted = adapted.replace(old, new)
@@ -123,6 +127,16 @@ def build_remediation_config(switch: models.Switch, rule_name: str, context: dic
             return "/ system lldp admin-state enable\n"
         if "aaa" in name:
             return "/ system aaa authentication method local\n"
+        if "ssh" in name:
+            return "/ system netconf-server mgmt ssh-server mgmt-netconf admin-state enable\n"
+        if "telnet" in name:
+            return ""
+        if "bgp" in name:
+            return f"/ network-instance default protocols bgp autonomous-system {context.get('switch.local_bgp_asn', '65000')}\n"
+        if "vlt" in name:
+            return ""
+        if "snmp" in name:
+            return "/ system snmp network-instance mgmt admin-state enable\n"
     else:
         if "hostname" in name or "host-name" in name or "identity" in name:
             return f"hostname {context.get('switch.hostname', switch.hostname)}\n"
@@ -138,6 +152,16 @@ def build_remediation_config(switch: models.Switch, rule_name: str, context: dic
             return "aaa authentication login default local\n"
         if "spanning" in name or "mst" in name:
             return "spanning-tree mode mst\n"
+        if "ssh" in name:
+            return "ip ssh server enable\n"
+        if "telnet" in name:
+            return "no ip telnet server enable\n"
+        if "bgp" in name:
+            return f"router bgp {context.get('switch.local_bgp_asn', switch.local_bgp_asn)}\n exit\n"
+        if "vlt" in name:
+            return "vlt-domain 1\n exit\n"
+        if "snmp" in name:
+            return "snmp-server community public ro\n"
 
     return generate_golden_config(switch)
 
