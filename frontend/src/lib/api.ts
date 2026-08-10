@@ -236,6 +236,19 @@ export const deleteSubnet = async (subnetId: string): Promise<void> => {
     }
 };
 
+export const redeploySubnet = async (subnetId: string): Promise<any> => {
+    const res = await fetch(`/api/v5/admin/subnets/${subnetId}/redeploy`, {
+        method: 'POST',
+        headers: getHeaders()
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to trigger redeployment');
+    }
+    return res.json();
+};
+
+
 export const remediateComplianceFinding = async (findingId: string): Promise<any> => {
     const res = await fetch(`/api/v5/visibility/compliance/findings/${findingId}/remediate`, {
         method: 'POST',

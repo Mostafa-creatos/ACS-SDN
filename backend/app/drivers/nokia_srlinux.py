@@ -168,7 +168,7 @@ class NokiaSrlinuxDriver(SouthboundNetworkDriver):
                     out = _srlinux_read_until_prompt(channel, timeout=15)
                     output_lines.append(_clean(out))
 
-                entered_candidate = "* candidate" in out
+                entered_candidate = "candidate" in out.lower()
 
                 # Apply config commands one at a time, waiting for the prompt.
                 for line in config_payload.strip().splitlines():
@@ -294,9 +294,10 @@ class NokiaSrlinuxDriver(SouthboundNetworkDriver):
                 running_config = _srlinux_read_until_prompt(shell, timeout=30)
 
                 import difflib
-                running_lines = running_config.splitlines(keepends=True)
-                candidate_lines = candidate_config.splitlines(keepends=True)
-                diff = "".join(difflib.unified_diff(running_lines, candidate_lines, fromfile="running", tofile="candidate"))
+                running_lines = [line.rstrip() for line in running_config.splitlines()]
+                candidate_lines = [line.rstrip() for line in candidate_config.splitlines()]
+                diff_list = [line.rstrip() for line in difflib.unified_diff(running_lines, candidate_lines, fromfile="running", tofile="candidate")]
+                diff = "\n".join(diff_list)
                 return {"diff": diff, "validation_status": "diff_ready" if diff else "identical", "error_detail": ""}
             except Exception as e:
                 return {"diff": "", "validation_status": "error", "error_detail": str(e)}

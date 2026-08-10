@@ -585,3 +585,47 @@ def get_provisioning_job(
         "device_statuses": j.device_statuses or {}
     }
 
+
+@router.post("/subnets/{subnet_id}/redeploy")
+def redeploy_subnet(
+    subnet_id: str,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("global:manage"))
+):
+    """Trigger a new auto-provisioning job for an existing subnet."""
+    s_uuid = uuid.UUID(subnet_id)
+    subnet = db.query(models.IpamSubnet).filter(models.IpamSubnet.subnet_id == s_uuid).first()
+    if not subnet:
+        raise HTTPException(status_code=404, detail="Subnet not found")
+        
+    vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == subnet.vrf_id).first()
+    fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == subnet.fabric_id).first()
+    
+    # Check if there is already an active job running for this subnet
+    active_job = db.query(models.ProvisioningJob).filter(
+        models.ProvisioningJob.subnet_id == s_uuid,
+        models.ProvisioningJob.status.in_(["pending", "in_progress"])
+    ).first()
+    if active_job:
+        raise HTTPException(status_code=400, detail="A provisioning job is already active for this subnet.")
+        
+    # Create new job
+    job = models.ProvisioningJob(
+        job_id=uuid.uuid4(),
+        subnet_id=subnet.subnet_id,
+        vrf_name=vrf.vrf_name if vrf else "Unknown",
+        subnet_cidr=subnet.subnet_cidr,
+        fabric_name=fabric.fabric_name if fabric else "Unknown",
+        status="pending",
+        logs=""
+    )
+    db.add(job)
+    db.commit()
+    
+    # Trigger Celery task
+    from app.workers.sync_tasks import auto_provision_subnet_task
+    auto_provision_subnet_task.delay(str(job.job_id))
+    
+    return {"status": "REDEPLOY_QUEUED", "job_id": str(job.job_id)}
+
+

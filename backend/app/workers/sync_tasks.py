@@ -463,15 +463,20 @@ def auto_provision_subnet_task(job_id_str: str):
         
         job.completed_at = datetime.now(timezone.utc)
         db.commit()
+        final_status = job.status
 
     except Exception as ex:
-        job.status = "failed"
-        job.error_message = str(ex)
-        job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Exception occurred during provisioning: {ex}\n"
-        job.completed_at = datetime.now(timezone.utc)
-        db.commit()
+        final_status = "failed"
+        try:
+            job.status = "failed"
+            job.error_message = str(ex)
+            job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Exception occurred during provisioning: {ex}\n"
+            job.completed_at = datetime.now(timezone.utc)
+            db.commit()
+        except Exception:
+            db.rollback()
     finally:
         db.close()
 
-    return {"status": job.status}
+    return {"status": final_status}
 

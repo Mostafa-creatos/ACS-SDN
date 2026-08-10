@@ -847,7 +847,7 @@ def get_admin_stats(db: Session = Depends(get_db), claims: dict = Depends(requir
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
         subnets_count = db.query(models.IpamSubnet).join(models.TenantVrf).filter(models.TenantVrf.tenant_id == t_uuid).count()
         fabrics_count = db.query(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(models.TenantVrf.tenant_id == t_uuid).distinct().count()
-        switches_count = db.query(models.Switch).join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(models.TenantVrf.tenant_id == t_uuid).distinct().count()
+        switches_count = db.query(models.Switch.switch_id).join(models.Fabric).join(models.IpamSubnet).join(models.TenantVrf).filter(models.TenantVrf.tenant_id == t_uuid).distinct().count()
         return {
             "tenants_count": 1,
             "fabrics_count": fabrics_count,
@@ -1828,7 +1828,7 @@ def calculate_blast_radius(db: Session, switch_ids: list) -> dict:
         if not switch:
             continue
         if switch.role.lower() == "spine":
-            connected_leaves = db.query(models.Switch).join(
+            connected_leaves = db.query(models.Switch.switch_id).join(
                 models.TopologyEdge,
                 (models.TopologyEdge.local_switch == models.Switch.hostname) |
                 (models.TopologyEdge.remote_switch == models.Switch.hostname)

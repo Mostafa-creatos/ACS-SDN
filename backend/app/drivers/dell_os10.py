@@ -238,11 +238,12 @@ class DellOS10Driver(SouthboundNetworkDriver):
                 running_config = collector.collect_running_config()
                 merged_candidate = merge_os10_configs(running_config, candidate_config)
                 # Strip out all '!' separator lines and empty lines for a clean diff comparison
-                running_clean = "\n".join([line for line in running_config.splitlines() if line.strip() != "!"])
-                candidate_clean = "\n".join([line for line in merged_candidate.splitlines() if line.strip() != "!"])
-                running_lines = running_clean.splitlines(keepends=True)
-                candidate_lines = candidate_clean.splitlines(keepends=True)
-                diff = "".join(difflib.unified_diff(running_lines, candidate_lines, fromfile="running", tofile="candidate"))
+                running_clean = "\n".join([line.rstrip() for line in running_config.splitlines() if line.strip() != "!"])
+                candidate_clean = "\n".join([line.rstrip() for line in merged_candidate.splitlines() if line.strip() != "!"])
+                running_lines = running_clean.splitlines()
+                candidate_lines = candidate_clean.splitlines()
+                diff_list = [line.rstrip() for line in difflib.unified_diff(running_lines, candidate_lines, fromfile="running", tofile="candidate")]
+                diff = "\n".join(diff_list)
                 return {"diff": diff, "validation_status": "diff_ready" if diff else "identical", "error_detail": ""}
             except Exception as e:
                 return {"diff": "", "validation_status": "error", "error_detail": str(e)}

@@ -19,6 +19,9 @@ def generate_golden_config(switch: models.Switch) -> str:
             "/ system ntp network-instance mgmt\n"
             "/ system ntp admin-state enable\n"
             "/ system ntp server 192.168.100.1\n"
+            "/ delete system dns-instance clab-default\n"
+            "/ delete system dns-instance default\n"
+            "/ delete system dns-instance mgmt\n"
             "/ system dns-instance mgmt network-instance mgmt\n"
             "/ system dns-instance mgmt server-list [ 8.8.8.8 ]\n"
             "/ system logging remote-server 10.10.100.5 remote-port 514\n"
@@ -108,6 +111,9 @@ def build_remediation_config(switch: models.Switch, rule_name: str, context: dic
             )
         if "dns" in name:
             return (
+                "/ delete system dns-instance clab-default\n"
+                "/ delete system dns-instance default\n"
+                "/ delete system dns-instance mgmt\n"
                 "/ system dns-instance mgmt network-instance mgmt\n"
                 f"/ system dns-instance mgmt server-list [ {context.get('fabric.expected_dns_servers', '8.8.8.8')} ]\n"
             )
@@ -185,12 +191,24 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
     switch.running_config = raw_config
     config_hash = hashlib.sha256(raw_config.encode('utf-8')).hexdigest()
 
+    # If the orchestrator/system itself pushed the config or performed ZTP,
+    # the new snapshot represents the intended golden baseline configuration.
+    is_baseline = taken_by in ("system_auto_provision", "system_config_push", "ztp_provisioning", "system")
+
+    if is_baseline:
+        # Clear previous baselines for this switch
+        db.query(models.ConfigSnapshot).filter(
+            models.ConfigSnapshot.switch_id == switch_id,
+            models.ConfigSnapshot.is_baseline == True
+        ).update({"is_baseline": False})
+
     snapshot = models.ConfigSnapshot(
         snapshot_id=uuid.uuid4(),
         switch_id=switch_id,
         taken_at=datetime.datetime.now(datetime.timezone.utc),
         raw_config=raw_config,
         config_hash=config_hash,
+        is_baseline=is_baseline,
         taken_by=taken_by
     )
     db.add(snapshot)

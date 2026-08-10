@@ -345,7 +345,7 @@ export const Compliance: React.FC = () => {
 
   // ── Auto-refresh when pending remediations exist ──────────────────────────
   useEffect(() => {
-    const hasPending = data?.findings.some(f => f.remediation_status === 'pending');
+    const hasPending = (data?.findings || []).some(f => f.remediation_status === 'pending');
     if (hasPending) {
       refreshTimer.current = setInterval(() => loadData(page), 15000);
     } else {
@@ -452,7 +452,7 @@ export const Compliance: React.FC = () => {
   };
 
   // ── Group findings by switch ──────────────────────────────────────────────
-  const groupedBySwtich = data?.findings.reduce((acc, f) => {
+  const groupedBySwtich = (data?.findings || []).reduce((acc, f) => {
     const key = f.switch_id;
     if (!acc[key]) acc[key] = { hostname: f.switch_hostname, vendor: f.switch_vendor, ip: f.switch_ip, findings: [] };
     acc[key].findings.push(f);
@@ -637,7 +637,18 @@ export const Compliance: React.FC = () => {
 
           {/* Per-switch accordion groups */}
           <div className="space-y-3">
-            {!groupedBySwtich || Object.keys(groupedBySwtich).length === 0 ? (
+            {data?.status === 'NO_RUNS_EVALUATED' ? (
+              <div className="text-center py-12 space-y-3">
+                <ShieldAlert className="w-12 h-12 text-slate-300 mx-auto" />
+                <p className="text-sm font-semibold text-slate-500">No compliance scan has been run yet</p>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                  Run your first Golden Configuration compliance audit to discover configuration drifts on your switches.
+                </p>
+                <button onClick={handleRunAudit} className="btn-primary py-2 px-4 text-xs font-bold mt-2 mx-auto flex items-center gap-1.5">
+                  <Play className="w-3.5 h-3.5" /> Run First Audit
+                </button>
+              </div>
+            ) : !groupedBySwtich || Object.keys(groupedBySwtich).length === 0 ? (
               <p className="text-xs text-slate-400 text-center py-8">No findings match the selected filters.</p>
             ) : (
               Object.entries(groupedBySwtich).map(([switchId, group]) => (
@@ -949,7 +960,7 @@ export const Compliance: React.FC = () => {
                     ) : (
                       // Group findings by switch inside details view
                       Object.entries(
-                        runDetails.findings.reduce((acc: any, f: any) => {
+                        (runDetails.findings || []).reduce((acc: any, f: any) => {
                           const key = f.switch_id;
                           if (!acc[key]) acc[key] = { hostname: f.switch_hostname, vendor: f.switch_vendor, findings: [] };
                           acc[key].findings.push(f);

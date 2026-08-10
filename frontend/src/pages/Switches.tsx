@@ -557,7 +557,7 @@ export const Switches: React.FC = () => {
                                   </div>
                                 )}
                                 {/* Compliance alert if drifted */}
-                                {sw.lifecycle_status === 'drifted' && (
+                                {sw.lifecycle_status?.toLowerCase().includes('drift') && (
                                   <div className="col-span-2 md:col-span-4 p-3 bg-rose-50 border border-rose-200 rounded-xl flex gap-3 items-start">
                                     <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
                                     <div>
@@ -703,7 +703,7 @@ export const Switches: React.FC = () => {
                                       </div>
                                     </div>
                                     {renderConfigDiff(sw)}
-                                    {selectedSnap1 && sw.lifecycle_status === 'drifted' && (
+                                    {selectedSnap1 && sw.lifecycle_status?.toLowerCase().includes('drift') && (
                                       <div className="pt-3 border-t border-slate-100 flex gap-3">
                                         <button onClick={() => handleRollback(selectedSnap1)} className="btn-danger flex-1 flex items-center justify-center gap-2 py-2.5 text-xs">
                                           <RotateCcw className="w-3.5 h-3.5" /> Rollback Config
