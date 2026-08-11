@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
+import { deleteSwitch } from '../lib/api';
 
 interface Props {
   open: boolean;
@@ -11,7 +11,6 @@ interface Props {
 }
 
 export const DeleteConfirmModal: React.FC<Props> = ({ open, hostname, switchId, onClose, onDeleted }) => {
-  const { token } = useAuth();
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,14 +20,7 @@ export const DeleteConfirmModal: React.FC<Props> = ({ open, hostname, switchId, 
     setDeleting(true);
     setError(null);
     try {
-      const resp = await fetch(`/api/v5/admin/switches/${switchId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      if (!resp.ok) {
-        const err = await resp.json();
-        throw new Error(err.detail || 'Failed to delete switch');
-      }
+      await deleteSwitch(switchId);
       onDeleted();
       onClose();
     } catch (err: unknown) {

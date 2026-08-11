@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
 import type { DellSwitchDetails } from '../types/switch-types';
+import { fetchFabricsQuiet, createSwitch, updateSwitch } from '../lib/api';
 
 interface FormData {
   hostname: string;
@@ -61,7 +61,6 @@ const initialForm: FormData = {
 };
 
 export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSwitch }) => {
-  const { token } = useAuth();
   const isEdit = !!editSwitch;
 
   const [fabrics, setFabrics] = useState<any[]>([]);
@@ -108,11 +107,9 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
   useEffect(() => {
     const loadFabrics = async () => {
       try {
-        const res = await fetch('/api/v5/admin/fabrics', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (res.ok) {
-          setFabrics(await res.json());
+        const data = await fetchFabricsQuiet();
+        if (data) {
+          setFabrics(data);
         }
       } catch (e) {
         console.error('Failed to load fabrics', e);
@@ -121,7 +118,7 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
     if (open) {
       loadFabrics();
     }
-  }, [open, token]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -138,11 +135,6 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
 
     setSaving(true);
     try {
-      const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      };
-
       if (isEdit && editSwitch) {
         // PUT to update
         const body: Record<string, unknown> = {};
@@ -151,31 +143,14 @@ export const AddSwitchModal: React.FC<Props> = ({ open, onClose, onSaved, editSw
             body[k] = form[k];
           }
         });
-        const resp = await fetch(`/api/v5/admin/switches/${editSwitch.switch_id}`, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify(body),
-        });
-        if (!resp.ok) {
-          const err = await resp.json();
-          throw new Error(err.detail || 'Failed to update switch');
-        }
+        await updateSwitch(editSwitch.switch_id, body);
         onSaved(editSwitch.switch_id);
       } else {
         // POST to create
         const body: Record<string, any> = { ...form };
         if (!body.fabric_id) delete body.fabric_id;
 
-        const resp = await fetch('/api/v5/admin/switches', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-        });
-        if (!resp.ok) {
-          const err = await resp.json();
-          throw new Error(err.detail || 'Failed to create switch');
-        }
-        const data = await resp.json();
+        const data = await createSwitch(body);
         onSaved(data.switch_id);
       }
       onClose();

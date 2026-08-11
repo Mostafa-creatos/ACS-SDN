@@ -2,6 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card } from '../components/Card';
 import { useAuth } from '../context/AuthContext';
+import {
+  fetchInventory, fetchApprovalList, fetchZtpPoolAdmin, fetchCeleryStats,
+  fetchTelemetryMetric, fetchAuditLogs, runComplianceAudit
+} from '../lib/api';
 import { 
   ResponsiveContainer, 
   LineChart, 
@@ -65,7 +69,7 @@ interface AuditLog {
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
-  const { token, selectedTenant } = useAuth();
+  const { selectedTenant } = useAuth();
   
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState({
@@ -91,14 +95,10 @@ export const Dashboard: React.FC = () => {
 
   const fetchDashboardData = async () => {
     try {
-      const headers: any = { 'Authorization': `Bearer ${token}` };
-      if (selectedTenant) {
-        headers['X-Tenant-ID'] = selectedTenant;
-      }
-      
+      const tenantId = selectedTenant;
+
       // 1. Fetch Switches Summary
-      const swRes = await fetch('/api/v5/visibility/inventory', { headers });
-      const switches = swRes.ok ? await swRes.json() : [];
+      const switches = await fetchInventory(undefined, tenantId) ?? [];
       let switchesList = Array.isArray(switches) ? switches : (switches.items || []);
       
       const total = switchesList.length;
@@ -108,11 +108,8 @@ export const Dashboard: React.FC = () => {
       // 2. Fetch Pending Approvals Count
       let approvals = 0;
       try {
-        const approvalRes = await fetch('/api/v5/orchestrator/approvals', { headers });
-        if (approvalRes.ok) {
-          const approvalsList = await approvalRes.json();
-          approvals = approvalsList.length;
-        }
+        const approvalsList = await fetchApprovalList(tenantId);
+        approvals = approvalsList.length;
       } catch {}
 
       setMetrics({
@@ -124,10 +121,9 @@ export const Dashboard: React.FC = () => {
 
       // 3. Fetch ZTP pool
       try {
-        const ztpRes = await fetch('/api/v5/admin/ztp-pool', { headers });
-        if (ztpRes.ok) {
-          const ztpData = await ztpRes.json();
-          setZtpDevices(ztpData || []);
+        const ztpData = await fetchZtpPoolAdmin(tenantId);
+        if (ztpData) {
+          setZtpDevices(ztpData);
         }
       } catch (err) {
         console.error("Failed to load ZTP pool:", err);
@@ -135,9 +131,8 @@ export const Dashboard: React.FC = () => {
 
       // 4. Fetch Celery Stats
       try {
-        const celeryRes = await fetch('/api/v5/admin/celery-stats', { headers });
-        if (celeryRes.ok) {
-          const celeryData = await celeryRes.json();
+        const celeryData = await fetchCeleryStats(tenantId);
+        if (celeryData) {
           setCeleryStats(celeryData);
         }
       } catch (err) {
@@ -146,11 +141,8 @@ export const Dashboard: React.FC = () => {
 
       // 5. Fetch Real Telemetry Metrics (CPU & Memory utilization)
       try {
-        const cpuMetricRes = await fetch('/api/v5/visibility/telemetry?metric_name=cpu_utilization', { headers });
-        const memMetricRes = await fetch('/api/v5/visibility/telemetry?metric_name=memory_utilization', { headers });
-        
-        const cpuData = cpuMetricRes.ok ? await cpuMetricRes.json() : [];
-        const memData = memMetricRes.ok ? await memMetricRes.json() : [];
+        const cpuData = await fetchTelemetryMetric('cpu_utilization', tenantId) ?? [];
+        const memData = await fetchTelemetryMetric('memory_utilization', tenantId) ?? [];
 
         // Align timestamps into unified points
         const pointsMap: { [timestamp: string]: TelemetryPoint } = {};
@@ -179,9 +171,8 @@ export const Dashboard: React.FC = () => {
 
       // 6. Fetch 5 Recent Audit Logs
       try {
-        const auditRes = await fetch('/api/v5/admin/audit-logs?page=1&limit=5', { headers });
-        if (auditRes.ok) {
-          const auditData = await auditRes.json();
+        const auditData = await fetchAuditLogs({ page: 1, limit: 5 }, tenantId);
+        if (auditData) {
           setAuditLogs(auditData.items || []);
         }
       } catch (err) {
@@ -199,7 +190,7 @@ export const Dashboard: React.FC = () => {
     fetchDashboardData();
     const interval = setInterval(fetchDashboardData, 30000); // refresh every 30s
     return () => clearInterval(interval);
-  }, [token, selectedTenant]);
+  }, [selectedTenant]);
 
   const handleRunAudit = () => {
     setAuditRunning(true);
@@ -207,11 +198,7 @@ export const Dashboard: React.FC = () => {
 
     const triggerAudit = async () => {
       try {
-        const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
-        if (selectedTenant) {
-          headers['X-Tenant-ID'] = selectedTenant;
-        }
-        await fetch('/api/v5/visibility/compliance/run', { method: 'POST', headers });
+        await runComplianceAudit(selectedTenant);
       } catch (e) {
         console.error("Failed to run audit on backend:", e);
       }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card } from '../components/Card';
 import { useAuth } from '../context/AuthContext';
+import { fetchApprovalList, approveApproval, rejectApproval } from '../lib/api';
 import { 
   FileCheck2, 
   Trash2, 
@@ -20,7 +21,7 @@ interface ApprovalRequest {
 }
 
 export const PendingApprovals: React.FC = () => {
-  const { token, user } = useAuth();
+  const { user } = useAuth();
   
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,13 +36,7 @@ export const PendingApprovals: React.FC = () => {
   const fetchApprovals = async () => {
     setLoading(true);
     try {
-      const headers = { 'Authorization': `Bearer ${token}` };
-      const response = await fetch('/api/v5/orchestrator/approvals', { headers });
-      if (response.ok) {
-        setRequests(await response.json());
-      } else {
-        setRequests([]);
-      }
+      setRequests(await fetchApprovalList());
     } catch (e) {
       setRequests([]);
     } finally {
@@ -51,7 +46,7 @@ export const PendingApprovals: React.FC = () => {
 
   useEffect(() => {
     fetchApprovals();
-  }, [token]);
+  }, []);
 
   // Access check
   if (user?.role !== 'Platform Admin' && user?.role !== 'platform_admin') {
@@ -80,13 +75,9 @@ export const PendingApprovals: React.FC = () => {
     if (!activeRequest) return;
 
     try {
-      const headers = { 'Authorization': `Bearer ${token}` };
-      const response = await fetch(`/api/v5/orchestrator/approvals/${activeRequest.id}/approve`, {
-        method: 'POST',
-        headers
-      });
+      const ok = await approveApproval(activeRequest.id);
 
-      if (response.ok) {
+      if (ok) {
         // Remove from list
         setRequests(prev => prev.filter(r => r.id !== activeRequest.id));
         setIsConfirmOpen(false);
@@ -103,12 +94,8 @@ export const PendingApprovals: React.FC = () => {
   const confirmReject = async () => {
     if (!activeRequest) return;
     try {
-      const headers = { 'Authorization': `Bearer ${token}` };
-      const response = await fetch(`/api/v5/orchestrator/approvals/${activeRequest.id}/reject`, {
-        method: 'POST',
-        headers
-      });
-      if (response.ok) {
+      const ok = await rejectApproval(activeRequest.id);
+      if (ok) {
         setRequests(prev => prev.filter(r => r.id !== activeRequest.id));
       }
     } catch (e) {

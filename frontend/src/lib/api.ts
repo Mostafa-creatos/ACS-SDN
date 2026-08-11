@@ -1,4 +1,4 @@
-import type { User } from './types';
+import type { User } from '../types';
 
 const decodeJwt = (token: string): any => {
     try {
@@ -19,17 +19,22 @@ export const isTokenExpired = (token: string): boolean => {
     return Date.now() >= decoded.exp * 1000;
 };
 
+export const refreshAccessToken = async (refreshToken: string) => {
+    const res = await apiRequest('/api/v5/auth/refresh', {
+        method: 'POST',
+        noAuth: true,
+        body: { refresh_token: refreshToken }
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, data };
+};
+
 export const tryRefreshToken = async (): Promise<string | null> => {
     const refreshToken = localStorage.getItem('atlas_refresh');
     if (!refreshToken) return null;
     try {
-        const res = await fetch('/api/v5/auth/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refresh_token: refreshToken })
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
+        const { ok, data } = await refreshAccessToken(refreshToken);
+        if (!ok) return null;
         localStorage.setItem('atlas_jwt', data.access_token);
         if (data.refresh_token) {
             localStorage.setItem('atlas_refresh', data.refresh_token);
@@ -249,16 +254,13 @@ export const redeploySubnet = async (subnetId: string): Promise<any> => {
 };
 
 
-export const remediateComplianceFinding = async (findingId: string): Promise<any> => {
-    const res = await fetch(`/api/v5/visibility/compliance/findings/${findingId}/remediate`, {
+export const remediateComplianceFinding = async (findingId: string, tenantId?: string | null): Promise<{ ok: boolean; errorText?: string }> => {
+    const res = await apiRequest(`/api/v5/visibility/compliance/findings/${findingId}/remediate`, {
         method: 'POST',
-        headers: getHeaders()
+        tenantId
     });
-    if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Failed to trigger remediation');
-    }
-    return res.json();
+    if (res.ok) return { ok: true };
+    return { ok: false, errorText: await res.text() };
 };
 
 export const updateFabric = async (fabricId: string, payload: any): Promise<any> => {
@@ -318,4 +320,391 @@ export const fetchProvisioningJobDetail = async (jobId: string): Promise<any> =>
     const res = await fetch(`/api/v5/admin/provisioning-jobs/${jobId}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch provisioning job details');
     return res.json();
+};
+
+interface ApiRequestOptions {
+    method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+    body?: unknown;
+    token?: string | null;
+    tenantId?: string | null;
+    noAuth?: boolean;
+}
+
+const apiRequest = async (path: string, options: ApiRequestOptions = {}): Promise<Response> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (!options.noAuth) headers['Authorization'] = `Bearer ${options.token ?? localStorage.getItem('atlas_jwt')}`;
+    if (options.tenantId) headers['X-Tenant-ID'] = options.tenantId;
+    return fetch(path, {
+        method: options.method ?? 'GET',
+        headers,
+        body: options.body !== undefined ? JSON.stringify(options.body) : undefined
+    });
+};
+
+// ── Health / auth ────────────────────────────────────────────────────────────
+export const checkBackendHealth = async (): Promise<boolean> => {
+    const res = await apiRequest('/api/v5/', { method: 'HEAD', noAuth: true });
+    return res.ok;
+};
+
+export const loginUser = async (username: string, password: string) => {
+    const res = await apiRequest('/api/v5/auth/login', {
+        method: 'POST',
+        noAuth: true,
+        body: { username, password }
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, data };
+};
+
+// ── Inventory / switch lifecycle ─────────────────────────────────────────────
+export const fetchInventory = async (params?: URLSearchParams, tenantId?: string | null) => {
+    const qs = params ? `?${params.toString()}` : '';
+    const res = await apiRequest(`/api/v5/visibility/inventory${qs}`, { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const fetchAdminSwitches = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/admin/switches', { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const createSwitch = async (body: Record<string, unknown>) => {
+    const res = await apiRequest('/api/v5/admin/switches', { method: 'POST', body });
+    if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to create switch');
+    }
+    return res.json();
+};
+
+export const updateSwitch = async (switchId: string, body: Record<string, unknown>): Promise<void> => {
+    const res = await apiRequest(`/api/v5/admin/switches/${switchId}`, { method: 'PUT', body });
+    if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to update switch');
+    }
+};
+
+export const deleteSwitch = async (switchId: string): Promise<void> => {
+    const res = await apiRequest(`/api/v5/admin/switches/${switchId}`, { method: 'DELETE' });
+    if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to delete switch');
+    }
+};
+
+interface InterfaceMap {
+    interfaces: string[];
+    loopbacks: string[];
+    port_channels: string[];
+    ethernet: string[];
+    mgmt: string[];
+}
+
+const interfaceCache = new Map<string, InterfaceMap>();
+
+export const fetchSwitchInterfaces = async (
+    switchId: string,
+    token?: string | null,
+    tenant?: string,
+    force = false,
+): Promise<InterfaceMap> => {
+    if (!force && interfaceCache.has(switchId)) {
+        return interfaceCache.get(switchId)!;
+    }
+    const res = await apiRequest(`/api/v5/admin/switches/${switchId}/interfaces`, { token, tenantId: tenant });
+    if (!res.ok) {
+        throw new Error(`Failed to fetch interfaces: ${res.statusText}`);
+    }
+    const data: InterfaceMap = await res.json();
+    interfaceCache.set(switchId, data);
+    return data;
+};
+
+export const clearInterfaceCache = (switchId?: string) => {
+    if (switchId) {
+        interfaceCache.delete(switchId);
+    } else {
+        interfaceCache.clear();
+    }
+};
+
+// ── Approvals ────────────────────────────────────────────────────────────────
+export const fetchApprovalList = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/orchestrator/approvals', { tenantId });
+    if (!res.ok) throw new Error('Failed to fetch approvals');
+    return res.json();
+};
+
+export const approveApproval = async (approvalId: string): Promise<boolean> => {
+    const res = await apiRequest(`/api/v5/orchestrator/approvals/${approvalId}/approve`, { method: 'POST' });
+    return res.ok;
+};
+
+export const rejectApproval = async (approvalId: string): Promise<boolean> => {
+    const res = await apiRequest(`/api/v5/orchestrator/approvals/${approvalId}/reject`, { method: 'POST' });
+    return res.ok;
+};
+
+// ── Discovery / ZTP pool ─────────────────────────────────────────────────────
+export const fetchZtpPoolAdmin = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/admin/ztp-pool', { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const fetchDiscoveryPool = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/discovery/pool', { tenantId });
+    if (!res.ok) throw new Error('Failed to fetch ZTP pool');
+    return res.json();
+};
+
+export const fetchDiscoveryStatus = async (discoveryId: string, tenantId?: string | null) => {
+    const res = await apiRequest(`/api/v5/discovery/pool/${discoveryId}/status`, { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const retryDiscovery = async (discoveryId: string, tenantId?: string | null): Promise<void> => {
+    await apiRequest(`/api/v5/discovery/pool/${discoveryId}/retry`, { method: 'POST', tenantId });
+};
+
+export const assignDiscoveryFabric = async (
+    discoveryId: string,
+    payload: { fabric_id: string; role: string; hostname: string }
+): Promise<void> => {
+    const res = await apiRequest(`/api/v5/discovery/pool/${discoveryId}/assign-fabric`, { method: 'PATCH', body: payload });
+    if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to assign fabric');
+    }
+};
+
+export const removeDiscovery = async (discoveryId: string, tenantId?: string | null): Promise<void> => {
+    await apiRequest(`/api/v5/discovery/pool/${discoveryId}`, { method: 'DELETE', tenantId });
+};
+
+// ── Visibility (STP / telemetry / celery / audit) ────────────────────────────
+export const fetchStpStatus = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/visibility/stp', { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const fetchCeleryStats = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/admin/celery-stats', { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const fetchTelemetryMetric = async (metricName: string, tenantId?: string | null) => {
+    const res = await apiRequest(`/api/v5/visibility/telemetry?metric_name=${metricName}`, { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const fetchAuditLogs = async (
+    params: Record<string, string | number>,
+    tenantId?: string | null
+) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') qs.set(key, String(value));
+    });
+    const res = await apiRequest(`/api/v5/admin/audit-logs?${qs.toString()}`, { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+// ── Reports ──────────────────────────────────────────────────────────────────
+export const fetchReportCsv = async (
+    reportType: string,
+    tenantId?: string | null
+): Promise<{ ok: boolean; blob: Blob | null; errorText: string | null }> => {
+    const res = await apiRequest(`/api/v5/visibility/reports/csv?report_type=${reportType}`, { tenantId });
+    if (res.ok) return { ok: true, blob: await res.blob(), errorText: null };
+    return { ok: false, blob: null, errorText: (await res.text()) || res.statusText };
+};
+
+// ── Compliance ───────────────────────────────────────────────────────────────
+export const fetchComplianceLatest = async (params?: URLSearchParams, tenantId?: string | null) => {
+    const qs = params ? `?${params.toString()}` : '';
+    const res = await apiRequest(`/api/v5/visibility/compliance/latest${qs}`, { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const fetchComplianceHistory = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/visibility/compliance/history?limit=30', { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const runComplianceAudit = async (tenantId?: string | null): Promise<{ ok: boolean; errorText?: string }> => {
+    const res = await apiRequest('/api/v5/visibility/compliance/run', { method: 'POST', tenantId });
+    if (res.ok) return { ok: true };
+    return { ok: false, errorText: await res.text() };
+};
+
+export const fetchComplianceRunDetail = async (runId: string, tenantId?: string | null) => {
+    const res = await apiRequest(`/api/v5/visibility/compliance/runs/${runId}`, { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+// ── Topology ─────────────────────────────────────────────────────────────────
+export const fetchTopologyGraph = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/topology/graph', { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const fetchEndpoints = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/visibility/endpoints', { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+// ── Config push ──────────────────────────────────────────────────────────────
+export const fetchSwitchConfigHistory = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/switch-config/history', { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const pushSwitchConfig = async (
+    switchIds: string[],
+    configPayload: string,
+    dryRun: boolean,
+    tenantId?: string | null
+) => {
+    const res = await apiRequest('/api/v5/switch-config/push', {
+        method: 'POST',
+        tenantId,
+        body: { switch_ids: switchIds, config_payload: configPayload, dry_run: dryRun }
+    });
+    const data = await res.json();
+    return { ok: res.ok, data };
+};
+
+// ── Fabrics (quiet load for dropdowns: no tenant header, null on !ok) ────────
+export const fetchFabricsQuiet = async () => {
+    const res = await apiRequest('/api/v5/admin/fabrics');
+    if (!res.ok) return null;
+    return res.json();
+};
+
+// ── Backups ──────────────────────────────────────────────────────────────────
+export const fetchBackups = async () => {
+    const res = await apiRequest('/api/v5/backups');
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const fetchBackupSchedules = async () => {
+    const res = await apiRequest('/api/v5/backups/schedules');
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const fetchBackupTaskStatus = async (taskId: string) => {
+    const res = await apiRequest(`/api/v5/backups/tasks/${taskId}`);
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const createBackupSnapshot = async (
+    switchId: string
+) => {
+    const res = await apiRequest('/api/v5/backups/snapshot', { method: 'POST', body: { switch_id: switchId } });
+    if (res.ok) return { ok: true, data: await res.json() };
+    const err = await res.json();
+    return { ok: false, detail: err.detail };
+};
+
+export const fetchBackupContent = async (backupId: string) => {
+    const res = await apiRequest(`/api/v5/backups/${backupId}/content`);
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const fetchBackupDiff = async (backupId: string) => {
+    const res = await apiRequest(`/api/v5/backups/diff/${backupId}`);
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const restoreBackup = async (
+    backupId: string
+) => {
+    const res = await apiRequest('/api/v5/backups/restore', { method: 'POST', body: { backup_id: backupId } });
+    if (res.ok) return { ok: true, data: await res.json() };
+    const err = await res.json();
+    return { ok: false, detail: err.detail };
+};
+
+export const createBackupSchedule = async (fabricId: string | null, scheduleInterval: string): Promise<boolean> => {
+    const res = await apiRequest('/api/v5/backups/schedules', {
+        method: 'POST',
+        body: { fabric_id: fabricId, schedule_interval: scheduleInterval }
+    });
+    return res.ok;
+};
+
+export const deleteBackupSchedule = async (scheduleId: string): Promise<boolean> => {
+    const res = await apiRequest(`/api/v5/backups/schedules/${scheduleId}`, { method: 'DELETE' });
+    return res.ok;
+};
+
+// ── IPAM ─────────────────────────────────────────────────────────────────────
+export const fetchAllSubnets = async () => {
+    const res = await apiRequest('/api/v5/admin/subnets');
+    if (!res.ok) throw new Error('Failed to fetch subnets');
+    return res.json();
+};
+
+export const searchIp = async (ip: string) => {
+    const res = await apiRequest(`/api/v5/ipam/search?ip=${ip}`);
+    if (!res.ok) return null;
+    return res.json();
+};
+
+// ── Switch snapshots / rollback / drift ──────────────────────────────────────
+export const fetchSwitchSnapshots = async (switchId: string) => {
+    const res = await apiRequest(`/api/v5/visibility/snapshots?switch_id=${switchId}`);
+    if (!res.ok) return null;
+    return res.json();
+};
+
+export const takeSwitchSnapshot = async (switchId: string): Promise<{ ok: boolean; detail?: string }> => {
+    const res = await apiRequest(`/api/v5/visibility/snapshots?switch_id=${switchId}`, { method: 'POST' });
+    if (res.ok) return { ok: true };
+    const err = await res.json().catch(() => ({}));
+    return { ok: false, detail: err.detail };
+};
+
+export const rollbackSwitchConfig = async (
+    snapshotId: string,
+    dryRun: boolean
+) => {
+    const res = await apiRequest('/api/v5/visibility/rollback', {
+        method: 'POST',
+        body: { snapshot_id: snapshotId, dry_run: dryRun }
+    });
+    if (res.ok) return { ok: true, data: await res.json().catch(() => ({})) };
+    const err = await res.json().catch(() => ({}));
+    return { ok: false, detail: err.detail };
+};
+
+export const acceptSwitchDrift = async (switchId: string): Promise<{ ok: boolean; detail?: string }> => {
+    const res = await apiRequest('/api/v5/visibility/accept-drift', {
+        method: 'POST',
+        body: { switch_id: switchId }
+    });
+    if (res.ok) return { ok: true };
+    const err = await res.json().catch(() => ({}));
+    return { ok: false, detail: err.detail };
 };

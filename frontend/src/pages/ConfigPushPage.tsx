@@ -23,7 +23,7 @@ import {
 import { CategoryPanel } from '../components/config-push/CategoryPanel';
 import { CommandForm } from '../components/config-push/CommandForm';
 import { CommandPreview } from '../components/config-push/CommandPreview';
-import { fetchSwitchInterfaces } from '../components/config-push/InterfaceFetcher';
+import { fetchAdminSwitches, fetchSwitchConfigHistory, pushSwitchConfig, fetchSwitchInterfaces } from '../lib/api';
 import type { CommandTemplate, BuiltCommand } from '../types/config-push-types';
 
 interface SwitchItem {
@@ -175,17 +175,14 @@ export const ConfigPushPage: React.FC = () => {
   useEffect(() => {
     const fetchSwitches = async () => {
       try {
-        const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
-        if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
-        const res = await fetch('/api/v5/admin/switches', { headers });
-        if (res.ok) {
-          const data = await res.json();
+        const data = await fetchAdminSwitches(selectedTenant);
+        if (data) {
           setSwitches(Array.isArray(data) ? data : []);
         }
       } catch {}
     };
     fetchSwitches();
-  }, [token, selectedTenant]);
+  }, [selectedTenant]);
 
   // Fetch interfaces for the first selected switch
   useEffect(() => {
@@ -203,11 +200,9 @@ export const ConfigPushPage: React.FC = () => {
   const fetchHistory = async () => {
     setHistoryLoading(true);
     try {
-      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
-      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
-      const res = await fetch('/api/v5/switch-config/history', { headers });
-      if (res.ok) {
-        setHistory(await res.json());
+      const data = await fetchSwitchConfigHistory(selectedTenant);
+      if (data) {
+        setHistory(data);
       }
     } catch {}
     setHistoryLoading(false);
@@ -215,7 +210,7 @@ export const ConfigPushPage: React.FC = () => {
 
   useEffect(() => {
     if (activeTab === 'history') fetchHistory();
-  }, [activeTab, token, selectedTenant]);
+  }, [activeTab, selectedTenant]);
 
   // Builder helpers
   const toggleCategory = (id: string) => {
@@ -318,26 +313,8 @@ export const ConfigPushPage: React.FC = () => {
     const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
     try {
-      const headers: Record<string, string> = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      };
-      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
-
       // Start network call in the background to avoid blocking the UI animation
-      const apiPromise = fetch('/api/v5/switch-config/push', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          switch_ids: selectedSwitchIds,
-          config_payload: configPayload,
-          dry_run: true
-        })
-      }).then(async res => {
-        const ok = res.ok;
-        const data = await res.json();
-        return { ok, data };
-      });
+      const apiPromise = pushSwitchConfig(selectedSwitchIds, configPayload, true, selectedTenant);
 
       // Run sequential visual stage transitions
       const stagesOrder: ('syntax' | 'boundary' | 'collision' | 'dryrun')[] = ['syntax', 'boundary', 'collision', 'dryrun'];
@@ -407,24 +384,9 @@ export const ConfigPushPage: React.FC = () => {
     setDeployResult(null);
 
     try {
-      const headers: Record<string, string> = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      };
-      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
+      const { ok, data } = await pushSwitchConfig(selectedSwitchIds, configPayload, false, selectedTenant);
 
-      const res = await fetch('/api/v5/switch-config/push', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          switch_ids: selectedSwitchIds,
-          config_payload: configPayload,
-          dry_run: false
-        })
-      });
-
-      const data = await res.json();
-      if (res.ok) {
+      if (ok) {
         setDeployResult(data);
       } else {
         setDeployError(data.detail || 'Live deployment failed');

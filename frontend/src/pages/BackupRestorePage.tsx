@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card } from '../components/Card';
-import { useAuth } from '../context/AuthContext';
+import {
+  fetchBackups, fetchBackupSchedules, fetchInventory, fetchBackupTaskStatus,
+  createBackupSnapshot, fetchBackupContent, fetchBackupDiff, restoreBackup,
+  createBackupSchedule, deleteBackupSchedule
+} from '../lib/api';
 import { 
   Database, 
   Calendar, 
@@ -53,17 +57,7 @@ interface FabricItem {
   fabric_name: string;
 }
 
-interface TaskStatus {
-  task_id: string;
-  status: string;
-  ready: boolean;
-  result?: any;
-  error?: string;
-}
-
 export const BackupRestorePage: React.FC = () => {
-  const { token } = useAuth();
-  
   const [activeTab, setActiveTab] = useState<'snapshots' | 'schedules'>('snapshots');
   const [loading, setLoading] = useState(true);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
@@ -102,26 +96,21 @@ export const BackupRestorePage: React.FC = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const headers = { 'Authorization': `Bearer ${token}` };
-      
       // 1. Fetch Backups
-      const backupsRes = await fetch('/api/v5/backups', { headers });
-      if (backupsRes.ok) {
-        const backupsData = await backupsRes.json();
+      const backupsData = await fetchBackups();
+      if (backupsData) {
         setSnapshots(backupsData);
       }
 
       // 2. Fetch Schedules
-      const schedulesRes = await fetch('/api/v5/backups/schedules', { headers });
-      if (schedulesRes.ok) {
-        const schedulesData = await schedulesRes.json();
+      const schedulesData = await fetchBackupSchedules();
+      if (schedulesData) {
         setSchedules(schedulesData);
       }
 
       // 3. Fetch Switches (for selection dropdown)
-      const swRes = await fetch('/api/v5/visibility/inventory', { headers });
-      if (swRes.ok) {
-        const swData = await swRes.json();
+      const swData = await fetchInventory();
+      if (swData) {
         const swList = Array.isArray(swData) ? swData : (swData.items || []);
         setSwitches(swList.map((s: any) => ({
           switch_id: s.switch_id,
@@ -156,20 +145,18 @@ export const BackupRestorePage: React.FC = () => {
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
-  }, [token]);
+  }, []);
 
   // Celery Task Status Polling helper
   const startTaskPolling = (taskId: string, isRestore: boolean = false) => {
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     
     setTaskSuccess(null);
-    const headers = { 'Authorization': `Bearer ${token}` };
     
     pollIntervalRef.current = setInterval(async () => {
       try {
-        const res = await fetch(`/api/v5/backups/tasks/${taskId}`, { headers });
-        if (res.ok) {
-          const taskData: TaskStatus = await res.json();
+        const taskData = await fetchBackupTaskStatus(taskId);
+        if (taskData) {
           const displayStatus = taskData.status.toUpperCase();
           
           if (isRestore) {
@@ -223,20 +210,11 @@ export const BackupRestorePage: React.FC = () => {
     setTaskStatusMsg("Triggering Celery snapshot task...");
     setTaskSuccess(null);
     try {
-      const res = await fetch('/api/v5/backups/snapshot', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ switch_id: selectedSwitch })
-      });
+      const res = await createBackupSnapshot(selectedSwitch);
       if (res.ok) {
-        const data = await res.json();
-        startTaskPolling(data.task_id, false);
+        startTaskPolling(res.data.task_id, false);
       } else {
-        const err = await res.json();
-        setTaskStatusMsg(`Error: ${err.detail || 'Failed to trigger snapshot.'}`);
+        setTaskStatusMsg(`Error: ${res.detail || 'Failed to trigger snapshot.'}`);
         setTakingSnapshot(false);
       }
     } catch (e) {
@@ -251,11 +229,8 @@ export const BackupRestorePage: React.FC = () => {
     setConfigLoading(true);
     setConfigSearchQuery("");
     try {
-      const res = await fetch(`/api/v5/backups/${snap.backup_id}/content`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await fetchBackupContent(snap.backup_id);
+      if (data) {
         setViewingConfig(data.config_content || "No configuration content found.");
       } else {
         setViewingConfig("Failed to load configuration content.");
@@ -271,11 +246,8 @@ export const BackupRestorePage: React.FC = () => {
     setDiffLoading(true);
     setDiffData(null);
     try {
-      const res = await fetch(`/api/v5/backups/diff/${snap.backup_id}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await fetchBackupDiff(snap.backup_id);
+      if (data) {
         setDiffData(data);
       }
     } catch (e) {
@@ -291,20 +263,11 @@ export const BackupRestorePage: React.FC = () => {
     setRestoreSuccess(false);
     setRestoreTaskStatus("Initiating rollback configuration transfer...");
     try {
-      const res = await fetch('/api/v5/backups/restore', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ backup_id: confirmRestore.backup_id })
-      });
+      const res = await restoreBackup(confirmRestore.backup_id);
       if (res.ok) {
-        const data = await res.json();
-        startTaskPolling(data.task_id, true);
+        startTaskPolling(res.data.task_id, true);
       } else {
-        const err = await res.json();
-        setRestoreTaskStatus(`Error: ${err.detail || 'Failed to start restore rollback.'}`);
+        setRestoreTaskStatus(`Error: ${res.detail || 'Failed to start restore rollback.'}`);
         setRestoring(false);
       }
     } catch (e) {
@@ -316,18 +279,8 @@ export const BackupRestorePage: React.FC = () => {
   const handleCreateSchedule = async () => {
     setCreatingSchedule(true);
     try {
-      const res = await fetch('/api/v5/backups/schedules', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          fabric_id: selectedFabric === 'all' ? null : selectedFabric,
-          schedule_interval: selectedInterval
-        })
-      });
-      if (res.ok) {
+      const ok = await createBackupSchedule(selectedFabric === 'all' ? null : selectedFabric, selectedInterval);
+      if (ok) {
         setShowScheduleModal(false);
         fetchData();
       }
@@ -341,11 +294,8 @@ export const BackupRestorePage: React.FC = () => {
   const handleDeleteSchedule = async (scheduleId: string) => {
     if (!confirm("Are you sure you want to delete this scheduled backup rule?")) return;
     try {
-      const res = await fetch(`/api/v5/backups/schedules/${scheduleId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
+      const ok = await deleteBackupSchedule(scheduleId);
+      if (ok) {
         fetchData();
       }
     } catch (e) {

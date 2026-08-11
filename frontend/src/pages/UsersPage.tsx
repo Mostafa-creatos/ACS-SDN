@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { fetchUsers, createUser, deactivateUser, updateUser, revokeTenantAccess } from '../lib/api';
-import type { User } from '../lib/types';
+import type { User } from '../types';
 import { Trash2, UserPlus, CheckCircle2, XCircle } from 'lucide-react';
 
 export const UsersPage: React.FC = () => {

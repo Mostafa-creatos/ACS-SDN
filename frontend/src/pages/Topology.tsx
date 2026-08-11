@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { StatusPill } from '../components/StatusPill';
 import { Save, RefreshCw, X, AlertOctagon, ChevronRight, Eye, EyeOff } from 'lucide-react';
 import { ChassisRenderer } from '../components/ChassisRenderer';
+import { fetchTopologyGraph, fetchEndpoints } from '../lib/api';
 
 cytoscape.use(fcose);
 cytoscape.use(dagre);
@@ -60,7 +61,7 @@ const HOST_ICON = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="htt
 
 export const Topology: React.FC = () => {
   const navigate = useNavigate();
-  const { token, selectedTenant } = useAuth();
+  const { selectedTenant } = useAuth();
   
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
@@ -116,33 +117,14 @@ export const Topology: React.FC = () => {
   const loadGraphData = async () => {
     setLoading(true);
     try {
-      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
-      if (selectedTenant) {
-        headers['X-Tenant-ID'] = selectedTenant;
-      }
-
-      const [topoRes, epRes] = await Promise.all([
-        fetch('/api/v5/topology/graph', { headers }),
-        fetch('/api/v5/visibility/endpoints', { headers }),
+      const [topoData, epData] = await Promise.all([
+        fetchTopologyGraph(selectedTenant),
+        fetchEndpoints(selectedTenant),
       ]);
-      
-      let fetchedNodes: NodeData[] = [];
-      let fetchedEdges: EdgeData[] = [];
 
-      if (topoRes.ok) {
-        const data = await topoRes.json();
-        fetchedNodes = data.nodes || [];
-        fetchedEdges = data.edges || [];
-      } else {
-        fetchedNodes = [];
-        fetchedEdges = [];
-      }
-
-      const fetchedEndpoints: EndpointData[] = epRes.ok ? await epRes.json() : [];
-
-      setNodes(fetchedNodes);
-      setEdges(fetchedEdges);
-      setEndpoints(fetchedEndpoints);
+      setNodes(topoData?.nodes || []);
+      setEdges(topoData?.edges || []);
+      setEndpoints(epData || []);
     } catch (e) {
       setNodes([]);
       setEdges([]);
@@ -154,7 +136,7 @@ export const Topology: React.FC = () => {
 
   useEffect(() => {
     loadGraphData();
-  }, [token, selectedTenant]);
+  }, [selectedTenant]);
 
   // Persist showEndpoints preference
   useEffect(() => {

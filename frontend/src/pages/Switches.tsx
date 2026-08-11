@@ -2,12 +2,16 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Card } from '../components/Card';
 
 import { useAuth } from '../context/AuthContext';
+import {
+  fetchInventory, fetchComplianceLatest, fetchSwitchSnapshots,
+  takeSwitchSnapshot, rollbackSwitchConfig, acceptSwitchDrift
+} from '../lib/api';
 import { HardwareHealthIcon } from '../components/HealthBadge';
 import { FabricVltTab } from '../components/FabricVltTab';
 import { HardwareHealthTab } from '../components/HardwareHealthTab';
 import { AddSwitchModal } from '../components/AddSwitchModal';
 import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
-import type { DellSwitchDetails, PaginatedResponse } from '../types/switch-types';
+import type { DellSwitchDetails } from '../types/switch-types';
 import {
   Search, Filter, RotateCw, ChevronDown, ChevronUp,
   CheckCircle2, Hash, Network,
@@ -26,7 +30,7 @@ interface ConfigSnapshot {
 }
 
 export const Switches: React.FC = () => {
-  const { token, selectedTenant } = useAuth();
+  const { selectedTenant } = useAuth();
 
   // List state
   const [switches, setSwitches] = useState<DellSwitchDetails[]>([]);
@@ -85,12 +89,8 @@ export const Switches: React.FC = () => {
       params.set('sort_by', 'hostname');
       params.set('sort_order', 'asc');
 
-      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
-      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
-
-      const res = await fetch(`/api/v5/visibility/inventory?${params}`, { headers });
-      if (res.ok) {
-        const data: PaginatedResponse = await res.json();
+      const data = await fetchInventory(params, selectedTenant);
+      if (data) {
         setSwitches(data.items);
         setTotalPages(data.total_pages);
         setTotalItems(data.total);
@@ -103,7 +103,7 @@ export const Switches: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [token, search, statusFilter, vendorFilter, roleFilter, page, selectedTenant]);
+  }, [search, statusFilter, vendorFilter, roleFilter, page, selectedTenant]);
 
   useEffect(() => { fetchSwitches(); }, [fetchSwitches]);
 
@@ -111,11 +111,8 @@ export const Switches: React.FC = () => {
   const fetchSnapshots = useCallback(async (switchId: string) => {
     setSnapshotLoading(true);
     try {
-      const res = await fetch(`/api/v5/visibility/snapshots?switch_id=${switchId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data: ConfigSnapshot[] = await res.json();
+      const data = await fetchSwitchSnapshots(switchId);
+      if (data) {
         setLocalSnapshots(prev => ({ ...prev, [switchId]: data }));
         if (data.length >= 2) { setSelectedSnap1(data[0].snapshot_id); setSelectedSnap2(data[1].snapshot_id); }
         else if (data.length === 1) { setSelectedSnap1(data[0].snapshot_id); setSelectedSnap2(''); }
@@ -129,16 +126,13 @@ export const Switches: React.FC = () => {
     } finally {
       setSnapshotLoading(false);
     }
-  }, [token]);
+  }, []);
 
   // ── Fetch compliance findings for a switch ──────────────────────────────────
   const fetchCompliance = useCallback(async (switchId: string) => {
     try {
-      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
-      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
-      const res = await fetch('/api/v5/visibility/compliance/latest', { headers });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await fetchComplianceLatest(undefined, selectedTenant);
+      if (data) {
         const filtered = (data.findings || []).filter((f: any) => f.switch_id === switchId);
         setComplianceFindings(prev => ({ ...prev, [switchId]: filtered }));
       } else {
@@ -148,7 +142,7 @@ export const Switches: React.FC = () => {
       showToast('Failed to load compliance data', 'warning');
       setComplianceFindings(prev => ({ ...prev, [switchId]: [] }));
     }
-  }, [token, selectedTenant]);
+  }, [selectedTenant]);
 
   // ── Expand row ───────────────────────────────────────────────────────────────
   const toggleExpand = (id: string) => {
@@ -216,12 +210,9 @@ export const Switches: React.FC = () => {
     if (!activeSwitch) return;
     setTakingSnapshot(true);
     try {
-      const res = await fetch(`/api/v5/visibility/snapshots?switch_id=${activeSwitch.switch_id}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-      });
+      const res = await takeSwitchSnapshot(activeSwitch.switch_id);
       if (res.ok) { showToast(`Snapshot taken for ${activeSwitch.hostname}`, 'success'); fetchSnapshots(activeSwitch.switch_id); }
-      else { const e = await res.json().catch(() => ({})); showToast(e.detail || 'Failed to take snapshot', 'warning'); }
+      else { showToast(res.detail || 'Failed to take snapshot', 'warning'); }
     } catch { showToast('Failed to take snapshot', 'warning'); }
     finally { setTakingSnapshot(false); }
   };
@@ -229,13 +220,9 @@ export const Switches: React.FC = () => {
   const handleRollback = async (snapId: string) => {
     if (!activeSwitch || !snapId) return;
     try {
-      const res = await fetch('/api/v5/visibility/rollback', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ snapshot_id: snapId, dry_run: activeSwitch.role === 'spine' })
-      });
+      const res = await rollbackSwitchConfig(snapId, activeSwitch.role === 'spine');
       if (res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = res.data || {};
         if (activeSwitch.role === 'spine' || body.status === 'APPROVAL_REQUIRED') {
           showToast(body.message || 'Pending Four-Eyes Approval — queued, not executed.', 'warning');
         } else {
@@ -243,8 +230,7 @@ export const Switches: React.FC = () => {
           fetchSwitches();
         }
       } else {
-        const e = await res.json().catch(() => ({}));
-        showToast(e.detail || 'Rollback failed', 'warning');
+        showToast(res.detail || 'Rollback failed', 'warning');
       }
     } catch {
       showToast('Network error — rollback request could not be sent.', 'warning');
@@ -255,13 +241,9 @@ export const Switches: React.FC = () => {
     if (!activeSwitch) return;
     setAcceptingDrift(true);
     try {
-      const res = await fetch('/api/v5/visibility/accept-drift', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ switch_id: activeSwitch.switch_id })
-      });
+      const res = await acceptSwitchDrift(activeSwitch.switch_id);
       if (res.ok) { showToast(`Drift accepted as new baseline for ${activeSwitch.hostname}`, 'success'); fetchSwitches(); fetchSnapshots(activeSwitch.switch_id); }
-      else { const e = await res.json().catch(() => ({})); showToast(e.detail || 'Failed to accept drift', 'warning'); }
+      else { showToast(res.detail || 'Failed to accept drift', 'warning'); }
     } catch { showToast('Failed to accept drift', 'warning'); }
     finally { setAcceptingDrift(false); }
   };

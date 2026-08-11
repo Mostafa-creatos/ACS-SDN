@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { refreshAccessToken } from '../lib/api';
 
 export type UserRole = 'Platform Admin' | 'Tenant Admin' | 'Operator' | 'Read-only' | 'platform_admin' | 'tenant_admin';
 
@@ -104,13 +105,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (storedToken && isTokenExpired(storedToken)) {
       const storedRefresh = localStorage.getItem('atlas_refresh');
       if (storedRefresh) {
-        fetch('/api/v5/auth/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: storedRefresh })
-        })
-          .then(r => r.json())
-          .then(data => {
+        refreshAccessToken(storedRefresh)
+          .then(({ data }) => {
             if (data.access_token) {
               setToken(data.access_token);
               if (data.refresh_token) localStorage.setItem('atlas_refresh', data.refresh_token);
@@ -141,13 +137,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const storedRefresh = localStorage.getItem('atlas_refresh');
     if (!storedRefresh) return false;
     try {
-      const res = await fetch('/api/v5/auth/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: storedRefresh })
-      });
-      if (!res.ok) return false;
-      const data = await res.json();
+      const { ok, data } = await refreshAccessToken(storedRefresh);
+      if (!ok) return false;
       setToken(data.access_token);
       if (data.refresh_token) localStorage.setItem('atlas_refresh', data.refresh_token);
       return true;

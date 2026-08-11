@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, Link, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { checkBackendHealth } from '../lib/api';
 import atlasLogo from '../assets/atlas-logo.svg';
 import { 
   LayoutDashboard, 
@@ -33,8 +34,7 @@ export const AppShell: React.FC = () => {
   useEffect(() => {
     const checkHealth = async () => {
       try {
-        const res = await fetch('/api/v5/', { method: 'HEAD' });
-        setBackendConnected(res.ok);
+        setBackendConnected(await checkBackendHealth());
       } catch {
         setBackendConnected(false);
       }

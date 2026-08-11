@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card } from '../components/Card';
 import { useAuth } from '../context/AuthContext';
+import { fetchStpStatus } from '../lib/api';
 import { 
   Network, 
   RotateCw,
@@ -26,7 +27,7 @@ interface SwitchSTPInfo {
 }
 
 export const STPPage: React.FC = () => {
-  const { token, selectedTenant } = useAuth();
+  const { selectedTenant } = useAuth();
   const [stpData, setStpData] = useState<SwitchSTPInfo[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -36,25 +37,15 @@ export const STPPage: React.FC = () => {
   const fetchSTPData = useCallback(async () => {
     setLoading(true);
     try {
-      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
-      if (selectedTenant) {
-        headers['X-Tenant-ID'] = selectedTenant;
-      }
-      
-      const response = await fetch('/api/v5/visibility/stp', { headers });
-      if (response.ok) {
-        const data = await response.json();
-        setStpData(data);
-      } else {
-        setStpData([]);
-      }
+      const data = await fetchStpStatus(selectedTenant);
+      setStpData(data ?? []);
     } catch (err) {
       console.error('Failed to fetch STP data:', err);
       setStpData([]);
     } finally {
       setLoading(false);
     }
-  }, [token, selectedTenant]);
+  }, [selectedTenant]);
 
   useEffect(() => {
     fetchSTPData();

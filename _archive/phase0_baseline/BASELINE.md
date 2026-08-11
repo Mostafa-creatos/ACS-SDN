@@ -85,3 +85,43 @@ Refactor base: **commit `144cdeb7`**, working tree clean (earlier uncommitted wo
 | Frontend `tsc -b && vite build` | exit 0 (~45s) |
 | Frontend `npm run lint` | **125 errors / 16 warnings** — identical to baseline, zero new |
 | `print()` in live `backend/app` | **0** (61 converted; remaining only in archived/dev-gated files) |
+
+## Phase B — API client + types consolidation (2026-08-11)
+
+### What changed (zero functional change to UI behavior)
+
+1. **API client consolidation** — every raw `fetch('/api/...')` call in `frontend/src` was converted to
+   the consolidated client in `frontend/src/lib/api.ts` (~710 lines). Raw `fetch(` now exists ONLY inside
+   `lib/api.ts`. Pages, components, and `AuthContext` delegate: 18 pages (`AuditLogsPage, BackupRestorePage,
+   ChangePasswordPage, Compliance, ConfigPushPage, Dashboard, IPAM, Login, PendingApprovals, ProvisioningStatus,
+   ReportsPage, STPPage, Switches, TenantsPage, Topology, UsersPage, ZtpConsolePage, TenantFabricMapping`) +
+   3 components (`AppShell, AddSwitchModal, DeleteConfirmModal`).
+2. **Types consolidation** — `frontend/src/lib/types.ts` deleted; types consolidated under `frontend/src/types/`
+   (`index.ts` re-export barrel, `user-types.ts`; `switch-types.ts`, `config-push-types.ts` kept). All imports
+   re-pointed (incl. `verbatimModuleSyntax`-compliant `import type`).
+3. **Dead/dev code → `_archive/frontend/src/...`** — `pages/Styleguide.tsx`, `pages/__tests__/ZtpConsole.test.tsx`,
+   `components/config-push/InterfaceFetcher.ts`, `assets/react.svg`.
+
+### Flagged behavior-visible deltas (deliberate; reviewed)
+
+| Delta | Before | After | Why |
+|---|---|---|---|
+| `/styleguide` route | existed (dev-only page, not in nav) | removed | Styleguide.tsx archived as dev/dead code. |
+| Auth header source | per-page `token` from `useAuth()` context | `localStorage['atlas_jwt']` inside client | Same value (context mirrors localStorage); identical header on every call. |
+| `Content-Type` on GETs | absent | `application/json` | Harmless (no body); unified client behavior. |
+| Error-message fallbacks | `await res.text()` per call site | identical text preserved (`errorText` from client; empty→empty) | Matches original exactly. |
+| `react.svg`, `InterfaceFetcher.ts` | unused assets/code | removed/archived | No runtime impact. |
+
+No API routes, contracts, or endpoints touched (frontend-only phase). Backend untouched.
+
+### Phase B gate results (all green)
+
+| Gate | Result |
+|---|---|
+| Frontend `npm run lint` | **121 errors / 14 warnings** = **zero NEW** (delta vs 125/16: api.ts −1 err; BackupRestorePage −1 err −1 warn; Dashboard −1 err; PendingApprovals −1 warn; 4 archived files dropped from scope). No file above baseline. |
+| Frontend `tsc -b && vite build` | exit 0 (~50s; only pre-existing chunk-size + dynamic-import `lib/api.ts` warning) |
+| `console.*` in `frontend/src` | **26** (25× `console.error`, 1× `console.log` at `Topology.tsx:570`) — identical |
+| pytest local | **53 passed, 2 deselected, 0 failed** |
+| Backend compile + import | `ast.parse(feature_version=(3,11))` + `import app.main, app.workers.celery_app` → OK (only pre-existing FastAPIDeprecationWarning) |
+| OpenAPI | unchanged (frontend-only phase) |
+| Lint diff tooling | `Temp\opencode\{lint_diff.py,lint_baseline.json,lint_current.json}` (TEMP, outside repo) |

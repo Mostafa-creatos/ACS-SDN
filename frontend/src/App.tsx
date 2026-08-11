@@ -4,7 +4,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AppShell } from './components/AppShell';
 import { Login } from './pages/Login';
-import { Styleguide } from './pages/Styleguide';
 import { Dashboard } from './pages/Dashboard';
 import { Switches } from './pages/Switches';
 import { Topology } from './pages/Topology';
@@ -52,7 +51,6 @@ export const App: React.FC = () => {
           <Routes>
             {/* Public routes */}
             <Route path="/login" element={<Login />} />
-            <Route path="/styleguide" element={<Styleguide />} />
             <Route path="/change-password" element={<ChangePasswordPage />} />
 
             {/* Protected dashboard shell routes */}

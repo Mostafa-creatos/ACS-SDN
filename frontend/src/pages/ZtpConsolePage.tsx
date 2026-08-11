@@ -3,6 +3,10 @@ import { Link } from 'react-router-dom';
 import { Card } from '../components/Card';
 import { useAuth } from '../context/AuthContext';
 import {
+  fetchDiscoveryPool, fetchFabricsQuiet, fetchDiscoveryStatus,
+  retryDiscovery, assignDiscoveryFabric, removeDiscovery
+} from '../lib/api';
+import {
   Server,
   CheckCircle2,
   XCircle,
@@ -59,7 +63,7 @@ interface ZtpDetail {
 }
 
 export const ZtpConsolePage: React.FC = () => {
-  const { token, user, selectedTenant } = useAuth();
+  const { user, selectedTenant } = useAuth();
   const [records, setRecords] = useState<ZtpRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -89,32 +93,26 @@ export const ZtpConsolePage: React.FC = () => {
 
   const fetchRecords = useCallback(async () => {
     try {
-      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
-      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
-      const response = await fetch('/api/v5/discovery/pool', { headers });
-      if (!response.ok) throw new Error('Failed to fetch ZTP pool');
-      setRecords(await response.json());
+      setRecords(await fetchDiscoveryPool(selectedTenant));
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [token, selectedTenant]);
+  }, [selectedTenant]);
 
   const loadFabrics = useCallback(async () => {
     try {
-      const res = await fetch('/api/v5/admin/fabrics', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        setFabrics(await res.json());
+      const data = await fetchFabricsQuiet();
+      if (data) {
+        setFabrics(data);
       }
     } catch (e) {
       console.error('Failed to load fabrics', e);
     } finally {
       setFabricsLoading(false);
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     fetchRecords();
@@ -132,10 +130,8 @@ export const ZtpConsolePage: React.FC = () => {
     setExpandedId(discoveryId);
     setDetailLoading(true);
     try {
-      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
-      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
-      const res = await fetch(`/api/v5/discovery/pool/${discoveryId}/status`, { headers });
-      if (res.ok) setDetail(await res.json());
+      const data = await fetchDiscoveryStatus(discoveryId, selectedTenant);
+      if (data) setDetail(data);
     } catch {}
     setDetailLoading(false);
   };
@@ -143,15 +139,7 @@ export const ZtpConsolePage: React.FC = () => {
   const handleRetry = async (record: ZtpRecord) => {
     if (record.onboarding_status === 'pending') return;
     try {
-      const headers: Record<string, string> = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      };
-      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
-      await fetch(`/api/v5/discovery/pool/${record.discovery_id}/retry`, {
-        method: 'POST',
-        headers
-      });
+      await retryDiscovery(record.discovery_id, selectedTenant);
       fetchRecords();
     } catch {}
   };
@@ -170,22 +158,11 @@ export const ZtpConsolePage: React.FC = () => {
     setAssigning(true);
     setAssignError('');
     try {
-      const res = await fetch(`/api/v5/discovery/pool/${assignTarget.discovery_id}/assign-fabric`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          fabric_id: selectedFabricId,
-          role: assignRole,
-          hostname: assignHostname
-        })
+      await assignDiscoveryFabric(assignTarget.discovery_id, {
+        fabric_id: selectedFabricId,
+        role: assignRole,
+        hostname: assignHostname
       });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Failed to assign fabric');
-      }
       setAssignTarget(null);
       fetchRecords();
     } catch (err: any) {
@@ -199,12 +176,7 @@ export const ZtpConsolePage: React.FC = () => {
     if (!removeTarget || removeTarget.onboarding_status === 'pending') return;
     setRemoving(true);
     try {
-      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
-      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
-      await fetch(`/api/v5/discovery/pool/${removeTarget.discovery_id}`, {
-        method: 'DELETE',
-        headers
-      });
+      await removeDiscovery(removeTarget.discovery_id, selectedTenant);
       setRecords(prev => prev.filter(r => r.discovery_id !== removeTarget.discovery_id));
       if (expandedId === removeTarget.discovery_id) {
         setExpandedId(null);

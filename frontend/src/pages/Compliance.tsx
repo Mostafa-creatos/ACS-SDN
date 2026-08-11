@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card } from '../components/Card';
 import { useAuth } from '../context/AuthContext';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { fetchComplianceRules, updateComplianceRule } from '../lib/api';
+import { fetchComplianceRules, updateComplianceRule, fetchComplianceLatest, fetchComplianceHistory, runComplianceAudit, fetchComplianceRunDetail, remediateComplianceFinding } from '../lib/api';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -253,7 +253,7 @@ const SwitchGroup: React.FC<{
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export const Compliance: React.FC = () => {
-  const { token, selectedTenant } = useAuth();
+  const { selectedTenant } = useAuth();
 
   const [data, setData]           = useState<ComplianceData | null>(null);
   const [error, setError]         = useState('');
@@ -287,12 +287,6 @@ export const Compliance: React.FC = () => {
   // Auto-refresh ref
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const headers = useCallback((): Record<string, string> => {
-    const h: Record<string, string> = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-    if (selectedTenant) h['X-Tenant-ID'] = selectedTenant;
-    return h;
-  }, [token, selectedTenant]);
-
   // ── Load compliance data (paginated) ──────────────────────────────────────
   const loadData = useCallback(async (p = 1) => {
     try {
@@ -301,29 +295,28 @@ export const Compliance: React.FC = () => {
       if (switchFilter)   params.set('switch_id', switchFilter);
       if (statusFilter)   params.set('status', statusFilter);
 
-      const res = await fetch(`/api/v5/visibility/compliance/latest?${params}`, { headers: headers() });
-      if (!res.ok) { setError('API unavailable'); return; }
-      const json: ComplianceData = await res.json();
+      const json = await fetchComplianceLatest(params, selectedTenant);
+      if (!json) { setError('API unavailable'); return; }
       setData(json);
       setError('');
     } catch {
       setError('Failed to load compliance data');
     }
-  }, [headers, severityFilter, switchFilter, statusFilter]);
+  }, [selectedTenant, severityFilter, switchFilter, statusFilter]);
 
   // ── Load trend history ────────────────────────────────────────────────────
   const loadHistory = useCallback(async () => {
     try {
-      const res = await fetch('/api/v5/visibility/compliance/history?limit=30', { headers: headers() });
-      if (!res.ok) return;
-      const runs: HistoryRun[] = await res.json();
-      setHistory(runs);
-      setTrendData(runs.slice().reverse().map(r => ({
-        name: new Date(r.started_at).toLocaleDateString('en-GB', { month: '2-digit', day: '2-digit' }),
-        score: r.compliance_score_pct || 0
-      })));
+      const runs: HistoryRun[] = await fetchComplianceHistory(selectedTenant);
+      if (runs) {
+        setHistory(runs);
+        setTrendData(runs.slice().reverse().map(r => ({
+          name: new Date(r.started_at).toLocaleDateString('en-GB', { month: '2-digit', day: '2-digit' }),
+          score: r.compliance_score_pct || 0
+        })));
+      }
     } catch { /* ignore */ }
-  }, [headers]);
+  }, [selectedTenant]);
 
   // ── Load rules ────────────────────────────────────────────────────────────
   const loadRules = useCallback(async (quiet = false) => {
@@ -338,7 +331,7 @@ export const Compliance: React.FC = () => {
     loadData(1);
     loadHistory();
     loadRules();
-  }, [token, selectedTenant]);
+  }, [selectedTenant]);
 
   // ── Re-load when filters/page change ─────────────────────────────────────
   useEffect(() => { loadData(page); }, [page, severityFilter, switchFilter, statusFilter]);
@@ -364,7 +357,7 @@ export const Compliance: React.FC = () => {
     const interval = setInterval(() => setAuditProgress(p => p >= 85 ? p : p + 5), 400);
     try {
       setAuditMessage('Scanning running configs across fabric switches…');
-      const res = await fetch('/api/v5/visibility/compliance/run', { method: 'POST', headers: headers() });
+      const res = await runComplianceAudit(selectedTenant);
       clearInterval(interval);
       if (res.ok) {
         setAuditProgress(100);
@@ -374,7 +367,7 @@ export const Compliance: React.FC = () => {
         await loadHistory();
         setPage(1);
       } else {
-        throw new Error(await res.text());
+        throw new Error(res.errorText || '');
       }
     } catch (e: any) {
       clearInterval(interval);
@@ -389,9 +382,9 @@ export const Compliance: React.FC = () => {
     setRunDetailsLoading(true);
     setRunDetails(null);
     try {
-      const res = await fetch(`/api/v5/visibility/compliance/runs/${runId}`, { headers: headers() });
-      if (res.ok) {
-        setRunDetails(await res.json());
+      const json = await fetchComplianceRunDetail(runId, selectedTenant);
+      if (json) {
+        setRunDetails(json);
       } else {
         alert("Failed to load compliance report details");
       }
@@ -416,10 +409,7 @@ export const Compliance: React.FC = () => {
   const handleRemediate = async (findingId: string) => {
     setRemediating(prev => new Set(prev).add(findingId));
     try {
-      const res = await fetch(`/api/v5/visibility/compliance/findings/${findingId}/remediate`, {
-        method: 'POST',
-        headers: headers()
-      });
+      const res = await remediateComplianceFinding(findingId, selectedTenant);
       if (res.ok) {
         // Optimistic update: mark as pending immediately
         setData(prev => prev ? {
@@ -429,7 +419,7 @@ export const Compliance: React.FC = () => {
           )
         } : prev);
       } else {
-        alert(`Remediation failed: ${await res.text()}`);
+        alert(`Remediation failed: ${res.errorText || ''}`);
       }
     } catch (e: any) {
       alert(`Error: ${e.message}`);

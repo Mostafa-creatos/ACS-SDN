@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card } from '../components/Card';
 import { ProgressBar } from '../components/ProgressBar';
-import { useAuth } from '../context/AuthContext';
 import { 
   Search, 
   Plus, 
@@ -13,7 +12,7 @@ import {
   RefreshCw,
   Server
 } from 'lucide-react';
-import { fetchFabrics, fetchVrfs, createSubnet, fetchProvisioningJobs, redeploySubnet } from '../lib/api';
+import { fetchFabrics, fetchVrfs, createSubnet, fetchProvisioningJobs, redeploySubnet, fetchAllSubnets, searchIp } from '../lib/api';
 
 interface Subnet {
   subnet_id: string;
@@ -60,7 +59,6 @@ interface ProvisioningJob {
 }
 
 export const IPAM: React.FC = () => {
-  const { token } = useAuth();
   
   const [activeTab, setActiveTab] = useState<'subnets' | 'provisioning'>('subnets');
   const [subnets, setSubnets] = useState<Subnet[]>([]);
@@ -97,25 +95,19 @@ export const IPAM: React.FC = () => {
   const fetchSubnetsData = async () => {
     setLoading(true);
     try {
-      const headers = { 'Authorization': `Bearer ${token}` };
-      const response = await fetch('/api/v5/admin/subnets', { headers });
-      if (response.ok) {
-        const data = await response.json();
-        // Map backend properties to dashboard schema
-        const mapped = data.map((s: any) => ({
-          subnet_id: s.subnet_id,
-          vrf_name: s.vrf_name || 'N/A',
-          subnet_cidr: s.subnet_cidr,
-          anycast_gateway_ip: s.anycast_gateway_ip,
-          vlan_id: s.vlan_id,
-          total_ips: s.total_ips || 254,
-          used_ips: s.used_ips || 0,
-          available_ips: (s.total_ips || 254) - (s.used_ips || 0)
-        }));
-        setSubnets(mapped);
-      } else {
-        setSubnets([]);
-      }
+      const data = await fetchAllSubnets();
+      // Map backend properties to dashboard schema
+      const mapped = data.map((s: any) => ({
+        subnet_id: s.subnet_id,
+        vrf_name: s.vrf_name || 'N/A',
+        subnet_cidr: s.subnet_cidr,
+        anycast_gateway_ip: s.anycast_gateway_ip,
+        vlan_id: s.vlan_id,
+        total_ips: s.total_ips || 254,
+        used_ips: s.used_ips || 0,
+        available_ips: (s.total_ips || 254) - (s.used_ips || 0)
+      }));
+      setSubnets(mapped);
     } catch (e) {
       setSubnets([]);
     } finally {
@@ -167,7 +159,7 @@ export const IPAM: React.FC = () => {
   useEffect(() => {
     fetchSubnetsData();
     loadJobs();
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     if (isModalOpen) {
@@ -197,12 +189,8 @@ export const IPAM: React.FC = () => {
     setSearchResult(null);
 
     try {
-      const response = await fetch(`/api/v5/ipam/search?ip=${searchIP}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
+      const data = await searchIp(searchIP);
+      if (data) {
         setSearchResult(data);
       } else {
         setSearchResult(null);

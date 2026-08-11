@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Card } from '../components/Card';
 import { useAuth } from '../context/AuthContext';
+import { fetchReportCsv } from '../lib/api';
 import { 
   Download, 
   FileSpreadsheet, 
@@ -64,7 +65,7 @@ const ReportCard: React.FC<ReportCardProps> = ({
 };
 
 export const ReportsPage: React.FC = () => {
-  const { token, selectedTenant } = useAuth();
+  const { selectedTenant } = useAuth();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -72,14 +73,8 @@ export const ReportsPage: React.FC = () => {
     setErrorMsg(null);
     setSuccessMsg(null);
     try {
-      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
-      if (selectedTenant) {
-        headers['X-Tenant-ID'] = selectedTenant;
-      }
-      
-      const response = await fetch(`/api/v5/visibility/reports/csv?report_type=${reportType}`, { headers });
-      if (response.ok) {
-        const blob = await response.blob();
+      const { ok, blob, errorText } = await fetchReportCsv(reportType, selectedTenant);
+      if (ok && blob) {
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -90,8 +85,7 @@ export const ReportsPage: React.FC = () => {
         window.URL.revokeObjectURL(url);
         setSuccessMsg(`Successfully downloaded ${filename}`);
       } else {
-        const errDetail = await response.text();
-        setErrorMsg(`Failed to generate report: ${errDetail || response.statusText}`);
+        setErrorMsg(`Failed to generate report: ${errorText}`);
       }
     } catch (err) {
       console.error(err);

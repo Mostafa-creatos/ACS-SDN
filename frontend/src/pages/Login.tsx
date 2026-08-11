@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { loginUser, changePassword } from '../lib/api';
 import { Card } from '../components/Card';
 import logo from '../assets/atlas-logo.svg';
 import { ShieldAlert, Info, Key } from 'lucide-react';
@@ -25,14 +26,9 @@ export const Login: React.FC = () => {
     setError(null);
 
     try {
-      const response = await fetch('/api/v5/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: email, password })
-      });
+      const { ok, data } = await loginUser(email, password);
 
-      if (response.ok) {
-        const data = await response.json();
+      if (ok) {
         login(data.access_token, data.refresh_token);
 
         const decoded = decodeToken(data.access_token);
@@ -42,8 +38,7 @@ export const Login: React.FC = () => {
           navigate('/dashboard');
         }
       } else {
-        const errData = await response.json().catch(() => ({}));
-        setError(errData.detail || 'Authentication failed. Please verify credentials.');
+        setError(data.detail || 'Authentication failed. Please verify credentials.');
       }
     } catch (err) {
       setError('Unable to reach the backend server. Please try again later.');
@@ -56,15 +51,7 @@ export const Login: React.FC = () => {
     e.preventDefault();
     setPwLoading(true);
     try {
-      const res = await fetch('/api/v5/auth/change-password', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('atlas_jwt')}`
-        },
-        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
-      });
-      if (!res.ok) throw new Error('Failed to change password');
+      await changePassword({ current_password: currentPassword, new_password: newPassword });
       setShowChangePw(false);
       navigate('/dashboard');
     } catch (err: any) {

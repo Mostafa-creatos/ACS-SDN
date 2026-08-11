@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card } from '../components/Card';
 import { useAuth } from '../context/AuthContext';
+import { fetchAuditLogs } from '../lib/api';
 import {
   ShieldAlert,
   RefreshCw,
@@ -39,7 +40,7 @@ interface AuditLogEntry {
 }
 
 export const AuditLogsPage: React.FC = () => {
-  const { token, user, selectedTenant } = useAuth();
+  const { user, selectedTenant } = useAuth();
 
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -64,7 +65,7 @@ export const AuditLogsPage: React.FC = () => {
   useEffect(() => {
     if (!isPlatformAdmin) return;
     fetchLogs();
-  }, [token, selectedTenant, isPlatformAdmin, page, actionFilter, statusFilter, dateRange]);
+  }, [selectedTenant, isPlatformAdmin, page, actionFilter, statusFilter, dateRange]);
 
   const getStartDate = () => {
     if (dateRange === 'ALL') return '';
@@ -87,20 +88,17 @@ export const AuditLogsPage: React.FC = () => {
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` };
-      if (selectedTenant) headers['X-Tenant-ID'] = selectedTenant;
-      
       const start = getStartDate();
-      let url = `/api/v5/admin/audit-logs?page=${page}&limit=${pageSize}`;
-      if (actionFilter !== 'ALL') url += `&action=${encodeURIComponent(actionFilter)}`;
-      if (statusFilter !== 'ALL') url += `&status=${encodeURIComponent(statusFilter)}`;
-      if (start) url += `&start_date=${encodeURIComponent(start)}`;
-      if (searchQuery) url += `&search=${encodeURIComponent(searchQuery)}`;
-      if (selectedTenant) url += `&tenant_id=${encodeURIComponent(selectedTenant)}`;
-
-      const res = await fetch(url, { headers });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await fetchAuditLogs({
+        page,
+        limit: pageSize,
+        action: actionFilter !== 'ALL' ? actionFilter : '',
+        status: statusFilter !== 'ALL' ? statusFilter : '',
+        start_date: start,
+        search: searchQuery,
+        tenant_id: selectedTenant
+      }, selectedTenant);
+      if (data) {
         setLogs(data.logs || []);
         setTotalCount(data.total_count || 0);
         setTotalPages(data.pages || 1);
