@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from fastapi import Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
-from .auth import get_current_user_claims
+from .core.auth import get_current_user_claims
 from .db import get_db
 from . import models
 from app.core.logging_config import get_logger

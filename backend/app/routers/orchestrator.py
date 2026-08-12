@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.config import settings
 from app.db import get_db
-from app.auth import get_current_user_claims
+from app.core.auth import get_current_user_claims
 from app.auth_permissions import require_permission
 from app.drivers.factory import resolve_southbound_driver
 from app.core.logging_config import get_logger
@@ -475,7 +475,7 @@ def enqueue_config_push(
     db: Session = Depends(get_db),
     claims: dict = Depends(require_permission("inventory:write"))
 ):
-    from app.auth import verify_switch_access
+    from app.core.auth import verify_switch_access
     from app.workers.sync_tasks import sync_switch_config_task
     sw_uuid = uuid.UUID(payload.switch_id)
     verify_switch_access(db, sw_uuid, claims)

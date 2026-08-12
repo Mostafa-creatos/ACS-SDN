@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from .. import models
 from ..config import settings
-from ..auth import get_current_user_claims, validate_password_complexity
+from ..core.auth import get_current_user_claims, validate_password_complexity
 
 logger = logging.getLogger(__name__)
 

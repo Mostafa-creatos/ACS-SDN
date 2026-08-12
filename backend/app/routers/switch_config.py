@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.db import get_db
-from app.auth import verify_switch_access
+from app.core.auth import verify_switch_access
 from app.auth_permissions import require_permission
 from app.drivers.dell_os10 import DellOS10Driver
 from app.drivers.factory import resolve_southbound_driver

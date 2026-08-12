@@ -164,3 +164,22 @@ Notes:
 | Frontend `tsc -b && vite build` | exit 0 (unchanged; frontend untouched) |
 | Frontend `npm run lint` | **121 errors / 14 warnings** — unchanged (frontend untouched) |
 | `print()` in live `backend/app` | **0** |
+
+## Phase D — Core utilities consolidation (2026-08-12)
+
+### What changed (zero functional change to API behavior)
+
+Moved `backend/app/auth.py` → `backend/app/core/auth.py` to consolidate core utilities (auth, db_migrations, startup, constants, logging_config) into the `core/` package.
+
+- **Files moved**: `backend/app/auth.py` → `backend/app/core/auth.py`
+- **Files updated**: `auth_permissions.py`, `routers/{auth,inventory,orchestrator,switch_config,visibility}.py` (import paths updated)
+- **`schemas.py` and `models.py`**: kept as single files (too small / too risky for the organizational benefit)
+
+### Phase D gate results (all green)
+
+| Gate | Result |
+|---|---|
+| pytest local | **53 passed, 2 deselected, 0 failed** |
+| Backend compile + import | `ast.parse(feature_version=(3,11))` 49 files + `import app.main, app.workers.celery_app` → OK |
+| Frontend `tsc -b && vite build` | exit 0 (~67s; unchanged frontend) |
+| Frontend `npm run lint` | **121 errors / 14 warnings** — identical to Phase C (frontend untouched) |

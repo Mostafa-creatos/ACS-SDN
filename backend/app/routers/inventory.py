@@ -13,7 +13,7 @@ from sqlalchemy import or_
 
 from ..db import get_db
 from .. import models
-from ..auth import verify_switch_access
+from ..core.auth import verify_switch_access
 from ..auth_permissions import require_permission
 
 logger = logging.getLogger(__name__)
@@ -494,7 +494,7 @@ def update_switch(switch_id: uuid.UUID, payload: SwitchUpdate, db: Session = Dep
 # Delete Switch
 @router.delete("/admin/switches/{switch_id}")
 def delete_switch(switch_id: uuid.UUID, db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
-    from ..auth import verify_switch_access
+    from ..core.auth import verify_switch_access
     verify_switch_access(db, switch_id, claims)
         
     sw = db.query(models.Switch).filter(models.Switch.switch_id == switch_id).first()
@@ -515,7 +515,7 @@ def rollback_switch(id: uuid.UUID, db: Session = Depends(get_db), claims: dict =
     if not switch:
         raise HTTPException(status_code=404, detail="Switch not found.")
 
-    from ..auth import verify_switch_access
+    from ..core.auth import verify_switch_access
     verify_switch_access(db, id, claims)
 
     if switch.role.lower() == "spine":

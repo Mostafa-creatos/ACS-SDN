@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.db import get_db
-from app.auth import verify_switch_access
+from app.core.auth import verify_switch_access
 from app.auth_permissions import require_permission
 from app.core.logging_config import get_logger
 from app.core.constants import LIFECYCLE_COMPLIANT

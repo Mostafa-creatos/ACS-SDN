@@ -7,9 +7,9 @@ import re
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from .config import settings
-from .db import get_db
-from . import models
+from ..config import settings
+from ..db import get_db
+from .. import models
 
 security = HTTPBearer()
 logger = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ def validate_password_complexity(password: str) -> None:
         errors.append("at least 1 lowercase letter")
     if not re.search(r"[0-9]", password):
         errors.append("at least 1 digit")
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>\-_=+\[\]\\;'/`~]", password):
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>\\-_=+\[\]\\;'/`~]", password):
         errors.append("at least 1 special character")
     if errors:
         raise HTTPException(

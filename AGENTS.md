@@ -122,10 +122,15 @@ Slimmed `backend/app/main.py` **2,117 → 65 lines** by moving route handlers (v
 
 **Gates (all green)**: pytest **53 passed, 2 deselected, 0 failed**; OpenAPI **98 operationIds / 83 paths, 0 diffs** vs baseline; compile+import OK; `npm run build` exit 0; lint **121/14 = zero NEW**; `print()` in live `backend/app` = **0**.
 
-## Phase D and Final (NEXT)
+## Phase D — COMPLETED (core utilities consolidation)
 
-- **Phase D (backend organization)**: remaining structural split (e.g., `schemas.py` → `schemas/` package, `models.py` → `models/` package with SQLAlchemy relationships) — re-derive concrete items with the team, keep behavior identical, run ALL gates after each change.
-- **Final**: deploy once to `alkhairplateforme@34.32.194.240` (docker-compose build app/celery-worker/flower + recreate), then smoke test (login + ZTP retry). Run openapi diff on the VM too.
+Moved `backend/app/auth.py` → `backend/app/core/auth.py` to consolidate core utilities (auth, db_migrations, startup, constants, logging_config) into the `core/` package. Updated imports in `auth_permissions.py` and all routers that reference auth functions.
+
+**Gates (all green)**: pytest **53 passed, 2 deselected, 0 failed**; compile+import OK; `npm run build` exit 0; lint **121/14 = zero NEW**.
+
+## Final (NEXT)
+
+- Deploy once to `alkhairplateforme@34.32.194.240` (docker-compose build app/celery-worker/flower + recreate), then smoke test (login + ZTP retry). Run openapi diff on the VM too.
 
 ## Working Tree Note
 
