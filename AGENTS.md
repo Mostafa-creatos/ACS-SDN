@@ -107,11 +107,24 @@ npm run lint    # 125 errors/16 warnings == baseline
 4. **Gates (all green)**: lint **121/14 = zero NEW** (vs 125/16 baseline); `npm run build` exit 0; `console.*` 26
    unchanged; pytest **53 passed, 2 deselected**; backend compile/import OK.
 
-## Phase C–D and Final (NEXT)
+## Phase C — COMPLETED (main.py split into domain routers + core helpers)
 
-Plan execution is ordered into phases A–D. Phases A and B are done. Remaining scope:
+Slimmed `backend/app/main.py` **2,117 → 65 lines** by moving route handlers (verbatim, function names invariant → identical OpenAPI operationIds) into four new routers and startup/migration logic into `core/`:
 
-- **Phases C–D**: remaining structural split (e.g., further `main.py` slim-down, schema/router organization) — re-derive concrete items with the team, keep behavior identical, run ALL gates after each phase.
+- **`backend/app/core/db_migrations.py`**: `migrate_db_columns` (verbatim, re-exported by `main.py` for tests).
+- **`backend/app/core/startup.py`**: `initialize_database` (create_all + migrate + seed + legacy user-tenant sync), `start_background_loops`.
+- **`backend/app/routers/orchestrator.py`**: policy-enforcement, policy-reconciliation, approvals (count/list/approve/reject), async-config-push.
+- **`backend/app/routers/admin.py`**: audit-logs, stats, celery-stats, admin/switches, ztp-pool, subnets, ipam/search, admin/topology, topology/graph, sync-netdisco/sync-gnmi, trigger-discover.
+- **`backend/app/routers/visibility.py`**: snapshots, rollback, accept-drift, compliance (run/latest/findings/remediate/runs/rules/history), endpoints, telemetry, stp, reports/csv.
+- **`backend/app/routers/switch_config.py`**: `calculate_blast_radius` helper, switch-config/push, switch-config/history.
+
+`@app.*` decorators converted to `@router.*`; internal relative imports made absolute; lazy in-function imports preserved. `app.main` re-exports preserved (`app`, `get_db`, `migrate_db_columns`, `resolve_southbound_driver`, `LIFECYCLE_*`). Router include order in `main.py` kept identical to original.
+
+**Gates (all green)**: pytest **53 passed, 2 deselected, 0 failed**; OpenAPI **98 operationIds / 83 paths, 0 diffs** vs baseline; compile+import OK; `npm run build` exit 0; lint **121/14 = zero NEW**; `print()` in live `backend/app` = **0**.
+
+## Phase D and Final (NEXT)
+
+- **Phase D (backend organization)**: remaining structural split (e.g., `schemas.py` → `schemas/` package, `models.py` → `models/` package with SQLAlchemy relationships) — re-derive concrete items with the team, keep behavior identical, run ALL gates after each change.
 - **Final**: deploy once to `alkhairplateforme@34.32.194.240` (docker-compose build app/celery-worker/flower + recreate), then smoke test (login + ZTP retry). Run openapi diff on the VM too.
 
 ## Working Tree Note

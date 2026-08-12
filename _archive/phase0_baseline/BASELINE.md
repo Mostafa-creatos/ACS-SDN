@@ -125,3 +125,42 @@ No API routes, contracts, or endpoints touched (frontend-only phase). Backend un
 | Backend compile + import | `ast.parse(feature_version=(3,11))` + `import app.main, app.workers.celery_app` → OK (only pre-existing FastAPIDeprecationWarning) |
 | OpenAPI | unchanged (frontend-only phase) |
 | Lint diff tooling | `Temp\opencode\{lint_diff.py,lint_baseline.json,lint_current.json}` (TEMP, outside repo) |
+
+## Phase C — main.py split into domain routers + core helpers (2026-08-12)
+
+### What changed (zero functional change; backend-only)
+
+`app/main.py` slimmed **2,117 → 65 lines**. Route handlers moved **verbatim**
+(function names invariant → identical OpenAPI operationIds) into new routers;
+startup/migration logic moved into `core/`:
+
+| New module | Contents |
+|---|---|
+| `core/db_migrations.py` | `migrate_db_columns` (verbatim; re-exported by `app.main` for tests) |
+| `core/startup.py` | `initialize_database` (create_all + migrate + seed + legacy user-tenant sync), `start_background_loops` |
+| `routers/orchestrator.py` | policy-enforcement, policy-reconciliation, approvals count/list/approve/reject, async-config-push |
+| `routers/admin.py` | audit-logs, stats, celery-stats, admin/switches, ztp-pool, subnets, ipam/search, admin/topology, topology/graph, sync-netdisco+sync-gnmi, trigger-discover |
+| `routers/visibility.py` | snapshots (list/create), rollback, accept-drift, compliance run/latest/remediate/runs/rules/history, endpoints, telemetry, stp, reports/csv |
+| `routers/switch_config.py` | `calculate_blast_radius` helper, switch-config/push, switch-config/history |
+
+Notes:
+- `@app.*` decorators → `@router.*` (`router = APIRouter()`), same paths/status codes.
+- Internal relative imports converted to absolute (`from app.workers...`, `from app.auth...`, etc.) so they
+  resolve from the new modules; lazy in-function imports preserved (import-cycle safe).
+- Router include order in `main.py` preserves the original registration order
+  (7 existing routers → `/api/v5/` root → 4 new routers → `GET /` fallback → `/assets` static mount).
+- `app.main` re-exports preserved: `app`, `get_db`, `migrate_db_columns`, `resolve_southbound_driver`,
+  `LIFECYCLE_{COMPLIANT,DRIFTED,DISCOVERED}`.
+- No flagged behavior deltas — this is a pure move; route table content and resolution identical
+  (verified by the OpenAPI diff: same (method, path) → operationId mapping).
+
+### Phase C gate results (all green)
+
+| Gate | Result |
+|---|---|
+| pytest local | **53 passed, 2 deselected, 0 failed** |
+| OpenAPI | **98 operationIds / 83 paths**; diff vs `openapi_after_phase_a.json` = **0** (opids, methods, paths, response status codes). New artifact `openapi_after_phase_c.json` in `Temp\opencode\`. |
+| Backend compile + import | `ast.parse(feature_version=(3,11))` 48 files + `import app.main, app.workers.celery_app` → OK |
+| Frontend `tsc -b && vite build` | exit 0 (unchanged; frontend untouched) |
+| Frontend `npm run lint` | **121 errors / 14 warnings** — unchanged (frontend untouched) |
+| `print()` in live `backend/app` | **0** |
