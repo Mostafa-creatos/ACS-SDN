@@ -1,19 +1,23 @@
-# Enterprise SDN Controller — Architecture de Déploiement & Fonctionnalités
-## Document de référence complet : Rancher/Kubernetes + Plateforme SDN
+# **ENTERPRISE SDN CONTROLLER**
+
+## **Deployment Architecture & Consolidated Features**
+
+Date: August 13, 2026  
+Prepared by: Mostafa Faouzi  
 
 ---
 
-## Partie 1 — Architecture de déploiement (Rancher / Kubernetes)
+# **Part 1 — Deployment Architecture (Rancher / Kubernetes)**
 
-### 1.1 Vue d'ensemble
+## **1.1 Overview**
 
-La plateforme est déployée sur un cluster **Kubernetes (RKE2)** orchestré par **Rancher**, qui prend la place du modèle initial à 5 VM dédiées. Le principe directeur : **séparer le stateless du stateful**, pour que chaque type de charge puisse scaler et être restauré indépendamment.
+The platform is deployed on a **Kubernetes (RKE2)** cluster orchestrated by **Rancher**, replacing the initial 5-dedicated-VM footprint. The core guiding principle is: **separating stateless from stateful workloads**, ensuring each class of load can scale and be restored independently.
 
 ```
-Rancher Management Plane (UI, RBAC cluster, monitoring)
+Rancher Management Plane (UI, Cluster RBAC, Monitoring)
             │
             ▼
-   Cluster Kubernetes (RKE2)
+   Kubernetes Cluster (RKE2)
    ├── Ingress Layer (MetalLB + NGINX Ingress)
    ├── Node Pool "stateless"  → Deployments (Gateway, Celery, gNMI, Config Mgr)
    ├── Node Pool "stateful"   → StatefulSets (Postgres, Redis Sentinel)
@@ -21,223 +25,266 @@ Rancher Management Plane (UI, RBAC cluster, monitoring)
    └── MinIO                  → backups, snapshots, exports (S3-compatible)
             │
             ▼
-   VM dédiée hors cluster : PNETLab (20 switches Dell OS10, nested virtualization)
+   Off-Cluster Dedicated VM : PNETLab (20 Dell OS10 switches, nested virtualization)
 ```
 
-### 1.2 Rancher Management Plane
+## **1.2 Rancher Management Plane**
 
-**Rôle** : Rancher n'est pas un composant applicatif — c'est la couche de gestion du cluster lui-même.
+**Role** — Rancher is not an application component; it acts as the management layer for the cluster itself.
 
-- **Rancher UI/API** : création et lifecycle du cluster RKE2, gestion centralisée du RBAC Kubernetes (différent du RBAC applicatif JWT du SDN controller — ne pas confondre les deux niveaux), catalogue d'apps (Helm charts) pour installer Longhorn, MinIO, monitoring en un clic.
-- **Monitoring intégré (Prometheus + Grafana)** : surveille la **santé de l'infrastructure** (CPU/RAM des pods, disponibilité des nœuds, état des PVC) — **volontairement séparé** de la Telemetry DB métier du SDN controller, qui suit l'état des switches réseau. Ce sont deux préoccupations différentes : l'une surveille "est-ce que mon cluster tourne bien", l'autre "est-ce que mon réseau tourne bien".
+* **Rancher UI/API —** Handles RKE2 cluster creation, lifecycle management, and centralized Kubernetes RBAC (distinct from the application's JWT-based RBAC — these two authorization planes must not be confused). It also provides an App Catalogue (Helm charts) to deploy Longhorn, MinIO, and monitoring configurations in a single click.
 
-### 1.3 Ingress Layer
+* **Integrated Monitoring (Prometheus + Grafana) —** Monitors **infrastructure health** (pod CPU/RAM usage, node availability, persistent volume claims status). This is **intentionally separated** from the SDN controller's business Telemetry DB, which tracks the status of network switches. These are two distinct concerns: infrastructure monitoring (ensuring the cluster runs correctly) versus network monitoring (ensuring the fabrics run correctly).
 
-Remplace la VM HAProxy/NGINX dédiée du design initial.
+## **1.3 Ingress Layer**
 
-- **MetalLB** fournit une IP virtuelle (VIP) externe au cluster (nécessaire en on-prem, sans cloud load balancer natif).
-- **NGINX Ingress Controller** (par défaut sur RKE2) route le trafic HTTPS entrant vers le service Kubernetes du `fastapi-gateway`, gère la terminaison TLS.
-- Avantage par rapport à la VM dédiée : plus de mise à jour automatique, scaling natif si besoin, configuration déclarative en YAML versionné.
+Replaces the dedicated HAProxy/NGINX VM from the initial design.
 
-### 1.4 Node Pool "stateless"
+* **MetalLB —** Provides an external Layer-2 Virtual IP (VIP) for the cluster (essential in on-premises environments lacking a native cloud load balancer).
 
-Regroupe les workloads qui ne stockent aucun état persistant — on peut les détruire/recréer/déplacer librement.
+* **NGINX Ingress Controller —** (Default on RKE2) Routes incoming HTTPS traffic to the `fastapi-gateway` Kubernetes service and handles TLS termination.
 
-| Deployment | Rôle | Scaling |
-|---|---|---|
-| `fastapi-gateway` | API Gateway central (`main.py`) — routing admin, policy, télémétrie, config | HPA (Horizontal Pod Autoscaler) sur CPU/nombre de requêtes |
-| `celery-workers` | Exécution asynchrone : provisioning southbound, jobs Ansible/config lifecycle, traitement des events gNMI | **KEDA** ScaledObject — scale sur la **profondeur de la queue Redis Streams**, plus pertinent que le CPU pour ce type de charge (pics pendant les audits de compliance sur 20+ switches) |
-| `gnmi-collector` | Sessions Subscribe gNMI persistantes vers les switches (LLDP, BGP, télémétrie) | Réplicas fixes ou scaling manuel — chaque pod peut gérer un sous-ensemble de switches |
-| `config-compliance-mgr` | Snapshot, audit golden-config, déclenchement de rollback, blast-radius | Réplicas fixes (faible volume d'instances simultanées) |
+* **Ingress Benefits —** Eliminates manual configurations, enables native scaling, and provides declarative management via version-controlled YAML files.
 
-**Pourquoi séparer Gateway/Celery/gNMI/Config Mgr en 4 Deployments distincts** plutôt qu'un seul gros service : chacun a un profil de charge différent (API synchrone vs jobs asynchrones vs connexions longue durée vs jobs périodiques), donc chacun doit pouvoir scaler indépendamment sans gaspiller de ressources sur les autres.
+## **1.4 Node Pool "stateless"**
 
-### 1.5 Node Pool "stateful"
+Groups workloads that do not maintain persistent state, allowing them to be destroyed, rescheduled, or scaled dynamically.
 
-Regroupe les workloads qui stockent un état persistant critique — isolés sur des nœuds avec stockage NVMe local rapide.
+| Deployment | Role | Scaling |
+| :--- | :--- | :--- |
+| `fastapi-gateway` | Central API Gateway (`main.py`) — administrative routing, policy, telemetry, config | HPA (Horizontal Pod Autoscaler) based on CPU/Request count |
+| `celery-workers` | Asynchronous execution: southbound provisioning, Ansible/config lifecycle jobs, gNMI events parsing | **KEDA** ScaledObject — scales based on **Redis Streams queue depth**, matching the workload profile during compliance checks on 20+ switches |
+| `gnmi-collector` | Persistent gNMI Subscribe sessions to the switches (LLDP, BGP, telemetry) | Fixed replicas or manual scaling — each pod manages a subset of switches |
+| `config-compliance-mgr` | Snapshot archiving, golden-config audits, rollback execution, blast-radius calculation | Fixed replicas (low concurrent volume requirement) |
 
-| StatefulSet | Rôle | Détail HA |
-|---|---|---|
-| `postgresql` | Base de données partagée (schéma section 2.5) | Géré par un opérateur (CloudNativePG ou Zalando postgres-operator) : 1 primary + 2 replicas, failover automatique, PITR (Point-In-Time Recovery) |
-| `redis-sentinel` | Event bus (Redis Streams) + cache | 1 master + 1 replica + Sentinels qui surveillent et promeuvent automatiquement un nouveau master en cas de panne |
+| **Why separate Gateway, Celery, gNMI, and Config Mgr into 4 distinct Deployments?** Each component has a different resource profile (synchronous API vs. asynchronous jobs vs. long-lived telemetry streams vs. periodic audits). Separating them ensures independent scaling without wasting cluster resources. |
+| :---- |
 
-**Pourquoi un StatefulSet et pas un Deployment** : un StatefulSet garantit une identité réseau stable (hostname prévisible) et un attachement persistant à son propre volume — indispensable pour une base de données, contrairement à un Deployment où les pods sont interchangeables.
+## **1.5 Node Pool "stateful"**
 
-### 1.6 Stockage — Longhorn et MinIO
+Groups stateful workloads requiring persistent storage, isolated on cluster nodes equipped with fast local NVMe drives.
 
-| Système | Usage | Pourquoi ce choix |
-|---|---|---|
-| **Longhorn** | StorageClass pour les PVC de Postgres et Redis (block storage) | Natif à l'écosystème Rancher/SUSE, installation en un clic, réplique automatiquement les volumes entre nœuds, snapshots intégrés. Pas besoin de matériel SAN externe |
-| **MinIO** | Stockage S3-compatible pour : backups Postgres (`pgBackRest`/`WAL-G` avec PITR), config snapshots archivés, exports de reporting (CSV/XLSX) | Standard de facto pour ce type de données, réutilisable pour d'autres besoins futurs (ex: stocker les payloads de config historiques en JSON) |
+| StatefulSet | Role | High Availability Detail |
+| :--- | :--- | :--- |
+| `postgresql` | Shared application database (schema in section 2.5) | Managed via operator (CloudNativePG or Zalando postgres-operator) with 1 primary + 2 replicas, automated failover, and PITR (Point-In-Time Recovery) |
+| `redis-sentinel` | Event bus (Redis Streams) + cache layer | 1 master + 1 replica + Sentinel monitors that automatically promote a new master in case of failure |
 
-⚠️ **NFS volontairement évité** pour Postgres/Redis : la latence et le modèle de verrouillage de fichiers posent des problèmes de fiabilité avec des bases transactionnelles. NFS reste pertinent uniquement pour de l'archivage non-critique si MinIO n'est pas souhaité.
+| **Why use a StatefulSet instead of a Deployment?** A StatefulSet guarantees stable network identities (predictable hostnames) and persistent volume mapping, which are essential for databases, unlike a Deployment where pods are treated as interchangeable. |
+| :---- |
 
-### 1.7 Velero — sauvegarde de l'état du cluster
+## **1.6 Storage — Longhorn and MinIO**
 
-Distinct des backups Postgres : Velero sauvegarde les **manifests Kubernetes, PVC, et secrets** vers MinIO. Sans ça, un incident cluster (perte de configuration, erreur d'opérateur) ferait perdre non seulement les données mais aussi toute la définition du déploiement — Velero permet de restaurer l'état complet du cluster, pas juste les données métier.
+| System | Usage | Why This Choice |
+| :--- | :--- | :--- |
+| **Longhorn** | StorageClass for Postgres and Redis PVCs (block storage) | Built native to the Rancher/SUSE ecosystem, single-click install, replicates blocks across nodes, integrated snapshots. No external SAN hardware needed |
+| **MinIO** | S3-compatible object storage for: Postgres backups (`pgBackRest`/`WAL-G`), archived config snapshots, exports (CSV/XLSX) | De facto standard for object storage, reusable for future needs (e.g., archiving historic configuration JSON payloads) |
 
-### 1.8 PNETLab — pourquoi ça reste hors cluster
+| ⚠️ **NFS is intentionally avoided** for PostgreSQL/Redis: file-locking models and latency over NFS cause database corruption and reliability issues. NFS remains acceptable only for non-critical, cold file archiving if MinIO is not deployed. |
+| :---- |
 
-PNETLab nécessite la **virtualisation imbriquée (nested virtualization, VT-x/AMD-V)** pour faire tourner les 20 switches Dell OS10 virtuels — ce n'est pas un workload adapté à un pod Kubernetes standard (risqué en mode privileged, pas de support natif propre).
+## **1.7 Velero — Saving the Cluster State**
 
-- **Option retenue actuellement** : VM dédiée séparée, hors du cluster Rancher. Le `gnmi-collector` et les drivers southbound (`drivers/arista_eos.py`, `drivers/nokia_srlinux.py`, `drivers/dell_os10.py`) s'y connectent depuis le cluster via le réseau.
-- **Option future possible** : migrer vers **Harvester** (produit Rancher basé sur KubeVirt) pour faire tourner ces VM *à l'intérieur* d'un cluster Kubernetes, unifiant la gestion VM réseau + workloads applicatifs sous la même interface Rancher. Non retenu pour l'instant — complexité de migration non justifiée tant que le cluster applicatif n'est pas stabilisé.
+Distinct from database backups: Velero backs up **Kubernetes manifests, PVCs, and secrets** to MinIO. Without this, a cluster disaster (accidental configuration wipe, operator error) would lose the deployment manifests and configuration. Velero restores the cluster state, not just business data.
 
-### 1.9 Flux de déploiement — résumé
+## **1.8 PNETLab — Why It Remains Off-Cluster**
+
+PNETLab requires **nested virtualization (VT-x/AMD-V)** to execute the 20 Dell OS10 virtual switches, making it unsuitable for standard, unprivileged Kubernetes pods.
+
+* **Current Architecture —** Executed on a dedicated off-cluster VM. The `gnmi-collector` and southbound drivers (`drivers/arista_eos.py`, `drivers/nokia_srlinux.py`, `drivers/dell_os10.py`) connect to it over the routed network.
+
+* **Future Evolution —** Potential migration to **Harvester** (Rancher's VM management tool based on KubeVirt) to execute these VMs *within* the Kubernetes cluster, unifying VM and container orchestration under Rancher. This is deferred to reduce initial deployment complexity.
+
+## **1.9 Deployment Flow — Summary**
 
 ```
-Client/Switch → MetalLB VIP → NGINX Ingress → Service fastapi-gateway
+Client/Switch → MetalLB VIP → NGINX Ingress → fastapi-gateway Service
                                                        │
-                                          (auth JWT, routing)
+                                           (JWT Auth, Routing)
                                                        │
                               ┌────────────────────────┼────────────────────────┐
                               ▼                        ▼                        ▼
                     celery-workers              gnmi-collector          config-compliance-mgr
-                       (Redis queue)              (PNETLab via réseau)      (snapshots → MinIO)
+                     (Redis Queue)            (PNETLab via Network)       (Snapshots → MinIO)
                               │                        │                        │
                               └────────────┬───────────┴────────────┬───────────┘
                                            ▼                        ▼
-                                    PostgreSQL StatefulSet    Redis Sentinel StatefulSet
-                                      (Longhorn PVC)              (Longhorn PVC)
+                                 PostgreSQL StatefulSet    Redis Sentinel StatefulSet
+                                     (Longhorn PVC)              (Longhorn PVC)
 ```
 
----
+## **1.10 Development Architecture & Migration Plan**
 
-## Partie 2 — Fonctionnalités SDN (la plateforme applicative)
+### **1.10.1 Why Use Our Current Development / Staging Architecture?**
 
-### 2.1 Les 4 plans logiques du SDN Controller
+For development, local testing, and staging validation, the platform utilizes a simplified architecture combining **Docker Compose** and **Containerlab** on a single virtual machine (GCP `sdn-host-vm`).
 
-| Plan | Rôle | Composants (mappés aux Deployments K8s) |
-|---|---|---|
-| **1. Consumption Plane** | Point d'entrée API, authentification | `fastapi-gateway` (`main.py`) + JWT/RBAC |
-| **2. Policy & Management Plane** | Validation des intentions de config, orchestration | 4-Stage Pipeline (`main.py`) + `celery-workers` |
-| **3. Telemetry & Visibility Plane** | Discovery temps réel, télémétrie, config lifecycle | `gnmi-collector` + `config-compliance-mgr` |
-| **4. Southbound Plane** | Communication avec les équipements | Drivers `arista_eos.py` / `nokia_srlinux.py` / `dell_os10.py` |
+* **Simple & Rapid Deployment —** A single local PowerShell script (`sync_and_launch.ps1`) compiles the frontend, syncs code to the VM, and restarts all containers in seconds.
 
-### 2.2 Zero-Touch Provisioning (ZTP)
+* **Local Testing & Fast Retest Loop —** Developers can test API endpoint modifications, policy validations, and ZTP onboarding behaviors immediately without waiting for CI/CD builds or Kubernetes pod scheduling.
 
-Permet à un switch jamais configuré de s'auto-enregistrer :
+* **Lightweight Network Emulation —** Containerlab runs Nokia SRLinux and Dell OS10 switch images (via QEMU) directly within the VM's Docker network, routing management traffic (SSH, SNMP, gNMI) locally without external hypervisor configurations.
 
-1. Le switch boot, envoie un `DHCP Discover` avec l'option ZTP.
-2. Le serveur DHCP répond avec une IP + l'option 67 (URL du boot script).
-3. Le switch exécute le script, qui poste vers `POST /api/v5/discovery/on-boarding-ingestion` (MAC, Serial, OS, Vendor) — **sans authentification**, car c'est l'option ZTP réseau elle-même qui valide l'origine.
-4. Le controller crée/met à jour un enregistrement dans `ztp_discovery_pool` et répond `202 Accepted`.
+* **Cost Efficiency —** Operates on a single medium-sized VM instead of requiring a multi-node Kubernetes cluster.
 
-### 2.3 Moteur de policy multi-tenant — Pipeline à 4 étages
+### **1.10.2 Migration Plan to Production (Kubernetes / Rancher)**
 
-Endpoint : `POST /api/v5/orchestrator/policy-enforcement`. Garantit qu'aucun tenant ne peut créer de conflit (VLAN/VRF/Subnet) avec un autre.
+To migrate the staging environment to the RKE2 production cluster, follow these steps:
 
-| Stage | Vérification | Échec |
-|---|---|---|
-| 1. Syntax Validation | Structures IP valides (`ipaddress.ip_network`), extraction des gateways | `400 Bad Request` |
-| 2. Tenant Boundary Isolation | Pas d'overlap avec un subnet d'un autre tenant (`ipam_subnets`, `tenant_vrfs`) | `400 Bad Request` |
-| 3. Topology & VLAN Collision | Switches cibles existants, pas de VLAN ID déjà utilisé par un autre VRF sur le même fabric | `400 Bad Request` |
-| 4. Dry-Run Diff Engine | Génération du payload de config réel via le driver southbound | Si `dry_run=true` → retourne le diff sans appliquer. Sinon → commit + dispatch Celery |
-
-### 2.4 Discovery topologique & Télémétrie temps réel (gNMI)
-
-Remplace tout polling SNMP/SSH traditionnel par du **streaming push** :
-
-- **LLDP Topology Discovery** : Subscribe gNMI sur `/system/lldp` (via `pygnmi`), mise à jour continue de `topology_edges`/`topology_nodes`.
-- **Endpoint Tracking** : extraction des tables MAC/ARP des leaf switches → `discovered_endpoints`.
-- **Telemetry Gathering** : octets in/out par interface, charge CPU, température chassis.
-- En production, cible nativement **Nokia SR Linux, Arista EOS, Dell OS10**. En sandbox Containerlab, la télémétrie Dell est simulée à cause des limitations d'image virtuelle.
-
-### 2.5 Config Lifecycle & Compliance
-
-Cycle de vie d'un switch : `DiscoveredRaw` → snapshot initial → `CompliantActive` → audits périodiques → `PassRules`/`FailRules` → si drift manuel → `ConfigurationDrifted` → `TriggerRollback`.
-
-**Règles d'audit actuelles** :
-- NTP configuré (défaut `192.168.100.1`)
-- DNS configuré (défaut `8.8.8.8`)
-- AAA (authentification locale) activée — règle critique
-
-**Blast-Radius Protection** :
-- Rollback sur un Leaf → impact = 1 device
-- Rollback sur un Spine → impact = toute la topologie (blast radius = 6)
-- Si blast radius > 2 → **Four-Eyes Approval obligatoire**, réservé au rôle Platform Admin
-
-### 2.6 Modèle de données (PostgreSQL)
-
-| Table | Rôle |
-|---|---|
-| `users`, `tenants`, `tenant_vrfs` | Identité et isolation multi-tenant |
-| `fabrics`, `fabric_blueprints` | Définition des fabrics physiques et leurs templates |
-| `ipam_subnets`, `ipam_ip_allocations` | Gestion d'adresses IP, VRF-aware |
-| `ztp_discovery_pool`, `switches` | Inventaire et onboarding |
-| `topology_nodes`, `topology_edges` | Graphe topologique (LLDP/BGP) |
-| `discovered_endpoints` | Endpoints MAC/IP appris |
-| `telemetry_metrics`, `telemetry_metadata` | Séries de métriques opérationnelles |
-| `config_snapshots` | Archives de config (append-only) |
-| `compliance_runs`, `compliance_findings` | Résultats d'audit |
-
-### 2.7 Référence API Northbound (résumé)
-
-| Endpoint | Méthode | Fonction |
-|---|---|---|
-| `/api/v5/auth/login` | POST | Authentification → JWT |
-| `/api/v5/orchestrator/policy-enforcement` | POST | Soumission d'intention réseau (dry-run supporté) |
-| `/api/v5/orchestrator/policy-reconciliation` | POST | Suppression d'allocation + rollback |
-| `/api/v5/discovery/on-boarding-ingestion` | POST | Ingestion ZTP (sans auth) |
-| `/api/v5/visibility/snapshots` | POST/GET | Snapshot de config / historique |
-| `/api/v5/visibility/rollback` | POST | Rollback avec évaluation blast-radius |
-| `/api/v5/visibility/compliance/run` \| `/latest` | POST/GET | Audit de compliance |
-| `/api/v5/visibility/endpoints` | GET | Endpoints appris |
-| `/api/v5/visibility/telemetry` | GET | Séries télémétrie |
-| `/api/v5/admin/stats` \| `/topology` | GET | Stats et graphe topologique |
-
-### 2.8 Sécurité et RBAC applicatif
-
-- **JWT Bearer** obligatoire pour toute écriture.
-- 3 rôles : **Platform Admin** (tout), **Tenant Operator** (write scopé tenant), **Tenant Auditor** (read-only scopé tenant).
-- Isolation stricte appliquée dès le Stage 2 du pipeline de policy — pas seulement au niveau JWT.
-
-> ⚠️ Ne pas confondre ce RBAC **applicatif** (JWT, gestion des tenants réseau) avec le RBAC **Kubernetes** géré par Rancher (qui contrôle qui peut administrer le cluster lui-même) — deux couches d'autorisation totalement distinctes.
-
-### 2.9 Roadmap fonctionnelle (gap vs périmètre cible type NacTrack)
-
-| Fonctionnalité | Statut | Effort |
-|---|---|---|
-| BGP peering graph | ⚠️ Non implémenté | Moyen — ajouter un Subscribe gNMI sur `/network-instances/.../bgp` |
-| Topologie ISIS / MPLS LDP | ❌ Non implémenté | Élevé — à ne lancer que si un cas d'usage métier l'exige |
-| Compliance scoring & trending | ⚠️ Partiel | Faible — enrichir `compliance_runs` avec un champ score agrégé |
-| Reporting & exports (CSV/XLSX) | ❌ Non implémenté | Faible — endpoint dédié + `pandas`/`openpyxl` + Celery Beat pour la planification |
-| RBAC granulaire (40+ permissions) | ⚠️ Partiel (3 rôles fixes) | Moyen — étendre le claim JWT vers un modèle permission-based |
-| Frontend interactif | ⚠️ À construire | Élevé — SPA React + react-flow/cytoscape.js |
+1. **Containerization and Image Registry** :
+    * Build production Docker images for the API backend (`sdn-controller_app`), Celery workers (`sdn-controller_celery-worker`), and frontend.
+    * Push these tagged images to a secure private container registry (e.g., Google Artifact Registry or GitHub Container Registry).
+2. **Kubernetes Manifests & Helm Charts Deployment** :
+    * Translate `docker-compose.yml` service declarations into Kubernetes resources (`Deployments`, `Services`, `ConfigMaps`, `Secrets`).
+    * Setup `StatefulSets` for PostgreSQL (via operator) and Redis Sentinel to ensure stable data tiers.
+    * Use Longhorn as the default `StorageClass` to handle dynamic Persistent Volume Claims (PVC).
+3. **Data & State Migration** :
+    * Export a SQL dump of the staging PostgreSQL database (`sdn_controller`) and restore it in the production PostgreSQL cluster.
+    * Configure Velero to schedule automatic backups of cluster states and manifests to the MinIO S3 bucket.
+4. **Ingress Routing & TLS Certificates** :
+    * Configure MetalLB with the external VIP range.
+    * Define NGINX `Ingress` resources to route external HTTPS traffic (port 443 for UI, port 8000 for API) to the target services.
+5. **Switch Infrastructure Redirection** :
+    * Migrate the emulation topology from Containerlab to the production PNETLab server (nested virtualization enabled).
+    * Update the switch connection profiles (management IP addresses, gNMI credentials, SNMP ports) in the Celery worker and gNMI collector configurations to point to the new network.
 
 ---
 
-## Partie 3 — Stack technique consolidée (déploiement + applicatif)
+# **Part 2 — SDN Features (Application Platform)**
 
-| Couche | Technologie |
-|---|---|
-| Orchestration de cluster | Rancher + RKE2 (Kubernetes) |
-| Ingress | MetalLB + NGINX Ingress Controller |
-| Autoscaling | HPA (Gateway), KEDA (Celery sur queue Redis) |
-| Base de données | PostgreSQL via opérateur (CloudNativePG / Zalando) |
-| Event bus / cache | Redis Sentinel (StatefulSet) |
-| Stockage bloc (CSI) | Longhorn |
-| Stockage objet (S3) | MinIO |
-| Backup cluster | Velero |
-| Backup Postgres (PITR) | pgBackRest / WAL-G |
-| Monitoring infra | Prometheus + Grafana (intégrés Rancher) |
+## **2.1 The 4 Logical Planes of the SDN Controller**
+
+| Plane | Role | Components (Mapped to K8s Deployments) |
+| :--- | :--- | :--- |
+| **1. Consumption Plane** | API entry point, authentication | `fastapi-gateway` (`main.py`) + JWT/RBAC |
+| **2. Policy & Management Plane** | Network intent validation, orchestration | 4-Stage Pipeline (`main.py`) + `celery-workers` |
+| **3. Telemetry & Visibility Plane** | Real-time discovery, telemetry, config lifecycle | `gnmi-collector` + `config-compliance-mgr` |
+| **4. Southbound Plane** | Device communication | Drivers: `arista_eos.py` / `nokia_srlinux.py` / `dell_os10.py` |
+
+## **2.2 Zero-Touch Provisioning (ZTP)**
+
+Enables automated, out-of-the-box onboarding for unconfigured switches:
+
+1. The switch boots and broadcasts a `DHCP Discover` request containing the ZTP option.
+2. The DHCP server responds with an IP and Option 67 (pointing to the boot script URL).
+3. The switch executes the boot script, which sends a POST request containing its MAC, Serial, OS, and Vendor to `/api/v5/discovery/on-boarding-ingestion` — **no auth header required** since validation is handled at the network level.
+4. The controller inserts or updates a record in the `ztp_discovery_pool` table and returns a `202 Accepted` response.
+
+## **2.3 Multi-Tenant Policy Engine — 4-Stage Pipeline**
+
+Endpoint: `POST /api/v5/orchestrator/policy-enforcement`. Prevents configuration overlaps (VLAN, VRF, or Subnet) between tenants.
+
+| Stage | Check | Failure Action |
+| :--- | :--- | :--- |
+| 1. Syntax Validation | Valid IP formats (`ipaddress.ip_network`), gateway extraction | `400 Bad Request` |
+| 2. Tenant Boundary Isolation | Ensures subnets do not overlap with subnets of other tenants (`ipam_subnets`, `tenant_vrfs`) | `400 Bad Request` |
+| 3. Topology & VLAN Collision | Target switches exist; VLAN IDs do not overlap with other active VRFs on the fabric | `400 Bad Request` |
+| 4. Dry-Run Diff Engine | Renders configuration payloads via southbound driver | If `dry_run=true` → returns diff only. Otherwise → commits and dispatches Celery task |
+
+## **2.4 Topological Discovery & Real-Time Telemetry (gNMI)**
+
+Replaces legacy SNMP and CLI polling with **streaming push telemetry**:
+
+* **LLDP Topology Discovery —** Connects via gNMI Subscribe on `/system/lldp` (using `pygnmi`) to update the `topology_edges` and `topology_nodes` dynamically.
+* **Endpoint Tracking —** Extracts MAC and ARP tables from leaf switches to update `discovered_endpoints`.
+* **Telemetry Gathering —** Streams interface octets in/out, CPU utilization, and chassis temperature.
+* **Sandbox Limitations —** Nokia SRLinux, Arista EOS, and Dell OS10 are natively supported in production. In the Containerlab staging environment, Dell telemetry metrics are simulated due to VM virtual image constraints.
+
+## **2.5 Config Lifecycle & Compliance**
+
+Switch lifecycle state machine: `DiscoveredRaw` → initial snapshot → `CompliantActive` → periodic audits → `PassRules`/`FailRules`. If an out-of-band manual configuration drift is detected → `ConfigurationDrifted` → `TriggerRollback`.
+
+**Current Audit Rules**:
+* NTP configured (default `192.168.100.1`)
+* DNS configured (default `8.8.8.8`)
+* AAA (local authentication) enabled — marked as a critical rule
+
+**Blast-Radius Protection**:
+* Rollback on a Leaf → impact = 1 device
+* Rollback on a Spine → impact = entire fabric path (blast radius = 6)
+* If blast radius > 2 → **Four-Eyes Approval required** (restricted to Platform Admin role)
+
+## **2.6 Data Model (PostgreSQL)**
+
+| Table | Role |
+| :--- | :--- |
+| `users`, `tenants`, `tenant_vrfs` | Identity and multi-tenant isolation |
+| `fabrics`, `fabric_blueprints` | Fabric topology definitions and base templates |
+| `ipam_subnets`, `ipam_ip_allocations` | VRF-aware IP address management |
+| `ztp_discovery_pool`, `switches` | Device onboarding queue and active inventory |
+| `topology_nodes`, `topology_edges` | Topological graph data (LLDP/BGP) |
+| `discovered_endpoints` | Dynamically learned MAC/IP endpoints |
+| `telemetry_metrics`, `telemetry_metadata` | Historical operational metrics |
+| `config_snapshots` | Configuration history archive (append-only) |
+| `compliance_runs`, `compliance_findings` | Compliance audit logs |
+
+## **2.7 Northbound API Reference (Summary)**
+
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/api/v5/auth/login` | POST | Authenticates user credentials → returns JWT |
+| `/api/v5/orchestrator/policy-enforcement` | POST | Submits network configuration intent (supports dry-run) |
+| `/api/v5/orchestrator/policy-reconciliation` | POST | Reverts allocations + triggers rollback |
+| `/api/v5/discovery/on-boarding-ingestion` | POST | Receives ZTP discovery signals (unauthenticated) |
+| `/api/v5/visibility/snapshots` | POST/GET | Manages/retrieves configuration snapshots and history |
+| `/api/v5/visibility/rollback` | POST | Triggers rollback with blast-radius check |
+| `/api/v5/visibility/compliance/run` \| `/latest` | POST/GET | Executes/retrieves compliance audits |
+| `/api/v5/visibility/endpoints` | GET | Lists discovered endpoints |
+| `/api/v5/visibility/telemetry` | GET | Retrieves telemetry metric series |
+| `/api/v5/admin/stats` \| `/topology` | GET | Retrieves stats and topology graph data |
+
+## **2.8 Security & Application RBAC**
+
+* **JWT Bearer token** required for every write operation.
+* 3 roles: **Platform Admin** (full access), **Tenant Operator** (read-write scoped to tenant), **Tenant Auditor** (read-only scoped to tenant).
+* Tenant boundary isolation is enforced at Stage 2 of the policy pipeline — not just at the API routing layer.
+
+| ⚠️ **Do not confuse application RBAC** (JWT tokens, tenant scopes) with **Kubernetes RBAC** managed by Rancher (which controls who can manage the cluster pods and resources) — these are two completely separate planes. |
+| :---- |
+
+## **2.9 Functional Roadmap (Gaps vs. Target Scope)**
+
+| Feature | Status | Estimated Effort |
+| :--- | :--- | :--- |
+| BGP Peering Graph | ⚠️ Not Implemented | Medium — add gNMI Subscribe on `/network-instances/.../bgp` |
+| ISIS / MPLS LDP Topology | ❌ Not Implemented | High — implement only if enterprise routing requirements justify it |
+| Compliance Scoring & Trends | ⚠️ Partial | Low — add aggregated scoring fields to `compliance_runs` |
+| Reporting & Exports (CSV/XLSX) | ❌ Not Implemented | Low — implement dedicated endpoints using `pandas` and Celery Beat scheduler |
+| Fine-grained RBAC (40+ permissions) | ⚠️ Partial (3 fixed roles) | Medium — transition the JWT claims to a permission-based matrix |
+| Interactive Frontend UI | ⚠️ In Development | High — React SPA integrated with react-flow or cytoscape.js |
+
+---
+
+# **Part 3 — Consolidated Technical Stack (Deployment + Application)**
+
+| Layer | Technology |
+| :--- | :--- |
+| Cluster Orchestration | Rancher + RKE2 (Kubernetes) |
+| Ingress Layer | MetalLB + NGINX Ingress Controller |
+| Autoscaling | HPA (Gateway), KEDA (Celery based on Redis Stream queue depth) |
+| Database | PostgreSQL managed via operator (CloudNativePG / Zalando) |
+| Event Bus / Cache | Redis Sentinel (StatefulSet) |
+| Block Storage (CSI) | Longhorn |
+| Object Storage (S3) | MinIO |
+| Cluster Backup | Velero |
+| Database Backup (PITR) | pgBackRest / WAL-G |
+| Infrastructure Monitoring | Prometheus + Grafana (Rancher integrated stack) |
 | API Gateway | FastAPI (`main.py`) |
-| Validation policy | Pydantic + logique 4-stage custom |
-| Discovery & télémétrie | gNMI (`pygnmi`), `gnmi_discovery.py`, `metrics_collector.py` |
-| Config lifecycle | `config_lifecycle.py` |
-| Orchestration jobs | Celery + Redis Streams |
-| Drivers southbound | `drivers/nokia_srlinux.py`, `drivers/dell_os10.py`, `drivers/arista_eos.py` |
-| Auth applicative | JWT Bearer (3 rôles) |
-| Environnement de test réseau | PNETLab (20× Dell OS10, VM dédiée, nested virtualization) |
+| Policy Validation | Pydantic + custom 4-stage validation pipeline |
+| Telemetry & Discovery | gNMI (`pygnmi`), `gnmi_discovery.py`, `metrics_collector.py` |
+| Config Lifecycle | `config_lifecycle.py` |
+| Job Orchestration | Celery + Redis Streams |
+| Southbound Drivers | `drivers/nokia_srlinux.py`, `drivers/dell_os10.py`, `drivers/arista_eos.py` |
+| Application Authentication | JWT Bearer (3 roles) |
+| Network Testing Sandbox | PNETLab (20× Dell OS10, dedicated VM, nested virtualization) |
 
 ---
 
-## Partie 4 — Prochaines étapes
+# **Part 4 — Next Steps**
 
-1. Déployer le cluster RKE2 via Rancher, installer Longhorn et MinIO depuis le catalogue d'apps.
-2. Choisir et déployer l'opérateur Postgres (CloudNativePG recommandé pour sa simplicité).
-3. Containeriser les composants applicatifs existants (`main.py`, `gnmi_discovery.py`, `config_lifecycle.py`) en images Docker séparées par Deployment.
-4. Configurer KEDA pour le scaling des Celery workers sur la profondeur de queue Redis.
-5. Mettre en place Velero + le backup PITR Postgres vers MinIO avant toute mise en production, même en sandbox.
-6. Garder PNETLab en VM séparée pour l'instant ; évaluer Harvester plus tard si besoin d'unification complète.
-7. Prioriser le gap fonctionnel : compliance scoring/trending et reporting/export en premier (faible effort, forte valeur), BGP peering ensuite, ISIS/MPLS/L2VPN seulement si un besoin métier concret apparaît.
+1. Deploy the RKE2 cluster via Rancher and install Longhorn and MinIO from the App Catalogue.
+2. Select and deploy the PostgreSQL operator (CloudNativePG is recommended for simplicity).
+3. Containerize the application modules (`main.py`, `gnmi_discovery.py`, `config_lifecycle.py`) as separate Docker images per deployment.
+4. Configure KEDA to dynamically scale the Celery workers based on Redis queue depth.
+5. Setup Velero and pgBackRest database PITR backups to MinIO before any production rollout.
+6. Retain PNETLab as a separate VM; evaluate Harvester integration at a later stage.
+7. Address functional gaps: prioritize compliance scoring/trends and CSV reporting first (low effort, high value), followed by the BGP peering graph.
