@@ -137,7 +137,7 @@ def login(payload: LoginPayload, request: Request, db: Session = Depends(get_db)
     tenant_names = []
     if role == "platform_admin":
         all_tenants = db.query(models.Tenant).all()
-        tenant_names = ["AtlasWave Maroc Demo"] + [t.tenant_name for t in all_tenants]
+        tenant_names = [t.tenant_name for t in all_tenants]
     else:
         tenant_names = [m.tenant.tenant_name for m in memberships if m.tenant]
 

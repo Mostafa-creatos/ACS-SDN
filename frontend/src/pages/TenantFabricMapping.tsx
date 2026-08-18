@@ -220,14 +220,14 @@ export const TenantFabricMapping: React.FC = () => {
 
     // Basic CIDR validation
     const cidrRegex = /^([0-9]{1,3}\.){3}[0-9]{1,3}\/([0-9]|[1-2][0-9]|3[0-2])$/;
-    if (!cidrRegex.test(subnetForm.subnet_cidr)) {
+    if (!cidrRegex.test(subnetForm.subnet_cidr.trim())) {
       setValidationError('Invalid CIDR prefix block format (e.g. 10.0.1.0/24).');
       return;
     }
 
     // Gateway validation
     const ipRegex = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/;
-    if (!ipRegex.test(subnetForm.anycast_gateway_ip)) {
+    if (!ipRegex.test(subnetForm.anycast_gateway_ip.trim())) {
       setValidationError('Invalid Anycast Gateway IP address.');
       return;
     }

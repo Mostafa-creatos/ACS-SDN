@@ -132,6 +132,15 @@ Moved `backend/app/auth.py` → `backend/app/core/auth.py` to consolidate core u
 
 - Deploy once to `alkhairplateforme@34.32.194.240` (docker-compose build app/celery-worker/flower + recreate), then smoke test (login + ZTP retry). Run openapi diff on the VM too.
 
+## Strict Operational Rule (User Directive)
+
+- **Mandatory Pre-Execution Protocol:** The AI assistant must NEVER execute any file edit, code modification, database change, or terminal command without first explaining the exact proposed solution and asking for explicit user approval.
+- **Workflow Sequence:**
+  1. Explain the problem and proposed solution clearly.
+  2. Specify the exact files or commands involved.
+  3. Ask for explicit user permission to proceed.
+  4. Wait for user approval before making any edits or executing commands.
+
 ## Working Tree Note
 
 Untracked and intentionally NOT committed: `Logo.png`, `dell_baseline_commands.cfg` (pre-existing, user-owned). Do not stage them unless asked.

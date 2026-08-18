@@ -366,7 +366,7 @@ export const ZtpConsolePage: React.FC = () => {
                     </td>
                     <td className="py-3 px-4 text-right" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center gap-1 justify-end">
-                        {!r.fabric_id && r.onboarding_status !== 'pending' && (
+                        {(!r.fabric_id || r.onboarding_status === 'unassigned') && r.onboarding_status !== 'pending' && r.onboarding_status !== 'provisioned' && (
                           <button
                             onClick={() => handleStartAssign(r)}
                             className="bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold px-2.5 py-1.5 rounded-lg border border-indigo-100 transition-colors text-xs mr-2 shadow-sm"

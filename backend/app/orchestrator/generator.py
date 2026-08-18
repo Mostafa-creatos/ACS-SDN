@@ -46,8 +46,9 @@ def generate_subnet_config(switch: models.Switch, subnet: models.IpamSubnet, vrf
         # them here or Nokia SR Linux will see a duplicate "enter candidate"
         # while already in candidate mode and fail with "Unknown token 'enter'".
         lines = [
+            f"/ interface ethernet-1/1 subinterface {subnet.vlan_id} type routed",
+            f"/ interface ethernet-1/1 subinterface {subnet.vlan_id} vlan encap single-tagged vlan-id {subnet.vlan_id}",
             f"/ interface ethernet-1/1 subinterface {subnet.vlan_id} admin-state enable",
-            # Nokia SR Linux also needs CIDR notation for the IPv4 address
             f"/ interface ethernet-1/1 subinterface {subnet.vlan_id} ipv4 address {gw_cidr}",
             f"/ network-instance {vrf.vrf_name} type ip-vrf",
             f"/ network-instance {vrf.vrf_name} interface ethernet-1/1.{subnet.vlan_id}",

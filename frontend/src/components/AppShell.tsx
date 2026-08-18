@@ -71,7 +71,6 @@ export const AppShell: React.FC = () => {
     { name: 'IP Management', path: '/ipam', icon: Network },
     { name: 'Config Push', path: '/config-push', icon: Send },
     { name: 'Compliance', path: '/compliance', icon: ShieldCheck },
-    { name: 'Provisioning Status', path: '/provisioning-status', icon: ScrollText },
   ];
 
   // Helper for rendering NavLink

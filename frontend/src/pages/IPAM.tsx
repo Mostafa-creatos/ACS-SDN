@@ -331,6 +331,29 @@ export const IPAM: React.FC = () => {
     }
   };
 
+  const formatTerminalLogs = (rawLogs: any) => {
+    if (!rawLogs || typeof rawLogs !== 'string') return 'Initializing terminal pipeline log output...';
+    return rawLogs.split('\n').map((line, idx) => {
+      if (!line.trim()) return null;
+      let lineClass = 'text-slate-300';
+      if (line.includes('FAILED') || line.includes('Exception') || line.includes('Error')) {
+        lineClass = 'text-rose-400 font-bold';
+      } else if (line.includes('succeeded') || line.includes('successfully')) {
+        lineClass = 'text-emerald-400';
+      } else if (line.includes('Generating config') || line.includes('Pushing config')) {
+        lineClass = 'text-sky-400';
+      } else if (line.includes('Configuration payload:')) {
+        lineClass = 'text-yellow-400 font-semibold';
+      }
+
+      return (
+        <div key={idx} className={`py-0.5 font-mono text-[11px] leading-5 ${lineClass}`}>
+          {line}
+        </div>
+      );
+    });
+  };
+
   return (
     <div className="space-y-6 font-sans">
       
@@ -741,14 +764,20 @@ export const IPAM: React.FC = () => {
                   </div>
                 </Card>
 
-                {/* Raw logs terminal block */}
+                {/* Colorized CLI Execution Transcript terminal block */}
                 <Card className="p-5">
-                  <h3 className="text-xs font-bold font-display text-atlas-ink uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                    <Terminal className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Closed-loop execution logs</span>
-                  </h3>
-                  <div className="bg-slate-900 rounded-lg p-4 font-mono text-[10px] text-emerald-400 overflow-x-auto max-h-[300px] overflow-y-auto whitespace-pre select-all shadow-inner">
-                    {selectedJob.logs || "Initial status execution loading..."}
+                  <div className="flex justify-between items-center pb-2 border-b border-slate-100 mb-3">
+                    <div className="flex items-center gap-2">
+                      <Terminal className="w-4 h-4 text-slate-600" />
+                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">CLI Execution Transcript</h3>
+                    </div>
+                    {getStatusBadge(selectedJob.status)}
+                  </div>
+                  <div className="bg-slate-950 rounded-lg p-4 font-mono text-[11px] border border-slate-900 shadow-inner max-h-[350px] overflow-y-auto">
+                    <div className="text-slate-500 mb-2 border-b border-slate-900 pb-1 select-none">
+                      # SDN Controller Job ID: {selectedJob.job_id}
+                    </div>
+                    {formatTerminalLogs(selectedJob.logs)}
                   </div>
                 </Card>
 

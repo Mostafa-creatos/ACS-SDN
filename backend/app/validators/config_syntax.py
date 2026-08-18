@@ -79,6 +79,14 @@ OS10_PATTERNS: List[re.Pattern] = [
     re.compile(r'^ ?class \S+$'),
     re.compile(r'^ ?set dscp \d+$'),
     re.compile(r'^ ?police \d+( \d+)?$'),
+    # --- VLT ---
+    re.compile(r'^vlt-domain \d+$'),
+    re.compile(r'^ ?primary$'),
+    re.compile(r'^ ?secondary$'),
+    re.compile(r'^ ?discovery-interface [\w/,]+$'),
+    re.compile(r'^ ?vlt-mac [0-9a-fA-F:\.]+$'),
+    re.compile(r'^ ?vlt-port-channel \d+$'),
+    re.compile(r'^ ?backup destination ' + IP_RX + r'$'),
     # --- Session markers ---
     re.compile(r'^configure terminal$'),
     re.compile(r'^end$'),
@@ -139,6 +147,14 @@ def validate_os10_syntax(config_payload: str) -> List[Tuple[int, str]]:
             if context != 'bgp':
                 errors.append((i + 1, f"Context violation: Entered address-family mode '{line}' but not in BGP mode (current context is '{context}')."))
             context = 'bgp-af'
+            context_line = i + 1
+            context_cmd = line
+            continue
+
+        elif line.startswith('vlt-domain '):
+            if context != 'global':
+                errors.append((i + 1, f"Context violation: Entered VLT mode '{line}' while still in '{context}' mode (entered at line {context_line}: '{context_cmd}'). Did you forget to 'exit'?"))
+            context = 'vlt'
             context_line = i + 1
             context_cmd = line
             continue
