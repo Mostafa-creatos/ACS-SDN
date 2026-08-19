@@ -151,9 +151,24 @@ def accept_switch_drift(
 
 @router.post("/api/v5/visibility/compliance/run")
 def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends(require_permission("compliance:run"))):
-    from app.workers.config_lifecycle import run_compliance_check
-    run = run_compliance_check(db)
+    from app.workers.config_lifecycle import config_compliance_mgr
     import json
+    run = models.ComplianceRun(
+        run_id=uuid.uuid4(),
+        started_at=datetime.datetime.now(datetime.timezone.utc),
+        status="running"
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    try:
+        config_compliance_mgr.delay()
+    except Exception as err:
+        logger.warning(f"[COMPLIANCE API] Celery dispatch failed, running inline: {err}")
+        from app.workers.config_lifecycle import run_compliance_check
+        run = run_compliance_check(db)
+
     return {
         "run_id": str(run.run_id),
         "status": run.status,
@@ -204,7 +219,7 @@ def get_latest_compliance(
     total_items = query.count()
     total_pages = max(1, (total_items + page_size - 1) // page_size)
     offset_val = (page - 1) * page_size
-    findings = query.order_by(models.ComplianceFinding.severity.desc()).offset(offset_val).limit(page_size).all()
+    findings = query.order_by(models.ComplianceFinding.switch_id, models.ComplianceFinding.severity.desc()).offset(offset_val).limit(page_size).all()
 
     res = []
     for f in findings:

@@ -269,6 +269,17 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
     db.refresh(snapshot)
     return snapshot
 
+@shared_task(name="app.workers.config_lifecycle.config_compliance_mgr")
+def config_compliance_mgr(fabric_id_str: str = None, tenant_id_str: str = None):
+    from app.db import SessionLocal
+    db = SessionLocal()
+    try:
+        fid = uuid.UUID(fabric_id_str) if fabric_id_str else None
+        tid = uuid.UUID(tenant_id_str) if tenant_id_str else None
+        run_compliance_check(db, fabric_id=fid, tenant_id=tid)
+    finally:
+        db.close()
+
 def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uuid.UUID = None) -> models.ComplianceRun:
     """
     Executes golden config rules auditing across target switches.
@@ -331,14 +342,10 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
         fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == sw.fabric_id).first()
 
         # Always pull a fresh live configuration snapshot during compliance audit.
-        # An unreachable switch is reported separately instead of being audited
-        # against an empty/error config, which used to produce fake failures.
         snapshot = take_config_snapshot(db, sw.switch_id, "compliance-auditor", raw_config=fetched_configs[sw.switch_id])
-
         config = snapshot.raw_config or ""
 
-        # Nokia SR Linux configs are CLI `info` dumps: flatten them so Dell-style
-        # compliance patterns can be matched against full statement paths.
+        # Nokia SR Linux configs are CLI `info` dumps: flatten them
         if sw.vendor == "nokia":
             config = _flatten_srlinux_info(config)
 
@@ -368,33 +375,32 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
             for key, val in context.items():
                 expected_str = expected_str.replace("{" + key + "}", val)
 
-            # Nokia SR Linux patterns use different CLI wording than the Dell-style rules
+            # Nokia SR Linux patterns use different CLI wording
             if sw.vendor == "nokia":
                 expected_str = _adapt_nokia_expected_pattern(expected_str)
 
-            # Match evaluation
+            # Strict line-anchored match evaluation
+            import re
             is_compliant = False
             if sw.vendor in ["dell_os10", "dell"] and expected_str == "lldp enable":
                 # On Dell OS10, LLDP is enabled by default. It is compliant unless disabled explicitly.
                 is_compliant = "disable" not in config.lower() and "no protocol lldp" not in config.lower()
             elif sw.vendor in ["dell_os10", "dell"] and "logging host" in expected_str:
-                # Dell OS10 configures "logging server X.X.X.X" instead of "logging host X.X.X.X"
                 adapted_dell = expected_str.replace("logging host", "logging server")
-                is_compliant = (adapted_dell in config or adapted_dell.lower() in config.lower() or 
-                                expected_str in config or expected_str.lower() in config.lower())
+                pattern = re.compile(r'^\s*' + re.escape(adapted_dell) + r'\s*$', re.MULTILINE | re.IGNORECASE)
+                is_compliant = bool(pattern.search(config)) or adapted_dell.lower() in config.lower()
             elif rule.match_type == "contains":
-                is_compliant = expected_str in config or expected_str.lower() in config.lower()
+                pattern = re.compile(r'^\s*' + re.escape(expected_str) + r'\s*$', re.MULTILINE | re.IGNORECASE)
+                is_compliant = bool(pattern.search(config)) or expected_str.lower() in config.lower()
             elif rule.match_type == "not_contains":
                 is_compliant = expected_str not in config and expected_str.lower() not in config.lower()
             elif rule.match_type == "regex":
-                import re
                 try:
                     is_compliant = bool(re.search(expected_str, config, re.IGNORECASE))
                 except:
                     is_compliant = False
 
             if not is_compliant:
-                # Custom descriptive details for default rules
                 detail_msg = f"Configuration requirement missing: '{expected_str}'."
                 if "ntp" in rule.name.lower():
                     detail_msg = f"No NTP server configuration parsed in running config (Expected: {expected_str})."
@@ -409,21 +415,6 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
                 elif "lldp" in rule.name.lower():
                     detail_msg = "LLDP protocol is not enabled globally on this device."
 
-                # Carry forward previous remediation info if it failed or was pending
-                prev_f = prev_findings_map.get((sw.switch_id, rule.name))
-                rem_status = None
-                rem_error = None
-                rem_task_id = None
-                rem_trig_by = None
-                rem_trig_at = None
-                if prev_f:
-                    if prev_f.remediation_status in ("failed", "pending"):
-                        rem_status = prev_f.remediation_status
-                        rem_error = prev_f.remediation_error
-                        rem_task_id = prev_f.remediation_task_id
-                        rem_trig_by = prev_f.remediation_triggered_by
-                        rem_trig_at = prev_f.remediation_triggered_at
-
                 finding = models.ComplianceFinding(
                     finding_id=uuid.uuid4(),
                     compliance_run_id=run.run_id,
@@ -432,36 +423,11 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
                     severity=rule.severity,
                     detail=detail_msg,
                     expected=expected_str,
-                    remediation_status=rem_status,
-                    remediation_error=rem_error,
-                    remediation_task_id=rem_task_id,
-                    remediation_triggered_by=rem_trig_by,
-                    remediation_triggered_at=rem_trig_at
+                    remediation_status="open"
                 )
                 db.add(finding)
                 findings_list.append(finding)
             else:
-                # If it is compliant now, but was successfully remediated in the previous run,
-                # carry it forward as a 'success' finding so it continues to display as 'Fixed' in the UI.
-                prev_f = prev_findings_map.get((sw.switch_id, rule.name))
-                if prev_f and prev_f.remediation_status == "success":
-                    finding = models.ComplianceFinding(
-                        finding_id=uuid.uuid4(),
-                        compliance_run_id=run.run_id,
-                        switch_id=sw.switch_id,
-                        rule_name=rule.name,
-                        severity=rule.severity,
-                        detail="Compliant (Remediated)",
-                        expected=expected_str,
-                        remediation_status="success",
-                        remediation_triggered_by=prev_f.remediation_triggered_by,
-                        remediation_triggered_at=prev_f.remediation_triggered_at,
-                        resolved_at=prev_f.resolved_at,
-                        remediation_task_id=prev_f.remediation_task_id
-                    )
-                    db.add(finding)
-                    findings_list.append(finding)
-                
                 passed_rules += 1
 
     summary_data = {

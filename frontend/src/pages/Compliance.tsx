@@ -336,11 +336,12 @@ export const Compliance: React.FC = () => {
   // ── Re-load when filters/page change ─────────────────────────────────────
   useEffect(() => { loadData(page); }, [page, severityFilter, switchFilter, statusFilter]);
 
-  // ── Auto-refresh when pending remediations exist ──────────────────────────
+  // ── Auto-refresh when run is in progress or pending remediations exist ──
   useEffect(() => {
     const hasPending = (data?.findings || []).some(f => f.remediation_status === 'pending');
-    if (hasPending) {
-      refreshTimer.current = setInterval(() => loadData(page), 15000);
+    const isRunning = data?.status === 'running';
+    if (hasPending || isRunning) {
+      refreshTimer.current = setInterval(() => loadData(page), isRunning ? 2000 : 15000);
     } else {
       if (refreshTimer.current) clearInterval(refreshTimer.current);
     }
