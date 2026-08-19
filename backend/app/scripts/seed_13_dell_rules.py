@@ -1,111 +1,95 @@
-# file:///c:/Users/mosta/OneDrive/Desktop/Antigravity/SDN-Front-End/backend/app/scripts/clean_and_seed_new_fabrics.py
-import os
 import sys
+import os
 import uuid
-import bcrypt
-from datetime import datetime, timezone
 
-# Allow running as standalone script
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from app.db import SessionLocal
 from app import models
 
-def clean_and_seed():
+def seed_dell_rules():
     db = SessionLocal()
     try:
-        print("[SDN SEED] Cleaning database tables...")
-        # Delete existing data in reverse order of foreign keys
-        db.query(models.ComplianceFinding).delete()
+        # Clear existing rules
         db.query(models.ComplianceRule).delete()
-        db.query(models.ConfigSnapshot).delete()
-        db.query(models.ProvisioningJob).delete()
-        db.query(models.IpamSubnet).delete()
-        db.query(models.Switch).delete()
-        db.query(models.ZtpDiscoveryPool).delete()
-        db.query(models.TenantVrf).delete()
-        db.query(models.UserTenantMembership).delete()
-        db.query(models.User).delete()
-        db.query(models.Tenant).delete()
-        db.query(models.Fabric).delete()
         db.commit()
-        print("[SDN SEED] Clean up completed.")
 
-        print("[SDN SEED] Seeding users...")
-        admin_pwd = bcrypt.hashpw(b"admin_password_123!", bcrypt.gensalt()).decode("utf-8")
-        admin_user = models.User(
-            username="admin", 
-            hashed_password=admin_pwd, 
-            role="Platform Admin", 
-            tenant_id=None
-        )
-        db.add(admin_user)
-        db.commit()
-        print(f"[SDN SEED] Created Platform Admin user: admin")
-
-        print("[SDN SEED] Seeding global compliance rule templates (13 Dell OS10 Golden Rules)...")
-        rules = [
+        dell_rules = [
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="NTP Server Configuration", category="Security", severity="critical", match_type="contains",
                 template_pattern="ntp server {fabric.expected_ntp_servers}", remediation_guide="Configure an NTP server pointing to the fabric NTP peer.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="DNS Name Servers", category="Security", severity="critical", match_type="contains",
                 template_pattern="ip name-server {fabric.expected_dns_servers}", remediation_guide="Add the fabric DNS resolver under ip name-server.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="AAA Local Authentication", category="Security", severity="critical", match_type="contains",
                 template_pattern="aaa authentication login default local", remediation_guide="Enable AAA local login authentication on the device.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="SSH Server Enable", category="Security", severity="critical", match_type="contains",
                 template_pattern="ip ssh server enable", remediation_guide="Enable SSH server for secure management access.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="Syslog Logging Server", category="Observability", severity="warning", match_type="contains",
                 template_pattern="logging host {fabric.expected_syslog_server}", remediation_guide="Point centralized logging at the fabric syslog collector.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="LLDP Global Enable", category="Observability", severity="warning", match_type="contains",
                 template_pattern="lldp enable", remediation_guide="Enable LLDP globally on the switch.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="Hostname Match", category="System", severity="warning", match_type="contains",
                 template_pattern="hostname {switch.hostname}", remediation_guide="Ensure the running hostname matches controller inventory.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="Spanning-Tree RSTP Mode", category="Layer-2", severity="critical", match_type="contains",
                 template_pattern="spanning-tree mode rstp", remediation_guide="Configure Rapid Spanning Tree Protocol (RSTP) mode.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="Spanning-Tree BPDU Guard", category="Layer-2", severity="warning", match_type="contains",
                 template_pattern="spanning-tree disable-map", remediation_guide="Configure BPDU Guard to protect edge access ports.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="VLT Domain 1 Configured", category="Redundancy", severity="critical", match_type="contains",
                 template_pattern="vlt-domain 1", remediation_guide="Configure Virtual Link Trunking (VLT) Domain 1.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="BGP Local ASN Match", category="Routing", severity="critical", match_type="contains",
                 template_pattern="router bgp {switch.local_bgp_asn}", remediation_guide="Ensure BGP router process uses assigned local ASN.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="BGP Router ID", category="Routing", severity="warning", match_type="contains",
                 template_pattern="bgp router-id {switch.loopback_0_ip}", remediation_guide="Set BGP router ID to loopback 0 IP address.", is_active=True
             ),
             models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="Default Management Route", category="Routing", severity="warning", match_type="contains",
                 template_pattern="ip route 0.0.0.0/0", remediation_guide="Ensure a default static route is configured for out-of-band management.", is_active=True
             ),
         ]
-        db.add_all(rules)
+
+        db.add_all(dell_rules)
         db.commit()
-        print("[SDN SEED] Database seeding completed successfully (Platform Admin + Compliance templates).")
+        print(f"[COMPLIANCE SEED] Successfully seeded {len(dell_rules)} Dell OS10 Golden Compliance Rules!")
     except Exception as e:
         db.rollback()
-        print(f"[SDN SEED] Failed to clean and seed database: {e}")
+        print(f"[COMPLIANCE SEED ERROR] {e}")
     finally:
         db.close()
 
 if __name__ == "__main__":
-    clean_and_seed()
+    seed_dell_rules()
