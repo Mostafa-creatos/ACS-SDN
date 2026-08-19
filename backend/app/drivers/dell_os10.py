@@ -33,19 +33,9 @@ def _tcp_open(host: str, port: int, timeout: float = 3.0) -> bool:
         return False
 
 
-def _ssh_handshake_ok(host: str, port: int, timeout: float = 5.0) -> bool:
-    """True if the port accepts TCP and answers with an SSH version banner.
-
-    A dead SSH daemon (e.g. a missing host key) can accept connections but never
-    send the ``SSH-2.0-`` banner, which would otherwise stall the SSH collector.
-    """
-    try:
-        with socket.create_connection((host, port), timeout=timeout) as s:
-            s.settimeout(timeout)
-            data = s.recv(64)
-            return data.startswith(b"SSH-2.0-")
-    except OSError:
-        return False
+def _ssh_handshake_ok(host: str, port: int, timeout: float = 3.0) -> bool:
+    """True if SSH port accepts TCP connection."""
+    return _tcp_open(host, port, timeout=timeout)
 
 
 def connect_os10_collector(host: str, username: str = "admin", password: str = "admin") -> "tuple[DellOS10Collector, str]":
