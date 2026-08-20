@@ -269,7 +269,9 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
     db.refresh(snapshot)
     return snapshot
 
-@shared_task(name="app.workers.config_lifecycle.config_compliance_mgr")
+from app.workers.celery_app import celery_app
+
+@celery_app.task(name="app.workers.config_lifecycle.config_compliance_mgr")
 def config_compliance_mgr(fabric_id_str: str = None, tenant_id_str: str = None):
     from app.db import SessionLocal
     db = SessionLocal()
@@ -350,15 +352,18 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
             config = _flatten_srlinux_info(config)
 
         # Interpolation context dictionary
+        fabric_ntp = sw.fabric.expected_ntp_servers if (sw.fabric and sw.fabric.expected_ntp_servers) else "10.0.0.1"
+        fabric_dns = sw.fabric.expected_dns_servers if (sw.fabric and sw.fabric.expected_dns_servers) else "8.8.8.8"
+        fabric_syslog = sw.fabric.expected_syslog_server if (sw.fabric and sw.fabric.expected_syslog_server) else "10.0.0.2"
+
         context = {
-            "fabric.expected_ntp_servers": fabric.expected_ntp_servers if fabric and fabric.expected_ntp_servers else "192.168.100.1",
-            "fabric.expected_dns_servers": fabric.expected_dns_servers if fabric and fabric.expected_dns_servers else "8.8.8.8",
-            "fabric.expected_syslog_server": fabric.expected_syslog_server if fabric and fabric.expected_syslog_server else "10.10.100.5",
-            "fabric.global_bgp_asn": str(fabric.global_bgp_asn) if fabric else "65000",
             "switch.hostname": sw.hostname,
             "switch.management_ip": sw.management_ip,
             "switch.local_bgp_asn": str(sw.local_bgp_asn),
-            "switch.loopback_0_ip": sw.loopback_0_ip
+            "switch.loopback_0_ip": sw.loopback_0_ip or "",
+            "fabric.expected_ntp_servers": fabric_ntp,
+            "fabric.expected_dns_servers": fabric_dns,
+            "fabric.expected_syslog_server": fabric_syslog,
         }
 
         for rule in rules:

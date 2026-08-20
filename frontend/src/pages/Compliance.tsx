@@ -290,7 +290,7 @@ export const Compliance: React.FC = () => {
   // ── Load compliance data (paginated) ──────────────────────────────────────
   const loadData = useCallback(async (p = 1) => {
     try {
-      const params = new URLSearchParams({ page: String(p), page_size: '25' });
+      const params = new URLSearchParams({ page: String(p), page_size: '100' });
       if (severityFilter) params.set('severity', severityFilter);
       if (switchFilter)   params.set('switch_id', switchFilter);
       if (statusFilter)   params.set('status', statusFilter);
