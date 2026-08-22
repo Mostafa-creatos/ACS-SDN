@@ -140,6 +140,9 @@ Moved `backend/app/auth.py` → `backend/app/core/auth.py` to consolidate core u
   2. Specify the exact files or commands involved.
   3. Ask for explicit user permission to proceed.
   4. Wait for user approval before making any edits or executing commands.
+- **Mandatory Nginx Permission Protocol:** Every frontend static build copy (`dist/`) to `sdn_frontend` container MUST ALWAYS be immediately followed by:
+  `docker exec -i sdn_frontend chown -R nginx:nginx /usr/share/nginx/html && docker exec -i sdn_frontend chmod -R 755 /usr/share/nginx/html && docker exec -i sdn_frontend nginx -s reload`
+  Failure to run this causes Nginx to return HTTP 403 / blank screen.
 
 ## Working Tree Note
 

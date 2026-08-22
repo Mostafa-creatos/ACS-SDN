@@ -153,9 +153,11 @@ def accept_switch_drift(
 def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends(require_permission("compliance:run"))):
     from app.workers.config_lifecycle import config_compliance_mgr
     import json
+    user_email = claims.get("email") or claims.get("username") or claims.get("sub") or "admin"
     run = models.ComplianceRun(
         run_id=uuid.uuid4(),
         started_at=datetime.datetime.now(datetime.timezone.utc),
+        triggered_by=user_email,
         status="running"
     )
     db.add(run)
@@ -203,7 +205,11 @@ def get_latest_compliance(
     claims: dict = Depends(require_permission("compliance:run"))
 ):
     import json
-    run = db.query(models.ComplianceRun).order_by(models.ComplianceRun.started_at.desc()).first()
+    run = db.query(models.ComplianceRun).filter(
+        models.ComplianceRun.status == "completed"
+    ).order_by(models.ComplianceRun.started_at.desc()).first()
+    if not run:
+        run = db.query(models.ComplianceRun).order_by(models.ComplianceRun.started_at.desc()).first()
     if not run:
         return {"status": "NO_RUNS_EVALUATED"}
 

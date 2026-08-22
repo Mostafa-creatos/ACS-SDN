@@ -52,10 +52,10 @@ def get_current_user_claims(
             return {"role": "Tenant Auditor", "tenant_id": "11111111-1111-1111-1111-11111111111a", "user_id": "11111111-1111-1111-1111-11111111111c"}
         if token.startswith("mock-token-operator-"):
             tenant_id = token[len("mock-token-operator-"):]
-            return {"role": "Tenant Operator", "tenant_id": tenant_id, "user_id": "mock"}
+            return {"role": "Tenant Operator", "tenant_id": tenant_id, "user_id": "11111111-1111-1111-1111-11111111111b"}
         if token.startswith("mock-token-auditor-"):
             tenant_id = token[len("mock-token-auditor-"):]
-            return {"role": "Tenant Auditor", "tenant_id": tenant_id, "user_id": "mock"}
+            return {"role": "Tenant Auditor", "tenant_id": tenant_id, "user_id": "11111111-1111-1111-1111-11111111111c"}
     
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])

@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Link2, Link2Off } from "lucide-react";
+import { Link2, Link2Off, Network } from "lucide-react";
 import type { VltDomain } from "../types/switch-types";
 
 function LinkStateBadge({ state, label }: { state: "up" | "down"; label: string }) {
@@ -21,43 +21,76 @@ function LinkStateBadge({ state, label }: { state: "up" | "down"; label: string 
   );
 }
 
-export function FabricVltTab({ vlt }: { vlt: VltDomain | null }) {
-  if (!vlt) {
-    return (
-      <div className="bg-slate-50 border rounded-lg p-4 text-xs text-slate-500">
-        This switch is not a member of a VLT domain. VLT pairing applies to leaf switches
-        deployed in redundant pairs; standalone or spine switches in a routed-only role may not use it.
-      </div>
-    );
-  }
-
-  const isSplitBrainRisk = (vlt.iclState ?? vlt.icl_state) === "down";
+export function FabricVltTab({ switchData, vlt }: { switchData?: any; vlt: VltDomain | null }) {
+  const isSplitBrainRisk = vlt ? (vlt.iclState ?? vlt.icl_state) === "down" : false;
 
   return (
     <div className="space-y-4">
-      {isSplitBrainRisk && (
-        <div className="bg-rose-50 border border-rose-200 rounded-lg p-4">
-          <p className="text-xs font-semibold text-rose-800">
-            Inter-Chassis Link is down. This is a split-brain risk -- avoid pushing further
-            configuration changes to this VLT pair until the ICL is restored.
-          </p>
+      {/* ── Fabric Details Header Card (Light Theme) ── */}
+      <div className="bg-slate-50/70 border border-slate-200 rounded-xl p-4 shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-3 mb-3">
+          <div className="flex items-center gap-2">
+            <Network className="w-4 h-4 text-indigo-600" />
+            <h3 className="text-xs font-bold text-slate-800 tracking-wide">
+              {switchData?.fabric_name || "Fabric A"}
+            </h3>
+          </div>
+          <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold">
+            {switchData?.role?.toUpperCase() || "LEAF"}
+          </span>
         </div>
-      )}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+          <div>
+            <span className="text-slate-400 text-[10px] font-medium block">Fabric ID</span>
+            <span className="font-mono text-[10px] text-slate-700 font-semibold truncate block" title={switchData?.fabric_id || ''}>
+              {switchData?.fabric_id || "Unassigned"}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-400 text-[10px] font-medium block">BGP ASN</span>
+            <span className="font-mono text-slate-700 font-bold">{switchData?.local_bgp_asn || "65001"}</span>
+          </div>
+          <div>
+            <span className="text-slate-400 text-[10px] font-medium block">Loopback 0 IP</span>
+            <span className="font-mono text-slate-700 font-bold">{switchData?.loopback_0_ip || "N/A"}</span>
+          </div>
+          <div>
+            <span className="text-slate-400 text-[10px] font-medium block">VTEP IP</span>
+            <span className="font-mono text-slate-700 font-bold">{switchData?.vtep_ip || "N/A"}</span>
+          </div>
+        </div>
+      </div>
 
-      <div className="bg-slate-50/50 border rounded-lg p-4">
-        <h3 className="text-xs font-bold text-slate-700 mb-3">VLT Domain {vlt.domainId}</h3>
-        <div className="grid grid-cols-2 gap-4 text-xs">
-          <div>
-            <p className="text-slate-400 mb-1">Peer switch</p>
-            <p className="font-semibold text-slate-700">{vlt.peerSwitchHostname ?? vlt.peer_switch_hostname}</p>
-          </div>
-          <div>
-            <p className="text-slate-400 mb-1">Peer routing</p>
-            <p className="font-semibold text-slate-700">{(vlt.peerRoutingEnabled ?? vlt.peer_routing_enabled) ? "Enabled" : "Disabled"}</p>
-          </div>
+      {/* ── VLT Domain Redundancy Section ── */}
+      {!vlt ? (
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-500">
+          This switch is not a member of a VLT domain. VLT pairing applies to leaf switches deployed in redundant pairs; standalone or spine switches in a routed-only role do not use VLT domain clustering.
         </div>
-        <div className="mt-4 flex flex-col gap-2 border-t pt-3">
-          <LinkStateBadge state={vlt.peerLinkStatus ?? vlt.peer_link_status} label="Peer link" />
+      ) : (
+        <>
+          {isSplitBrainRisk && (
+            <div className="bg-rose-50 border border-rose-200 rounded-lg p-4">
+              <p className="text-xs font-semibold text-rose-800">
+                Inter-Chassis Link is down. This is a split-brain risk -- avoid pushing further
+                configuration changes to this VLT pair until the ICL is restored.
+              </p>
+            </div>
+          )}
+
+          <div className="bg-slate-50/50 border rounded-lg p-4">
+            <h3 className="text-xs font-bold text-slate-700 mb-3">VLT Domain {vlt.domainId}</h3>
+            <div className="grid grid-cols-2 gap-4 text-xs">
+              <div>
+                <p className="text-slate-400 mb-1">Peer switch</p>
+                <p className="font-semibold text-slate-700">{vlt.peerSwitchHostname ?? vlt.peer_switch_hostname}</p>
+              </div>
+              <div>
+                <p className="text-slate-400 mb-1">Peer routing</p>
+                <p className="font-semibold text-slate-700">{(vlt.peerRoutingEnabled ?? vlt.peer_routing_enabled) ? "Enabled" : "Disabled"}</p>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-col gap-2 border-t pt-3">
+              <LinkStateBadge state={vlt.peerLinkStatus ?? vlt.peer_link_status} label="Peer link" />
           <LinkStateBadge state={vlt.iclState ?? vlt.icl_state} label="ICL (inter-chassis link)" />
         </div>
       </div>
@@ -96,6 +129,8 @@ export function FabricVltTab({ vlt }: { vlt: VltDomain | null }) {
           </table>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }

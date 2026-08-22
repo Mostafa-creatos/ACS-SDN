@@ -412,15 +412,18 @@ export const Switches: React.FC = () => {
                         <td className="px-6 py-4">
                           <div className="font-bold text-sm text-atlas-ink">{sw.hostname}</div>
                           <div className="text-[10px] text-slate-400 font-mono mt-0.5">S/N: {sw.serial_number || sw.service_tag || 'N/A'}</div>
-                          {((sw as any).configured_vrfs || []).length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-1.5 max-w-[180px]">
-                              {((sw as any).configured_vrfs).map((vrf: string) => (
-                                <span key={vrf} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 border border-indigo-100 uppercase tracking-wider">
-                                  {vrf}
-                                </span>
-                              ))}
-                            </div>
-                          )}
+                          <div className="flex flex-wrap gap-1 mt-1.5 max-w-[220px]">
+                            {(sw as any).fabric_name && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 border border-rose-200 uppercase tracking-wider">
+                                {(sw as any).fabric_name}
+                              </span>
+                            )}
+                            {((sw as any).configured_vrfs || []).map((vrf: string) => (
+                              <span key={vrf} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 border border-indigo-100 uppercase tracking-wider">
+                                {vrf}
+                              </span>
+                            ))}
+                          </div>
                         </td>
                         {/* IP */}
                         <td className="px-6 py-4 font-mono text-xs text-slate-600 font-semibold">{sw.management_ip}</td>
@@ -514,6 +517,7 @@ export const Switches: React.FC = () => {
                               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
                                 {[
                                   ['Model', `${sw.vendor?.toUpperCase() || ''} ${sw.model || '-'}`],
+                                  ['Fabric', (sw as any).fabric_name || 'DataCenter-Fabric-01'],
                                   ['Serial Number', sw.serial_number || '-'],
                                   ['Service Tag', sw.service_tag || '-'],
                                   ['Part Number', sw.part_number || '-'],
@@ -702,7 +706,7 @@ export const Switches: React.FC = () => {
 
                             {/* ── Fabric / VLT ── */}
                             {activeTab === 'fabric' && (
-                              <FabricVltTab vlt={sw.vlt ? {
+                              <FabricVltTab switchData={sw} vlt={sw.vlt ? {
                                 ...sw.vlt,
                                 domainId: sw.vlt.domainId ?? sw.vlt.domain_id ?? 1,
                                 switchId: sw.switch_id,

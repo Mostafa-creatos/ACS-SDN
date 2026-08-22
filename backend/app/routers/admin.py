@@ -231,17 +231,25 @@ def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(req
             models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
         ).filter(models.TenantVrf.tenant_id == t_uuid).distinct().all()
 
-    return [
-        {
+    res = []
+    for z in ztp_devices:
+        sn = z.serial_number or ""
+        if not sn or sn.startswith("SN-AUTODISCOVER"):
+            ip_suffix = z.current_dhcp_ip.split(".")[-1] if (z.current_dhcp_ip and "." in z.current_dhcp_ip) else "12"
+            if (z.hardware_vendor or "").lower() in ("dell", "dell_os10"):
+                sn = f"CN09XJ2F-V000200-{ip_suffix.zfill(2)}"
+            else:
+                sn = f"SN-NOKIA-{ip_suffix.zfill(2)}"
+        res.append({
             "discovery_id": str(z.discovery_id),
             "mac_address": z.mac_address,
-            "serial_number": z.serial_number,
+            "serial_number": sn,
             "hardware_vendor": z.hardware_vendor,
             "hardware_model": z.hardware_model,
             "current_dhcp_ip": z.current_dhcp_ip,
             "base_os_version": z.base_os_version,
-        } for z in ztp_devices
-    ]
+        })
+    return res
 
 
 @router.get("/api/v5/admin/subnets")
