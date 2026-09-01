@@ -237,7 +237,7 @@ class DellOS10Collector:
         out = ""
         deadline = time.time() + timeout
         if self._channel:
-            self._channel.settimeout(0.2)
+            self._channel.settimeout(timeout or 2.0)
         while time.time() < deadline:
             try:
                 chunk = self._recv(8192)

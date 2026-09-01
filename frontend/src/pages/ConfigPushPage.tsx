@@ -169,7 +169,7 @@ export const ConfigPushPage: React.FC = () => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
 
-  const canPush = user?.role === 'Platform Admin' || user?.role === 'platform_admin' || user?.role === 'Tenant Admin' || user?.role === 'tenant_admin';
+  const canPush = user?.role === 'Platform Admin' || user?.role === 'platform_admin' || user?.role === 'PLATFORM_ADMIN' || user?.role === 'Tenant Admin' || user?.role === 'tenant_admin' || user?.role === 'TENANT_ADMIN';
 
   // Fetch switches
   useEffect(() => {

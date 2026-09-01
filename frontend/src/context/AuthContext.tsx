@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { refreshAccessToken } from '../lib/api';
 
-export type UserRole = 'Platform Admin' | 'Tenant Admin' | 'Operator' | 'Read-only' | 'platform_admin' | 'tenant_admin';
+export type UserRole = 'Platform Admin' | 'Tenant Admin' | 'Operator' | 'Read-only' | 'platform_admin' | 'tenant_admin' | 'PLATFORM_ADMIN' | 'TENANT_ADMIN';
 
 export interface User {
   email: string;
@@ -73,8 +73,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       localStorage.setItem('atlas_jwt', token);
       let mappedRole = (decoded.role || 'Operator') as UserRole;
-      if (decoded.role === 'Tenant Operator') mappedRole = 'Operator';
-      if (decoded.role === 'Tenant Auditor') mappedRole = 'Read-only';
+      if (['Tenant Operator', 'TENANT_OPERATOR', 'operator'].includes(decoded.role)) mappedRole = 'Operator';
+      if (['Tenant Auditor', 'TENANT_AUDITOR', 'readonly'].includes(decoded.role)) mappedRole = 'Read-only';
+      if (['Tenant Admin', 'TENANT_ADMIN', 'tenant_admin'].includes(decoded.role)) mappedRole = 'Tenant Admin';
+      if (['Platform Admin', 'PLATFORM_ADMIN', 'platform_admin'].includes(decoded.role)) mappedRole = 'Platform Admin';
       const userTenants: string[] = decoded.tenants || [];
       setUser({
         email: decoded.sub || decoded.email || '',

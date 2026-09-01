@@ -500,6 +500,12 @@ export const fetchCeleryStats = async (tenantId?: string | null) => {
     return res.json();
 };
 
+export const fetchDashboardSummary = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/visibility/dashboard-summary', { tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
 export const fetchTelemetryMetric = async (metricName: string, tenantId?: string | null) => {
     const res = await apiRequest(`/api/v5/visibility/telemetry?metric_name=${metricName}`, { tenantId });
     if (!res.ok) return null;
@@ -527,6 +533,15 @@ export const fetchReportCsv = async (
     const res = await apiRequest(`/api/v5/visibility/reports/csv?report_type=${reportType}`, { tenantId });
     if (res.ok) return { ok: true, blob: await res.blob(), errorText: null };
     return { ok: false, blob: null, errorText: (await res.text()) || res.statusText };
+};
+
+export const fetchReportPreview = async (
+    reportType: string,
+    tenantId?: string | null
+): Promise<{ headers: string[]; rows: string[][] } | null> => {
+    const res = await apiRequest(`/api/v5/visibility/reports/preview?report_type=${reportType}`, { tenantId });
+    if (!res.ok) return null;
+    return res.json();
 };
 
 // ── Compliance ───────────────────────────────────────────────────────────────

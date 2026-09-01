@@ -129,9 +129,10 @@ def login(payload: LoginPayload, request: Request, db: Session = Depends(get_db)
         role = user.role or "readonly"
 
     # Map legacy roles to new matrix if necessary
-    if role == "Platform Admin": role = "platform_admin"
-    if role == "Tenant Operator": role = "operator"
-    if role == "Tenant Auditor": role = "readonly"
+    if role in ("Platform Admin", "PLATFORM_ADMIN", "platform_admin"): role = "platform_admin"
+    if role in ("Tenant Operator", "TENANT_OPERATOR", "operator"): role = "operator"
+    if role in ("Tenant Auditor", "TENANT_AUDITOR", "readonly"): role = "readonly"
+    if role in ("Tenant Admin", "TENANT_ADMIN", "tenant_admin"): role = "tenant_admin"
 
     # Fetch tenant names for the dropdown
     tenant_names = []

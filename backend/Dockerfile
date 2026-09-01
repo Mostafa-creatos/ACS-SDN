@@ -1,12 +1,4 @@
-# Stage 1: Build the React frontend
-FROM node:20-alpine as frontend-builder
-WORKDIR /frontend
-COPY frontend/package*.json ./
-RUN npm install
-COPY frontend/ .
-RUN npm run build
-
-# Stage 2: Build the FastAPI backend
+# Build the FastAPI backend
 FROM python:3.11-slim
 
 WORKDIR /workspace
@@ -25,8 +17,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-# Copy the built frontend dist folder from Stage 1
-COPY --from=frontend-builder /frontend/dist ./frontend/dist
+# Copy the pre-built frontend dist folder directly from host context
+COPY frontend/dist ./frontend/dist
 
 # Generate self-signed SSL certs for uvicorn
 RUN openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 365 -nodes -subj "/CN=localhost"

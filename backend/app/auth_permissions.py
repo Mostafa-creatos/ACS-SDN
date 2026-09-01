@@ -122,15 +122,18 @@ class require_permission:
         tenant_id = claims.get("tenant_id")
         
         # Legacy normalization
-        if user_role == "Platform Admin":
+        if user_role in ("Platform Admin", "PLATFORM_ADMIN", "platform_admin"):
             user_role = "platform_admin"
             claims["role"] = "platform_admin"
-        elif user_role == "Tenant Operator":
+        elif user_role in ("Tenant Operator", "TENANT_OPERATOR", "operator"):
             user_role = "operator"
             claims["role"] = "operator"
-        elif user_role == "Tenant Auditor":
+        elif user_role in ("Tenant Auditor", "TENANT_AUDITOR", "readonly"):
             user_role = "readonly"
             claims["role"] = "readonly"
+        elif user_role in ("Tenant Admin", "TENANT_ADMIN", "tenant_admin"):
+            user_role = "tenant_admin"
+            claims["role"] = "tenant_admin"
 
         allowed_roles = PERMISSION_MATRIX.get(self.permission_name, ["platform_admin"]) # Default to most restrictive
 

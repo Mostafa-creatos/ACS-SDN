@@ -190,13 +190,14 @@ def get_admin_switches(db: Session = Depends(get_db), claims: dict = Depends(req
         switches = db.query(models.Switch).all()
     else:
         t_uuid = uuid.UUID(user_tenant_id) if isinstance(user_tenant_id, str) else user_tenant_id
-        switches = db.query(models.Switch).join(
+        allowed_switch_ids = db.query(models.Switch.switch_id).join(
             models.Fabric, models.Switch.fabric_id == models.Fabric.fabric_id
         ).join(
             models.IpamSubnet, models.IpamSubnet.fabric_id == models.Fabric.fabric_id
         ).join(
             models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
-        ).filter(models.TenantVrf.tenant_id == t_uuid).distinct().all()
+        ).filter(models.TenantVrf.tenant_id == t_uuid).subquery()
+        switches = db.query(models.Switch).filter(models.Switch.switch_id.in_(db.query(allowed_switch_ids.c.switch_id))).all()
     return [
         {
             "switch_id": str(s.switch_id),

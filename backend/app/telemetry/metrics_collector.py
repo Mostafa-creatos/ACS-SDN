@@ -60,18 +60,40 @@ class GnmiTelemetryCollector:
                                 for update in notification.get('update', []):
                                     val = update.get('val', {})
                                     # CPU parsing
+                                    cpu_item_list = None
                                     cpu_key = next((k for k in val if k == 'cpu' or k.endswith(':cpu')), None)
                                     if cpu_key:
-                                        for cpu_item in val[cpu_key]:
+                                        cpu_item_list = val[cpu_key]
+                                    else:
+                                        control_key = next((k for k in val if k == 'control' or k.endswith(':control')), None)
+                                        if control_key and isinstance(val[control_key], list) and len(val[control_key]) > 0:
+                                            ctrl = val[control_key][0]
+                                            cpu_key = next((k for k in ctrl if k == 'cpu' or k.endswith(':cpu')), None)
+                                            if cpu_key:
+                                                cpu_item_list = ctrl[cpu_key]
+
+                                    if cpu_item_list:
+                                        for cpu_item in cpu_item_list:
                                             if cpu_item.get('index') == 'all':
                                                 total_cpu = cpu_item.get('total', {}).get('instant')
                                                 if total_cpu is not None:
                                                     metrics["cpu_utilization"] = float(total_cpu)
                                     
                                     # Memory parsing
+                                    mem_data = None
                                     mem_key = next((k for k in val if k == 'memory' or k.endswith(':memory')), None)
                                     if mem_key:
-                                        mem_util = val[mem_key].get('utilization')
+                                        mem_data = val[mem_key]
+                                    else:
+                                        control_key = next((k for k in val if k == 'control' or k.endswith(':control')), None)
+                                        if control_key and isinstance(val[control_key], list) and len(val[control_key]) > 0:
+                                            ctrl = val[control_key][0]
+                                            mem_key = next((k for k in ctrl if k == 'memory' or k.endswith(':memory')), None)
+                                            if mem_key:
+                                                mem_data = ctrl[mem_key]
+
+                                    if mem_data:
+                                        mem_util = mem_data.get('utilization')
                                         if mem_util is not None:
                                             metrics["memory_utilization"] = float(mem_util)
                     except Exception as e:
@@ -101,7 +123,12 @@ class GnmiTelemetryCollector:
                             ) as collector:
                                 out = collector._send_command("show interface")
                                 cpu_out = collector._send_command("show processes cpu")
-                                mem_out = collector._send_command("show processes memory")
+                                try:
+                                    mem_out = collector._send_command("show processes node-id 1")
+                                    if "% Error" in mem_out or "Invalid" in mem_out or "unknown" in mem_out.lower():
+                                        mem_out = collector._send_command("show processes memory")
+                                except Exception:
+                                    mem_out = ""
                                 collector_success = True
                         except Exception as ce:
                             logger.warning(f"[Telemetry Dell] Console port 5000 connection timed out/failed on {sw.hostname}: {ce}. Falling back to SSH port 22...")
@@ -115,7 +142,13 @@ class GnmiTelemetryCollector:
                                 ) as collector:
                                     out = collector._send_command("show interface")
                                     cpu_out = collector._send_command("show processes cpu")
-                                    mem_out = collector._send_command("show processes memory")
+                                    try:
+                                        mem_out = collector._send_command("show processes memory", timeout=5.0)
+                                        is_valid = "Memory Statistics" in mem_out and "Total:" in mem_out and "CurrentUsed:" in mem_out
+                                        if not is_valid:
+                                            mem_out = collector._send_command("show processes node-id 1", timeout=5.0)
+                                    except Exception:
+                                        mem_out = ""
                                     collector_success = True
                             except Exception as se:
                                 raise Exception(f"Console and SSH both failed: {se}")
@@ -144,9 +177,36 @@ class GnmiTelemetryCollector:
                                 metrics["cpu_utilization"] = float(cpu_match.group(1))
                                 
                             # Parse Memory usage percentage
-                            mem_match = re.search(r'Used Memory percentage\s*:\s*(\d+)%', mem_out)
-                            if mem_match:
-                                metrics["memory_utilization"] = float(mem_match.group(1))
+                            logger.info(f"Dell mem_out stripped length for {sw.hostname}: {len(mem_out.strip())}")
+                            try:
+                                with open(f"/workspace/dell_mem_out_{sw.hostname}.txt", "w") as f:
+                                    f.write(mem_out)
+                            except Exception:
+                                pass
+                            stat_match = re.search(r'Total:\s*([\d,]+),\s*CurrentUsed:\s*([\d,]+)', mem_out, re.IGNORECASE)
+                            if stat_match:
+                                try:
+                                    total_val = float(stat_match.group(1).replace(',', ''))
+                                    used_val = float(stat_match.group(2).replace(',', ''))
+                                    if total_val > 0:
+                                        metrics["memory_utilization"] = round((used_val / total_val) * 100, 2)
+                                except ValueError:
+                                    pass
+                            else:
+                                total_match = re.search(r'Total Memory:\s*([\d,]+)\s*KiB', mem_out, re.IGNORECASE)
+                                used_match = re.search(r'Used Memory:\s*([\d,]+)\s*KiB', mem_out, re.IGNORECASE)
+                                if total_match and used_match:
+                                    try:
+                                        total_val = float(total_match.group(1).replace(',', ''))
+                                        used_val = float(used_match.group(2).replace(',', ''))
+                                        if total_val > 0:
+                                            metrics["memory_utilization"] = round((used_val / total_val) * 100, 2)
+                                    except ValueError:
+                                        pass
+                                else:
+                                    mem_match = re.search(r'Used Memory percentage\s*:\s*(\d+)%', mem_out)
+                                    if mem_match:
+                                        metrics["memory_utilization"] = float(mem_match.group(1))
                     except Exception as e:
                         logger.error(f"[Telemetry Dell] Failed to collect metrics for {sw.hostname}: {e}")
                 
