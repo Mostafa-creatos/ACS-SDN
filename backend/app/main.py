@@ -1,6 +1,6 @@
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -32,11 +32,20 @@ app.include_router(vrfs.router)
 app.include_router(backups.router)
 
 
+from fastapi.responses import PlainTextResponse
+from .routers.discovery import get_ztp_boot_script
+
+@app.get("/boot.py", response_class=PlainTextResponse)
+async def serve_root_boot_script(request: Request):
+    return await get_ztp_boot_script(request)
+
 @app.get("/api/v5/")
 @app.get("/api/v5")
 @app.head("/api/v5/")
 @app.head("/api/v5")
-def api_v5_root():
+def api_v5_root(request: Request):
+    if request.method == "HEAD":
+        return Response(status_code=200)
     return {"status": "ok", "message": "Enterprise SDN API Gateway"}
 
 

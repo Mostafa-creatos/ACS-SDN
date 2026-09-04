@@ -47,8 +47,8 @@ def is_valid_host_mac(mac: str) -> bool:
     # All ff (broadcast)
     if all(p == 'ff' for p in parts):
         return False
-    # Nokia internal control-plane: xx:xx:xx:ff:00:01 or ff:00:02
-    if len(parts) >= 6 and parts[3] == 'ff' and parts[4] == '00' and parts[5] in ('01', '02'):
+    # Dell PNetLab switch chassis MAC prefix (50:24:c3)
+    if mac.startswith('50:24:c3'):
         return False
     return True
 
@@ -157,24 +157,24 @@ def discover_dell_switch(sw, db: Session):
     Connects to a Dell OS10 switch via SSH, retrieves status, running config, and neighbors,
     and updates the database.
     """
-    import os
-    logger.info(f"[Dell Discovery] Connecting to {sw.hostname} at {sw.management_ip} via SSH...")
-    
-    from ..drivers.dell_os10_collector import DellOS10Collector
+    import re
+    from app.drivers.dell_os10_collector import DellOS10Collector
+    from app.workers.ztp_tasks import resolve_console_target
+    console_host, console_port = resolve_console_target(sw, db)
+    logger.info(f"[Dell Discovery] Connecting to {sw.hostname} via Telnet console ({console_host}:{console_port})...")
     
     ssh_user = os.environ.get("DELL_SSH_USERNAME", "admin")
     ssh_pass = os.environ.get("DELL_SSH_PASSWORD", "admin")
-    ssh_port = int(os.environ.get("DELL_SSH_PORT", "22"))
     
     interfaces = []
     lldp_links = []
     
     try:
         with DellOS10Collector(
-            host=sw.management_ip,
+            host=console_host,
             username=ssh_user,
             password=ssh_pass,
-            port=5000,
+            port=console_port,
             use_ssh=False,
         ) as collector:
             data = collector.collect_all()
@@ -221,11 +221,15 @@ def discover_dell_switch(sw, db: Session):
             # Only update compliance lifecycle status if switch is already managed (not discovered_raw)
             if sw.lifecycle_status != "discovered_raw":
                 latest_snap = db.query(models.ConfigSnapshot).filter(
-                    models.ConfigSnapshot.switch_id == sw.switch_id
+                    models.ConfigSnapshot.switch_id == sw.switch_id,
+                    models.ConfigSnapshot.is_baseline == True
                 ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
+                if not latest_snap:
+                    latest_snap = db.query(models.ConfigSnapshot).filter(
+                        models.ConfigSnapshot.switch_id == sw.switch_id
+                    ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
                 
                 if latest_snap:
-                    import re
                     def normalize_cfg(c: str) -> str:
                         if not c:
                             return ""
@@ -236,6 +240,8 @@ def discover_dell_switch(sw, db: Session):
                             s = line.strip()
                             if not s or s.startswith("!") or s.startswith("#") or "Last configuration change" in s or "Building configuration" in s:
                                 continue
+                            if "ip address dhcp" in s:
+                                continue
                             lines.append(s)
                         return "\n".join(lines)
                     if normalize_cfg(running_config) != normalize_cfg(latest_snap.raw_config):
@@ -245,16 +251,22 @@ def discover_dell_switch(sw, db: Session):
                 else:
                     sw.lifecycle_status = "compliant_active"
                 
-        # Store VLANs, LAGs, and Hardware Components in DB
+        # Store VLANs, LAGs, Hardware Components, and DeviceInterfaces in DB
         db.query(models.SwitchVlan).filter(models.SwitchVlan.switch_id == sw.switch_id).delete()
         db.query(models.SwitchLag).filter(models.SwitchLag.switch_id == sw.switch_id).delete()
         db.query(models.HardwareComponent).filter(models.HardwareComponent.switch_id == sw.switch_id).delete()
+        db.query(models.DeviceInterface).filter(models.DeviceInterface.switch_id == sw.switch_id).delete()
 
+        seen_vlans = set()
         for vl in vlans:
+            vid = vl.get("vlan_id", 1)
+            if vid in seen_vlans:
+                continue
+            seen_vlans.add(vid)
             db.add(models.SwitchVlan(
-                vlan_id=vl["vlan_id"],
+                vlan_id=vid,
                 switch_id=sw.switch_id,
-                name=vl.get("name", f"VLAN_{vl['vlan_id']}"),
+                name=vl.get("name", f"VLAN_{vid}"),
                 status=vl.get("status", "active"),
                 member_ports=vl.get("member_ports", []),
             ))
@@ -284,6 +296,27 @@ def discover_dell_switch(sw, db: Session):
                 numeric_value=inv.get("numeric_value"),
             ))
 
+        for intf in interfaces_data:
+            db.add(models.DeviceInterface(
+                interface_id=uuid.uuid4(),
+                switch_id=sw.switch_id,
+                name=intf.get("name"),
+                status=intf.get("status", "up"),
+                speed_duplex=intf.get("speed_duplex", "10G / Full"),
+                vlan=str(intf.get("vlan") or ""),
+                description=intf.get("description", ""),
+                mac_address=intf.get("mac_address"),
+                media_type=intf.get("media_type", "SFP-10G-SR"),
+                switchport_mode=intf.get("switchport_mode", "trunk"),
+                mtu=intf.get("mtu", 9216),
+                errors_in=intf.get("errors_in", 0),
+                errors_out=intf.get("errors_out", 0),
+                discards_in=intf.get("discards_in", 0),
+                discards_out=intf.get("discards_out", 0)
+            ))
+
+        sw.last_successful_sync = datetime.datetime.now(datetime.timezone.utc)
+        sw.last_collection_timestamp = datetime.datetime.now(datetime.timezone.utc)
         db.commit()
         
         # 4. Map interfaces for returning to caller
@@ -313,14 +346,29 @@ def discover_dell_switch(sw, db: Session):
         mac_to_ip = {}
         try:
             with DellOS10Collector(
-                host=sw.management_ip,
+                host=console_host,
                 username=ssh_user,
                 password=ssh_pass,
-                port=5000,
+                port=console_port,
                 use_ssh=False,
             ) as collector:
                 mac_out = collector._send_command("show mac address-table")
                 arp_out = collector._send_command("show ip arp")
+                ip_brief = collector._send_command("show ip interface brief")
+                
+                # Auto-sync real live DHCP management IP
+                for line in ip_brief.split("\n"):
+                    ip_m = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', line)
+                    if ip_m and "unassigned" not in line and "127.0.0.1" not in line:
+                        live_ip = ip_m.group(1)
+                        if live_ip and live_ip != sw.management_ip:
+                            logger.info(f"[Dell Discovery] Updating {sw.hostname} management IP from {sw.management_ip} to live IP {live_ip}")
+                            sw.management_ip = live_ip
+                            if sw.discovery_id:
+                                ztp_rec = db.query(models.ZtpDiscoveryPool).filter(models.ZtpDiscoveryPool.discovery_id == sw.discovery_id).first()
+                                if ztp_rec:
+                                    ztp_rec.dhcp_ip = live_ip
+                        break
                 
                 # Parse ARP IP-to-MAC mapping
                 for line in arp_out.split("\n"):
@@ -348,26 +396,17 @@ def discover_dell_switch(sw, db: Session):
                         mac_addr = m.group(2)
                         port_name = m.group(3)
                         
-                        # Skip invalid/internal MACs
-                        if not is_valid_host_mac(mac_addr):
+                        # Skip management/uplink ports (ethernet1/1/10) and spine switches (spines connect only to leaves/uplinks)
+                        p_lower = port_name.lower().replace("-", "").replace(" ", "")
+                        if "1/1/10" in p_lower or "mgmt" in p_lower or "management" in p_lower or sw.role == "spine" or "spine" in sw.hostname.lower():
                             filtered_mac += 1
                             continue
-                        
-                        # Filter out LLDP neighbor ports to only keep edge host endpoints
-                        if port_name in lldp_ports:
-                            filtered_lldp += 1
+
+                        # Require an IP address from ARP table for valid end-host endpoints
+                        ip_addr = mac_to_ip.get(mac_addr.upper())
+                        if not ip_addr:
+                            filtered_mac += 1
                             continue
-                            
-                        # On switches with no LLDP neighbors (e.g., spine connected to leaves
-                        # with down data-plane ports), MAC-only entries are neighboring switch
-                        # interface MACs, not real endpoint hosts. Require an IP in that case.
-                        if not lldp_ports:
-                            ip_addr = mac_to_ip.get(mac_addr.upper())
-                            if not ip_addr:
-                                filtered_mac += 1
-                                continue
-                        else:
-                            ip_addr = mac_to_ip.get(mac_addr.upper())
                             
                         endpoints.append({
                             "mac_address": mac_addr,
@@ -406,17 +445,16 @@ def discover_dell_switch(sw, db: Session):
                 db.commit()
                 # Dynamic VLT Discovery
                 try:
-                    vlt_out = collector._send_command("show vlt 1")
-                    if vlt_out and "Domain not found" not in vlt_out:
-                        peer_host = "switch-13" if sw.hostname == "switch-12" else "switch-12"
-                        role_str = "primary" if "primary" in vlt_out.lower() else "secondary"
-                        peer_link = "up" if "up" in vlt_out.lower() else "down"
+                    if vlt and isinstance(vlt, dict) and vlt.get("domain_id"):
+                        peer_host = vlt.get("peer_switch_hostname") or ("switch-13" if sw.hostname == "switch-12" else "switch-12")
+                        role_str = vlt.get("role", "primary")
+                        peer_link = vlt.get("peer_link_status", "up")
                         
                         db.query(models.SwitchVltDomain).filter(models.SwitchVltDomain.switch_id == sw.switch_id).delete()
                         db.add(models.SwitchVltDomain(
                             vlt_id=uuid.uuid4(),
                             switch_id=sw.switch_id,
-                            domain_id=1,
+                            domain_id=vlt.get("domain_id", 1),
                             peer_switch_hostname=peer_host,
                             peer_link_status=peer_link,
                             icl_state=peer_link,
@@ -947,7 +985,7 @@ def run_gnmi_discovery(db: Session):
         try:
             if sw.vendor.lower() == "nokia":
                 sw_interfaces, sw_lldp_links, sw_endpoints, sw_mac_to_ip = discover_nokia_switch(sw, db)
-            elif sw.vendor.lower() == "dell_os10":
+            elif sw.vendor.lower() in ("dell_os10", "dell"):
                 sw_interfaces, sw_lldp_links, sw_endpoints, sw_mac_to_ip = discover_dell_switch(sw, db)
         except Exception as e:
             logger.error(f"[DISCOVERY] Failed to discover {sw.hostname} ({sw.management_ip}): {e}")
@@ -999,7 +1037,10 @@ def run_gnmi_discovery(db: Session):
                     db_inf.neighbor = neighbor_name
             db.commit()
             
-    # 3. Build topology links from all accumulated LLDP neighbor records
+    # 3. Process LLDP links to construct/update TopologyEdge
+    db.query(models.TopologyEdge).delete()
+    db.commit()
+    seen_pairs = set()
     for l in all_lldp_links:
         remote_ip = l.get("ip")
         remote_name = l.get("remote_name")
@@ -1041,6 +1082,18 @@ def run_gnmi_discovery(db: Session):
             remote_sw = mac_to_sw.get(clean_chassis)
 
         if local_sw and remote_sw and local_sw.switch_id != remote_sw.switch_id:
+            l_port = l["port"].lower()
+            r_port = str(l.get("remote_port", "")).lower()
+
+            is_mgmt = "mgmt" in l_port or "management" in l_port or "mgmt" in r_port or "management" in r_port
+            proto = "OOB-MGMT" if is_mgmt else "LLDP"
+            remote_port_str = l["remote_port"]
+
+            pair_key = (local_sw.hostname, l["port"], remote_sw.hostname, remote_port_str)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+
             # Format a sorted key to identify unique edge
             key = tuple(sorted([local_sw.hostname, remote_sw.hostname]))
             discovered_edge_keys.add(key)
@@ -1049,7 +1102,7 @@ def run_gnmi_discovery(db: Session):
                 models.TopologyEdge.local_switch == local_sw.hostname,
                 models.TopologyEdge.local_port == l["port"],
                 models.TopologyEdge.remote_switch == remote_sw.hostname,
-                models.TopologyEdge.remote_port == l["remote_port"]
+                models.TopologyEdge.remote_port == remote_port_str
             ).first()
             
             if not edge:
@@ -1058,8 +1111,8 @@ def run_gnmi_discovery(db: Session):
                     local_switch=local_sw.hostname,
                     local_port=l["port"],
                     remote_switch=remote_sw.hostname,
-                    remote_port=l["remote_port"],
-                    protocol="LLDP",
+                    remote_port=remote_port_str,
+                    protocol=proto,
                     state="up"
                 )
                 db.add(edge)

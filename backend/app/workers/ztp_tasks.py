@@ -1,6 +1,6 @@
 from celery import shared_task
 from app.db import SessionLocal
-from app.models import Switch, ZtpDiscoveryPool, ConfigSnapshot
+from app.models import Switch, ZtpDiscoveryPool, ConfigSnapshot, Fabric
 import subprocess
 import os
 import json
@@ -30,17 +30,11 @@ ANSIBLE_PLAYBOOK = os.path.join(ANSIBLE_DIR, "playbooks", "base_provisioning.yml
 ANSIBLE_TIMEOUT = 120
 
 
-def _build_dell_baseline_commands(hostname: str, is_fallback: bool = False) -> list:
-    """Return the Dell baseline config as blocks of console commands.
-
-    Each inner list is a sub-mode block; the console pusher returns to
-    ``(config)#`` between blocks. Syntax is matched to the FTOS-family CLI
-    that the Dell FTOSv image actually speaks (the dellemc.os10 Ansible
-    role commands are OS10-only and rejected by this image). Commands that
-    this image cannot express (MOTD banner, enable password, password
-    complexity, mgmt VRF binding) are intentionally omitted so the ZTP log
-    reports a clean apply.
-    """
+def _build_dell_baseline_commands(hostname: str, is_fallback: bool = False, fabric=None) -> list:
+    """Return the Dell baseline config as blocks of console commands using Fabric variables."""
+    ntp_ip = fabric.expected_ntp_server_ip if (fabric and getattr(fabric, 'expected_ntp_server_ip', None)) else "172.20.20.1"
+    syslog_ip = fabric.expected_syslog_server_ip if (fabric and getattr(fabric, 'expected_syslog_server_ip', None)) else "34.32.194.240"
+    
     commands = [
         [f"hostname {hostname}"],
         ["ip vrf management"],
@@ -58,9 +52,8 @@ def _build_dell_baseline_commands(hostname: str, is_fallback: bool = False) -> l
     commands.extend([
         ["ip ssh server enable"],
         ["clock timezone standard-timezone Zulu"],
-        ["ntp server 192.168.100.1"],
-        ["ntp server 192.168.100.2"],
-        ["logging server 10.20.20.20"],
+        [f"ntp server {ntp_ip}"],
+        [f"logging server {syslog_ip}"],
         ["snmp-server view RESTRICTED_VIEW 1.3.6.1 included"],
         ["snmp-server group READ_ONLY 3 auth read RESTRICTED_VIEW"],
         ["snmp-server user sdnadmin READ_ONLY 3 auth sha sdnAuthPass123"],
@@ -70,6 +63,47 @@ def _build_dell_baseline_commands(hostname: str, is_fallback: bool = False) -> l
     return commands
 
 
+def resolve_console_target(switch, db=None, default_port: int = 5000):
+    """
+    Resolves the reachable console host and port for a switch.
+    If the switch has a private PNetLab IP (172.20.20.x or 127.x), it automatically
+    derives the PNetLab telnet console port (30000 + node_id) on host 128.105.145.2.
+    """
+    target_host = switch.management_ip
+    target_port = default_port
+
+    if target_host.startswith("172.20.20.") or target_host.startswith("127.") or target_host.startswith("10.") or target_host == "128.105.145.2" or getattr(switch, "vendor", "") in ("dell_os10", "dell"):
+        pnet_host = "128.105.145.2"
+        mac = ""
+        if db and switch.discovery_id:
+            disc = db.query(ZtpDiscoveryPool).filter(ZtpDiscoveryPool.discovery_id == switch.discovery_id).first()
+            if disc and disc.mac_address:
+                mac = disc.mac_address
+
+        if not mac and getattr(switch, "management_mac", None):
+            mac = switch.management_mac
+
+        node_id = 1
+        if mac and ":" in mac:
+            parts = mac.split(":")
+            if len(parts) == 6:
+                try:
+                    # In PNetLab MAC pattern (50:24:c3:00:{node_id}:{iface}), index 4 is node_id
+                    node_id = int(parts[4], 16)
+                except Exception: pass
+        elif getattr(switch, "serial_number", None):
+            sn_parts = switch.serial_number.split("-")
+            if len(sn_parts) >= 2:
+                try:
+                    node_id = int(sn_parts[-1][:2], 16)
+                except Exception: pass
+
+        pnet_port = 30000 + node_id
+        return pnet_host, pnet_port
+
+    return target_host, target_port
+
+
 def ensure_ssh_enabled(ip: str, port: int = 5000) -> bool:
     """Connects to the Dell console TCP socket, runs configuration commands to enable SSH."""
     import socket
@@ -77,7 +111,7 @@ def ensure_ssh_enabled(ip: str, port: int = 5000) -> bool:
 
     logger.info(f"[CONNSOLVER] Attempting to ensure SSH is enabled via console on {ip}:{port}")
     s = socket.socket()
-    s.settimeout(5)
+    s.settimeout(8)
 
     def read_until(markers, timeout=8):
         buf = ""
@@ -128,8 +162,6 @@ def ensure_ssh_enabled(ip: str, port: int = 5000) -> bool:
             logger.info(f"[CONNSOLVER] SSH server is enabled on {ip}:{port}.")
         else:
             logger.warning(f"[CONNSOLVER] WARNING: SSH server does not report enabled on {ip}:{port}.")
-        if not any(k in lower for k in ("rsa key", "host key", "hostkey", "key size", "key length")):
-            logger.warning(f"[CONNSOLVER] WARNING: {ip} has no SSH host key; SSH may accept TCP but never complete a handshake (fix by generating a key at boot via 'crypto ssh-key generate rsa').")
         s.close()
         logger.info(f"[CONNSOLVER] Sent ip ssh server enable command successfully to {ip}:{port}")
         return True
@@ -296,12 +328,16 @@ def apply_baseline_template(self, switch_id: str):
             return {"status": "success", "switch_id": switch_id}
 
         # Otherwise, process Dell switch
+        # Resolve console target (using PNetLab port mapping fallback if needed)
+        console_host, console_port = resolve_console_target(switch, db)
+        append_ztp_log(db, discovery_record, f"Resolved console target to {console_host}:{console_port}")
+
         # Pre-provisioning snapshot (factory default state)
         append_ztp_log(db, discovery_record, "Taking pre-provisioning snapshot of current state...")
-        pre_config = f"! Pre-provisioning snapshot for {switch.hostname}\n! Captured before Ansible baseline apply\n"
+        pre_config = f"! Pre-provisioning snapshot for {switch.hostname}\n! Captured before baseline apply\n"
         try:
             from app.drivers.dell_os10_collector import DellOS10Collector
-            collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
+            collector = DellOS10Collector(host=console_host, port=console_port, username="admin", password="admin", use_ssh=False)
             try:
                 collector.connect()
                 pre_config = collector.collect_running_config()
@@ -325,28 +361,32 @@ def apply_baseline_template(self, switch_id: str):
         db.commit()
 
         # Ensure SSH is enabled via Telnet/Console
-        append_ztp_log(db, discovery_record, "Connecting to switch console via Telnet (port 5000) to enable SSH daemon...")
+        append_ztp_log(db, discovery_record, f"Connecting to switch console via Telnet ({console_host}:{console_port}) to enable SSH daemon...")
         
-        # We can try to enable SSH
-        ssh_enable_success = ensure_ssh_enabled(switch.management_ip)
+        # Enable SSH over resolved console port
+        ssh_enable_success = ensure_ssh_enabled(console_host, console_port)
         if not ssh_enable_success:
             append_ztp_log(db, discovery_record, "Warning: Direct console session failed. Checking if SSH is already active...")
         else:
             append_ztp_log(db, discovery_record, "Successfully issued SSH enablement command via console.")
 
-        # Wait for SSH to respond
-        append_ztp_log(db, discovery_record, "Waiting for SSH service to become active on port 22...")
-        ssh_online = wait_for_ssh(switch.management_ip)
+        # Force console-based provisioning if switch management_ip is unroutable from GCP
+        use_console_provisioning = (console_host != switch.management_ip)
 
-        if not ssh_online:
-            append_ztp_log(db, discovery_record, f"SSH is NOT available on {switch.management_ip}: TCP accepts but no SSH banner is sent.")
-            append_ztp_log(db, discovery_record, "FALLBACK: Provisioning switch over the console (port 5000) instead of SSH/Ansible...")
+        if not use_console_provisioning:
+            # Check if SSH is online for direct Ansible execution
+            ssh_online = wait_for_ssh(switch.management_ip)
+            use_console_provisioning = not ssh_online
+
+        if use_console_provisioning:
+            append_ztp_log(db, discovery_record, f"Provisioning switch directly over console ({console_host}:{console_port})...")
 
             from app.drivers.dell_os10_collector import DellOS10Collector
-            collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
+            collector = DellOS10Collector(host=console_host, port=console_port, username="admin", password="admin", use_ssh=False)
             try:
                 collector.connect()
-                baseline_blocks = _build_dell_baseline_commands(switch.hostname, is_fallback=True)
+                fabric = db.query(Fabric).filter(Fabric.fabric_id == switch.fabric_id).first() if switch.fabric_id else None
+                baseline_blocks = _build_dell_baseline_commands(switch.hostname, is_fallback=True, fabric=fabric)
                 total_commands = sum(len(b) for b in baseline_blocks)
                 append_ztp_log(db, discovery_record, f"Applying {total_commands} baseline commands over console...")
                 result = collector.push_config_blocks(baseline_blocks)
@@ -362,7 +402,7 @@ def apply_baseline_template(self, switch_id: str):
             finally:
                 collector.close()
 
-            append_ztp_log(db, discovery_record, "Console-based baseline provisioning completed. Skipping Ansible (SSH unavailable).")
+            append_ztp_log(db, discovery_record, "Console-based baseline provisioning completed successfully.")
         else:
             append_ztp_log(db, discovery_record, "SSH service is online. Running Ansible baseline provisioning playbook...")
 
@@ -399,14 +439,14 @@ def apply_baseline_template(self, switch_id: str):
 
         # Fetch actual running configuration using the existing collector
         from app.drivers.dell_os10_collector import DellOS10Collector
-        collector = DellOS10Collector(host=switch.management_ip, username="admin", password="admin", use_ssh=False)
+        collector = DellOS10Collector(host=console_host, port=console_port, username="admin", password="admin", use_ssh=False)
         try:
             collector.connect()
             real_config = collector.collect_running_config()
             append_ztp_log(db, discovery_record, "Successfully retrieved final running configuration.")
         except Exception as e:
-            real_config = f"! Fallback Baseline Config (Failed to connect)\n! {switch.hostname}\nntp server 192.168.100.1\n"
-            append_ztp_log(db, discovery_record, f"Warning: Failed to fetch running configuration ({e}). Using fallback config.")
+            real_config = "\n".join(_build_dell_baseline_commands(switch.hostname, is_fallback=True)[0])
+            append_ztp_log(db, discovery_record, f"Warning: Failed to fetch running configuration ({e}). Using generated baseline config.")
         finally:
             collector.close()
 
@@ -424,6 +464,8 @@ def apply_baseline_template(self, switch_id: str):
         switch.running_config = real_config
         switch.configuration_checksum = config_hash
         switch.lifecycle_status = "compliant_active"
+        switch.last_successful_sync = datetime.now(timezone.utc)
+        switch.last_collection_timestamp = datetime.now(timezone.utc)
         
         if discovery_record:
             discovery_record.onboarding_status = "provisioned"

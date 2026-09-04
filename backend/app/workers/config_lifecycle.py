@@ -493,11 +493,19 @@ def restore_config_snapshot(db: Session, snapshot_id: uuid.UUID, operator_claims
     # Push config to the switch via southbound driver
     from ..drivers.factory import resolve_southbound_driver
     driver = resolve_southbound_driver(switch.vendor)
+    from .ztp_tasks import resolve_console_target
+    target_host, target_port = resolve_console_target(switch, db)
+
     loop = asyncio.new_event_loop()
     try:
-        push_result = loop.run_until_complete(
-            driver.push_config(switch.management_ip, "admin", "admin", snapshot.raw_config)
-        )
+        try:
+            push_result = loop.run_until_complete(
+                driver.push_config(target_host, "admin", "admin", snapshot.raw_config, port=target_port)
+            )
+        except TypeError:
+            push_result = loop.run_until_complete(
+                driver.push_config(target_host, "admin", "admin", snapshot.raw_config)
+            )
     finally:
         loop.close()
 
@@ -573,7 +581,8 @@ def config_compliance_mgr():
                 continue
 
             # 3. Check for drift
-            if current_config != baseline_snapshot.raw_config:
+            from ..telemetry.gnmi_discovery import normalize_cfg
+            if normalize_cfg(current_config) != normalize_cfg(baseline_snapshot.raw_config):
                 # Drift detected!
                 from ..core.constants import LIFECYCLE_DRIFTED
                 switch.lifecycle_status = LIFECYCLE_DRIFTED
@@ -640,11 +649,19 @@ def apply_remediation(self, finding_id_str: str):
         else:
             username, password = "admin", "admin"
 
+        from .ztp_tasks import resolve_console_target
+        target_host, target_port = resolve_console_target(switch, db)
+
         loop = asyncio.new_event_loop()
         try:
-            result = loop.run_until_complete(
-                driver.push_config(switch.management_ip, username, password, config_payload)
-            )
+            try:
+                result = loop.run_until_complete(
+                    driver.push_config(target_host, username, password, config_payload, port=target_port)
+                )
+            except TypeError:
+                result = loop.run_until_complete(
+                    driver.push_config(target_host, username, password, config_payload)
+                )
         finally:
             loop.close()
 

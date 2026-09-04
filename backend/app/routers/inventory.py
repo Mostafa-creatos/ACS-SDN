@@ -191,21 +191,15 @@ def _serialize_switch(db: Session, sw: models.Switch) -> dict:
     ports_up_val = actual_ports_up if actual_ports_up > 0 else (sw.ports_up or 0)
     ports_all_val = len(interfaces_list) if len(interfaces_list) > 0 else (sw.ports_all or 32)
 
-    # Clean uptime string if invalid/OS description string or empty
-    uptime_val = sw.uptime
-    if not uptime_val or "Dell EMC" in uptime_val or "Networking" in uptime_val or "OS10" in uptime_val:
-        uptime_val = "14 days 8 hours 22 mins"
-
-    # Derive service_tag and part_number from hardware components or fallbacks
-    ip_suffix = sw.management_ip.split(".")[-1] if (sw.management_ip and "." in sw.management_ip) else "12"
+    # Derive service_tag and part_number from hardware components or switch attributes
     service_tag_val = sw.service_tag or ""
     if not service_tag_val:
         for comp in hardware_components:
             if comp.get("service_tag"):
                 service_tag_val = comp["service_tag"]
                 break
-    if not service_tag_val:
-        service_tag_val = f"9XJ2F{ip_suffix.zfill(2)}"
+    if not service_tag_val and sw.serial_number:
+        service_tag_val = sw.serial_number.split("-")[-1]
 
     part_number_val = sw.part_number or ""
     if not part_number_val:
@@ -213,24 +207,19 @@ def _serialize_switch(db: Session, sw: models.Switch) -> dict:
             if comp.get("part_number"):
                 part_number_val = comp["part_number"]
                 break
-    if not part_number_val:
-        part_number_val = "09XJ2F-S5248"
 
-    serial_number_val = sw.serial_number or ""
-    if not serial_number_val or serial_number_val.startswith("SN-AUTODISCOVER"):
-        if (sw.vendor or "").lower() in ("dell", "dell_os10"):
-            serial_number_val = f"CN09XJ2F-V000200-{ip_suffix.zfill(2)}"
-        else:
-            serial_number_val = f"SN-NOKIA-{ip_suffix.zfill(2)}"
+    serial_number_val = sw.serial_number or sw.service_tag or None
 
     # Derive clean last_collection_timestamp
     last_coll = sw.last_collection_timestamp or sw.last_successful_sync
-    last_coll_str = last_coll.isoformat() + "Z" if last_coll else (datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z")
+    last_coll_str = last_coll.isoformat() + "Z" if last_coll else None
 
     # Derive fabric_name from Fabric model if available
     fabric_obj = db.query(models.Fabric).filter(models.Fabric.fabric_id == sw.fabric_id).first() if sw.fabric_id else None
-    fabric_name_val = getattr(fabric_obj, "fabric_name", None) if fabric_obj else "Fabric A"
-    fabric_id_val = str(sw.fabric_id) if sw.fabric_id else (str(fabric_obj.fabric_id) if fabric_obj else None)
+    fabric_name_val = fabric_obj.fabric_name if fabric_obj else None
+    fabric_id_val = str(sw.fabric_id) if sw.fabric_id else None
+
+    uptime_val = sw.uptime or None
 
     dynamic_vrfs = sw.configured_vrfs or []
     if not dynamic_vrfs and sw.role and sw.role.lower() == "leaf" and sw.fabric_id:
@@ -252,15 +241,15 @@ def _serialize_switch(db: Session, sw: models.Switch) -> dict:
         "vtep_ip": sw.vtep_ip,
         "lifecycle_status": sw.lifecycle_status,
         "model": sw.model or "S5248F-ON",
-        "os_version": sw.os_version or "SmartFabric OS10 10.5.6.1",
+        "os_version": sw.os_version or "SmartFabric OS10 10.5.4.3",
         "status": sw.status or "Up",
         "uptime": uptime_val,
         "serial_number": serial_number_val,
         "service_tag": service_tag_val,
         "part_number": part_number_val,
-        "ppid": sw.ppid or f"CN-09XJ2F-{ip_suffix}",
-        "express_service_code": sw.express_service_code or "2184930129",
-        "management_mac": sw.management_mac or f"0c:00:dc:b5:33:{ip_suffix.zfill(2)}",
+        "ppid": sw.ppid or None,
+        "express_service_code": sw.express_service_code or None,
+        "management_mac": sw.management_mac or None,
         "os10_license_status": sw.os10_license_status or "Licensed",
         "temperature": sw.temperature or "Normal",
         "cpu_usage": sw.cpu_usage,

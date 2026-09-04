@@ -38,14 +38,16 @@ def _ssh_handshake_ok(host: str, port: int, timeout: float = 3.0) -> bool:
     return _tcp_open(host, port, timeout=timeout)
 
 
-def connect_os10_collector(host: str, username: str = "admin", password: str = "admin") -> "tuple[DellOS10Collector, str]":
-    """Connect a Dell OS10 collector, trying the TCP console first then SSH.
+def connect_os10_collector(host: str, username: str = "admin", password: str = "admin", port: Optional[int] = None) -> "tuple[DellOS10Collector, str]":
+    """Connect a Dell OS10 collector, supporting explicit console ports (e.g., 30003)."""
+    if port:
+        try:
+            collector = DellOS10Collector(host=host, username=username, password=password, port=port, use_ssh=False)
+            collector.connect()
+            return collector, "console"
+        except Exception as console_err:
+            logger.info("OS10 console failed on %s:%s (%s)", host, port, console_err)
 
-    Mirrors the backup flow in ``sync_tasks``: many deployments expose the
-    switch console over TCP on port 5000, while others only accept SSH on
-    port 22 (configurable via ``DELL_SSH_USERNAME`` / ``DELL_SSH_PASSWORD`` /
-    ``DELL_SSH_PORT``). Raises on total failure.
-    """
     ssh_user = os.environ.get("DELL_SSH_USERNAME", "admin")
     ssh_pass = os.environ.get("DELL_SSH_PASSWORD", "admin")
     ssh_port = int(os.environ.get("DELL_SSH_PORT", "22"))
@@ -200,11 +202,11 @@ class DellOS10Driver(SouthboundNetworkDriver):
     # ------------------------------------------------------------------
     # Config push & validation
     # ------------------------------------------------------------------
-    async def push_config(self, host: str, username: str, password: str, config_payload: str) -> dict:
+    async def push_config(self, host: str, username: str, password: str, config_payload: str, port: Optional[int] = None) -> dict:
         """Push configuration to a Dell OS10 switch (console-then-SSH)."""
         def _apply():
             try:
-                collector, transport = connect_os10_collector(host, username, password)
+                collector, transport = connect_os10_collector(host, username, password, port=port)
             except Exception as e:
                 return {"success": False, "output": f"Failed to connect to switch {host}: {e}", "applied_config": ""}
             try:
@@ -217,11 +219,11 @@ class DellOS10Driver(SouthboundNetworkDriver):
 
         return await asyncio.to_thread(_apply)
 
-    async def validate_candidate(self, host: str, username: str, password: str, candidate_config: str) -> dict:
+    async def validate_candidate(self, host: str, username: str, password: str, candidate_config: str, port: Optional[int] = None) -> dict:
         """Validate candidate config by comparing against running config without applying."""
         def _validate():
             try:
-                collector, _transport = connect_os10_collector(host, username, password)
+                collector, _transport = connect_os10_collector(host, username, password, port=port)
             except Exception as e:
                 return {"diff": "", "validation_status": "connection_failed", "error_detail": f"Failed to connect: {e}"}
             try:

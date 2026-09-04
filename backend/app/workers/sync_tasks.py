@@ -79,11 +79,21 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str):
             username, password = "admin", os.environ.get("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!")
         else:
             username, password = "admin", "admin"
+
+        from .ztp_tasks import resolve_console_target
+        target_host, target_port = resolve_console_target(switch, db)
+        logger.info(f"[SYNC TASK] Resolved connection target for {switch.hostname}: {target_host}:{target_port}")
+
         loop = asyncio.new_event_loop()
         try:
-            result = loop.run_until_complete(
-                driver.push_config(switch.management_ip, username, password, config_data)
-            )
+            try:
+                result = loop.run_until_complete(
+                    driver.push_config(target_host, username, password, config_data, port=target_port)
+                )
+            except TypeError:
+                result = loop.run_until_complete(
+                    driver.push_config(target_host, username, password, config_data)
+                )
         finally:
             loop.close()
 
@@ -98,15 +108,14 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str):
                 new_config = ""
                 if switch.vendor.lower() in ("dell_os10", "dell"):
                     from ..drivers.dell_os10_collector import DellOS10Collector
-                    # Try console first
                     try:
-                        with DellOS10Collector(host=switch.management_ip, username=username, password=password, port=5000, use_ssh=False) as collector:
+                        with DellOS10Collector(host=target_host, username=username, password=password, port=target_port, use_ssh=False) as collector:
                             new_config = collector.collect_running_config()
-                    except Exception:
+                    except Exception as snap_err_inner:
+                        logger.warning(f"[SYNC TASK] Console snapshot retry: {snap_err_inner}")
                         try:
-                            # Try SSH fallback
                             ssh_port = int(os.environ.get("DELL_SSH_PORT", "22"))
-                            with DellOS10Collector(host=switch.management_ip, username=username, password=password, port=ssh_port, use_ssh=True) as collector:
+                            with DellOS10Collector(host=target_host, username=username, password=password, port=ssh_port, use_ssh=True) as collector:
                                 new_config = collector.collect_running_config()
                         except Exception:
                             pass
@@ -421,13 +430,20 @@ def auto_provision_subnet_task(job_id_str: str):
                 username = "admin"
                 password = os.environ.get("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!") if sw.vendor in ["nokia", "nokia_srlinux", "timetra"] else "admin"
                 
-                job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Pushing config payload to switch {sw.hostname} at {sw.management_ip}...\n"
+                from .ztp_tasks import resolve_console_target
+                target_host, target_port = resolve_console_target(sw, db)
+                job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Pushing config payload to switch {sw.hostname} at {target_host}:{target_port}...\n"
                 db.commit()
 
                 # Run async push command
-                push_res = loop.run_until_complete(
-                    driver.push_config(sw.management_ip, username, password, config_data)
-                )
+                try:
+                    push_res = loop.run_until_complete(
+                        driver.push_config(target_host, username, password, config_data, port=target_port)
+                    )
+                except TypeError:
+                    push_res = loop.run_until_complete(
+                        driver.push_config(target_host, username, password, config_data)
+                    )
 
                 if push_res.get("success", False):
                     job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Config push to {sw.hostname} succeeded.\n"

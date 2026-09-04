@@ -517,7 +517,7 @@ export const Switches: React.FC = () => {
                               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
                                 {[
                                   ['Model', `${sw.vendor?.toUpperCase() || ''} ${sw.model || '-'}`],
-                                  ['Fabric', (sw as any).fabric_name || 'DataCenter-Fabric-01'],
+                                  ['Fabric', (sw as any).fabric_name || 'Unassigned'],
                                   ['Serial Number', sw.serial_number || '-'],
                                   ['Service Tag', sw.service_tag || '-'],
                                   ['Part Number', sw.part_number || '-'],

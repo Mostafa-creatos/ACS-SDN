@@ -162,6 +162,8 @@ async def push_switch_config(
     from datetime import datetime, timezone
     import hashlib
 
+    from app.workers.ztp_tasks import resolve_console_target
+
     # Stage 4a: Pre-commit snapshot (capture running config for rollback)
     snapshot_results: List[dict] = []
     for sid in payload.switch_ids:
@@ -172,9 +174,10 @@ async def push_switch_config(
             if not switch or switch.vendor.lower() not in ("dell_os10", "dell"):
                 snapshot_results.append({"switch_id": sid, "hostname": hostname, "snapshot_taken": False, "reason": "unsupported_vendor"})
                 continue
+            target_host, target_port = resolve_console_target(switch, db)
             driver = DellOS10Driver()
             snapshot = await driver.validate_candidate(
-                switch.management_ip, "admin", "admin", ""
+                target_host, "admin", "admin", "", port=target_port
             )
             running_config = snapshot.get("diff", "")
             if running_config:
@@ -202,8 +205,9 @@ async def push_switch_config(
             if not switch:
                 continue
             try:
+                target_host, target_port = resolve_console_target(switch, db)
                 driver = resolve_southbound_driver(switch.vendor)
-                result = await driver.validate_candidate(switch.management_ip, "admin", "admin", payload.config_payload)
+                result = await driver.validate_candidate(target_host, "admin", "admin", payload.config_payload, port=target_port)
                 diffs.append({
                     "switch_id": sid,
                     "hostname": switch.hostname,

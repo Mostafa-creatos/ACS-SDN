@@ -32,7 +32,7 @@ export function FabricVltTab({ switchData, vlt }: { switchData?: any; vlt: VltDo
           <div className="flex items-center gap-2">
             <Network className="w-4 h-4 text-indigo-600" />
             <h3 className="text-xs font-bold text-slate-800 tracking-wide">
-              {switchData?.fabric_name || "Fabric A"}
+              {switchData?.fabric_name || "Unassigned"}
             </h3>
           </div>
           <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold">

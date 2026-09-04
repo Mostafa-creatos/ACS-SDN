@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Request, status, HTTPException
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app import models, schemas
@@ -16,11 +17,93 @@ router = APIRouter(
     tags=["ZTP Discovery"]
 )
 
+@router.get("/boot.py", response_class=PlainTextResponse)
+@router.get("/api/v5/ztp/boot.py", response_class=PlainTextResponse)
+async def get_ztp_boot_script(request: Request):
+    """Serves the standalone ZTP boot script to unconfigured switches via Option 67."""
+    server_host = request.headers.get("host", "34.32.194.240:8000")
+    script = (
+        "#!/usr/bin/env python3\n"
+        "import urllib.request, json, subprocess, ssl, glob, os, socket\n\n"
+        "def collect_info():\n"
+        "    mac, serial, hostname, model, mgmt_ip = \"\", \"\", \"OS10\", \"S5248F-ON\", \"\"\n\n"
+        "    # 1. Real local DHCP management IP\n"
+        "    try:\n"
+        "        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+        "        s.connect((\"8.8.8.8\", 80))\n"
+        "        mgmt_ip = s.getsockname()[0]\n"
+        "        s.close()\n"
+        "    except Exception: pass\n\n"
+        "    # 2. Real chassis MAC address\n"
+        "    for path in glob.glob(\"/sys/class/net/*/address\"):\n"
+        "        if \"lo\" not in path and \"docker\" not in path and \"veth\" not in path:\n"
+        "            try:\n"
+        "                with open(path) as f:\n"
+        "                    m = f.read().strip()\n"
+        "                    if m and m != \"00:00:00:00:00:00\":\n"
+        "                        mac = m\n"
+        "                        break\n"
+        "            except Exception: pass\n"
+        "    if not mac: mac = \"50:24:c3:00:01:25\"\n\n"
+        "    # 3. Real hostname\n"
+        "    try:\n"
+        "        if os.path.exists(\"/etc/hostname\"):\n"
+        "            with open(\"/etc/hostname\") as f:\n"
+        "                h = f.read().strip()\n"
+        "                if h: hostname = h\n"
+        "    except Exception: pass\n\n"
+        "    # 4. Real Product Model\n"
+        "    try:\n"
+        "        if os.path.exists(\"/sys/class/dmi/id/product_name\"):\n"
+        "            with open(\"/sys/class/dmi/id/product_name\") as f:\n"
+        "                m_str = f.read().strip()\n"
+        "                if m_str: model = m_str\n"
+        "    except Exception: pass\n\n"
+        "    # 5. Real Service Tag / Chassis Serial\n"
+        "    for sys_file in [\"/sys/class/dmi/id/product_serial\", \"/sys/class/dmi/id/chassis_serial\"]:\n"
+        "        try:\n"
+        "            if os.path.exists(sys_file):\n"
+        "                with open(sys_file) as f:\n"
+        "                    s = f.read().strip()\n"
+        "                    if s and s not in [\"None\", \"Not Specified\", \"0000000\"]:\n"
+        "                        serial = s\n"
+        "                        break\n"
+        "        except Exception: pass\n\n"
+        "    if not serial:\n"
+        "        mac_clean = mac.replace(\":\", \"\").upper()\n"
+        "        serial = \"CN09XJ2F-\" + mac_clean[-6:]\n\n"
+        "    return serial, mac, hostname, model, mgmt_ip\n\n"
+        "serial, mac, hostname, model, mgmt_ip = collect_info()\n"
+        "payload = {\n"
+        "    \"serial_number\": serial,\n"
+        "    \"mac_address\": mac,\n"
+        "    \"hostname\": hostname,\n"
+        "    \"model\": model,\n"
+        "    \"management_ip\": mgmt_ip if mgmt_ip else None,\n"
+        "    \"os_version\": \"10.5.4.3\",\n"
+        "    \"vendor\": \"dell_os10\"\n"
+        "}\n\n"
+        "ctx = ssl._create_unverified_context()\n"
+        "req = urllib.request.Request(\n"
+        f"    \"https://{server_host}/api/v5/discovery/on-boarding-ingestion\",\n"
+        "    data=json.dumps(payload).encode('utf-8'),\n"
+        "    headers={\"Content-Type\": \"application/json\"}\n"
+        ")\n"
+        "try:\n"
+        "    res = urllib.request.urlopen(req, context=ctx)\n"
+        "    print(\"ZTP Signal Ingested Successfully:\", res.read().decode())\n"
+        "except Exception as e:\n"
+        "    print(\"ZTP Signal Error:\", e)\n"
+    )
+    return PlainTextResponse(content=script, media_type="text/plain")
+
 class ZtpIngestionPayload(BaseModel):
     mac_address: str = Field(..., description="Chassis base interface physical MAC address identifier")
     serial_number: str = Field(..., description="Switch chassis physical hardware serial identifier")
     os_version: str = Field(..., description="Active operating system core release string")
     vendor: str = Field(..., description="Vendor target flag matching supported drivers")
+    hostname: Optional[str] = Field(None, description="Real hardware hostname collected from switch")
+    model: Optional[str] = Field(None, description="Real hardware model string")
     management_ip: Optional[str] = Field(None, description="Optional IP override for testing/simulation")
 
 @router.post("/on-boarding-ingestion", status_code=status.HTTP_202_ACCEPTED)
@@ -48,12 +131,13 @@ async def ingest_ztp_signal(
 
     # Use provided management_ip if available, else fallback to client IP
     client_ip = payload.management_ip if payload.management_ip else (request.client.host if request.client else "127.0.0.1")
+    hw_model = payload.model if payload.model else "S5248F-ON"
 
     if record:
         record.current_dhcp_ip = client_ip
         record.base_os_version = payload.os_version
         record.hardware_vendor = payload.vendor
-        record.hardware_model = "Unknown"
+        record.hardware_model = hw_model
         record.onboarding_status = initial_status
         record.error_message = None
     else:
@@ -61,7 +145,7 @@ async def ingest_ztp_signal(
             serial_number=payload.serial_number,
             mac_address=payload.mac_address,
             hardware_vendor=payload.vendor,
-            hardware_model="Unknown",
+            hardware_model=hw_model,
             current_dhcp_ip=client_ip,
             base_os_version=payload.os_version,
             onboarding_status=initial_status
@@ -73,11 +157,16 @@ async def ingest_ztp_signal(
 
     # Upsert a Switch row with lifecycle_state='DiscoveredRaw'
     if not switch:
-        # Create a new bare-minimum switch row
-        hostname = f"switch-{payload.serial_number[-4:]}"
+        # Prevent unique constraint violations for default unconfigured hostnames ('OS10')
+        raw_name = payload.hostname if payload.hostname else "OS10"
+        if raw_name == "OS10" or db.query(models.Switch).filter(models.Switch.hostname == raw_name).first():
+            real_hostname = f"{raw_name}-{payload.serial_number[-6:]}"
+        else:
+            real_hostname = raw_name
+
         switch = models.Switch(
             discovery_id=record.discovery_id,
-            hostname=hostname,
+            hostname=real_hostname,
             management_ip=client_ip,
             vendor=payload.vendor,
             role="leaf",

@@ -112,13 +112,17 @@ class GnmiTelemetryCollector:
                         cpu_out = ""
                         mem_out = ""
                         
-                        # Try Console fallback first (historical default)
+                        # Resolve target host and Telnet console port
+                        from ..workers.ztp_tasks import resolve_console_target
+                        target_host, target_port = resolve_console_target(sw, db)
+
+                        # Try Console fallback first
                         try:
                             with DellOS10Collector(
-                                host=sw.management_ip,
+                                host=target_host,
                                 username=ssh_user,
                                 password=ssh_pass,
-                                port=5000,
+                                port=target_port,
                                 use_ssh=False,
                             ) as collector:
                                 out = collector._send_command("show interface")
