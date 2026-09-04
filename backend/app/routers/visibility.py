@@ -488,7 +488,7 @@ def get_dashboard_summary(db: Session = Depends(get_db), claims: dict = Depends(
     if user_role == "platform_admin":
         switches = db.query(models.Switch).all()
         policy_approvals_count = db.query(models.PolicyApproval).filter(models.PolicyApproval.status == "pending").count()
-        ztp_pool_count = db.query(models.ZtpDiscoveryPool).filter(models.ZtpDiscoveryPool.onboarding_status == "pending").count()
+        ztp_pool_count = db.query(models.ZtpDiscoveryPool).filter(models.ZtpDiscoveryPool.onboarding_status.in_(["pending", "unassigned"])).count()
         subnets_count = db.query(models.IpamSubnet).count()
         fabrics_count = db.query(models.Fabric).count()
     else:

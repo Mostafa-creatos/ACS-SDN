@@ -218,7 +218,7 @@ def build_dashboard_summary(db: Session, claims: dict) -> Dict[str, Any]:
         )
         ztp_count = (
             db.query(models.ZtpDiscoveryPool)
-            .filter(models.ZtpDiscoveryPool.onboarding_status == "pending")
+            .filter(models.ZtpDiscoveryPool.onboarding_status.in_(["pending", "unassigned"]))
             .count()
         )
         subnets_count = db.query(models.IpamSubnet).count()
@@ -299,7 +299,7 @@ def build_dashboard_summary(db: Session, claims: dict) -> Dict[str, Any]:
     if user_role == "platform_admin":
         ztp_devices = (
             db.query(models.ZtpDiscoveryPool)
-            .filter(models.ZtpDiscoveryPool.onboarding_status == "pending")
+            .filter(models.ZtpDiscoveryPool.onboarding_status.in_(["pending", "unassigned"]))
             .limit(10)
             .all()
         )
