@@ -21,6 +21,7 @@ from app.core.auth import verify_switch_access
 from app.auth_permissions import require_permission
 from app.core.logging_config import get_logger
 from app.core.constants import LIFECYCLE_COMPLIANT
+from app.services import dashboard_service
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -467,6 +468,15 @@ def get_telemetry_metrics(
             "timestamp": m.timestamp.isoformat()
         })
     return res
+
+
+@router.get("/api/v5/visibility/dashboard")
+def get_dashboard(
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("inventory:read"))
+):
+    """Consolidated dashboard payload: metrics, leaderboards, jobs, audit, telemetry."""
+    return dashboard_service.build_dashboard_summary(db, claims)
 
 
 @router.get("/api/v5/visibility/dashboard-summary")

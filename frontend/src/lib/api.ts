@@ -506,6 +506,15 @@ export const fetchDashboardSummary = async (tenantId?: string | null) => {
     return res.json();
 };
 
+export const fetchDashboard = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/visibility/dashboard', { tenantId });
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || 'Failed to fetch dashboard');
+    }
+    return res.json();
+};
+
 export const fetchTelemetryMetric = async (metricName: string, tenantId?: string | null) => {
     const res = await apiRequest(`/api/v5/visibility/telemetry?metric_name=${metricName}`, { tenantId });
     if (!res.ok) return null;

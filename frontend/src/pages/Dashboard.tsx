@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card } from '../components/Card';
 import { useAuth } from '../context/AuthContext';
-import {
-  fetchZtpPoolAdmin, fetchTelemetryMetric, fetchAuditLogs,
-  runComplianceAudit, fetchDashboardSummary
-} from '../lib/api';
+import { useDashboard } from '../hooks/useDashboard';
+import { DashboardHeader } from '../components/dashboard/DashboardHeader';
+import { WidgetSkeleton } from '../components/dashboard/WidgetSkeleton';
+import { WidgetError } from '../components/dashboard/WidgetError';
+import { runComplianceAudit } from '../lib/api';
+import { toast } from 'sonner';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -21,7 +23,6 @@ import {
   Network, 
   AlertTriangle, 
   FileClock, 
-  Play, 
   Activity, 
   History, 
   Cpu, 
@@ -32,62 +33,18 @@ import {
   Terminal,
   HeartPulse,
   Layers,
-  Fingerprint,
-  RotateCw
+  Fingerprint
 } from 'lucide-react';
-
-interface ZtpDevice {
-  discovery_id: string;
-  mac_address: string;
-  serial_number: string;
-  hardware_vendor: string;
-  hardware_model: string;
-  current_dhcp_ip: string;
-  base_os_version: string;
-}
-
-interface CeleryStats {
-  status: 'online' | 'offline';
-  active_tasks_count: number;
-  reserved_tasks_count: number;
-  scheduled_tasks_count: number;
-  workers_count: number;
-}
-
-interface TelemetryPoint {
-  timestamp: string;
-  cpu: number;
-  memory: number;
-}
-
-interface AuditLog {
-  log_id: string;
-  username: string;
-  action: string;
-  ip_address: string | null;
-  status: string;
-  created_at: string;
-}
-
-interface ProvisioningJob {
-  job_id: string;
-  vrf_name: string;
-  subnet_cidr: string;
-  fabric_name: string;
-  status: string;
-  started_at: string;
-  completed_at: string;
-  error_message: string | null;
-}
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { selectedTenant } = useAuth();
-  
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [healthScore, setHealthScore] = useState(100);
-  const [metrics, setMetrics] = useState({
+  const { data, isLoading, isFetching, error, refetch } = useDashboard(selectedTenant);
+
+  const [auditRunning, setAuditRunning] = useState(false);
+  const [auditStep, setAuditStep] = useState(0);
+
+  const metrics = data?.metrics ?? {
     totalSwitches: 0,
     activeSwitches: 0,
     driftedSwitches: 0,
@@ -97,129 +54,43 @@ export const Dashboard: React.FC = () => {
     subnetsCount: 0,
     fabricsCount: 0,
     allocatedIpsCount: 0
-  });
+  };
 
-  const [ztpDevices, setZtpDevices] = useState<ZtpDevice[]>([]);
-  const [celeryStats, setCeleryStats] = useState<CeleryStats>({
-    status: 'offline',
+  const healthScore = data?.health_score ?? 100;
+  const celeryStats = data?.celery_stats ?? {
+    status: 'offline' as const,
     active_tasks_count: 0,
     reserved_tasks_count: 0,
     scheduled_tasks_count: 0,
     workers_count: 0
-  });
-  
-  const [cpuLeaderboard, setCpuLeaderboard] = useState<{ hostname: string; value: number }[]>([]);
-  const [memLeaderboard, setMemLeaderboard] = useState<{ hostname: string; value: number }[]>([]);
-  const [recentJobs, setRecentJobs] = useState<ProvisioningJob[]>([]);
-  const [telemetryHistory, setTelemetryHistory] = useState<TelemetryPoint[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [auditRunning, setAuditRunning] = useState(false);
-  const [auditStep, setAuditStep] = useState(0);
+  };
+  const cpuLeaderboard = data?.cpu_leaderboard ?? [];
+  const memLeaderboard = data?.mem_leaderboard ?? [];
+  const recentJobs = data?.recent_jobs ?? [];
+  const telemetryHistory = data?.telemetry_history ?? [];
+  const auditLogs = data?.audit_logs ?? [];
+  const ztpDevices = data?.ztp_devices ?? [];
 
-  const fetchDashboardData = async (isManual = false) => {
-    if (isManual) setRefreshing(true);
-    try {
-      const tenantId = selectedTenant;
-
-      // 1. Fetch Dashboard Summary (safe endpoint for operator/auditor roles)
-      const summary = await fetchDashboardSummary(tenantId);
-      if (summary) {
-        setHealthScore(summary.health_score ?? 100);
-        setMetrics({
-          totalSwitches: summary.metrics?.totalSwitches ?? 0,
-          activeSwitches: summary.metrics?.activeSwitches ?? 0,
-          driftedSwitches: summary.metrics?.driftedSwitches ?? 0,
-          unreachableSwitches: summary.metrics?.unreachableSwitches ?? 0,
-          pendingApprovals: summary.metrics?.pendingApprovals ?? 0,
-          ztpPoolCount: summary.metrics?.ztpPoolCount ?? 0,
-          subnetsCount: summary.metrics?.subnetsCount ?? 0,
-          fabricsCount: summary.metrics?.fabricsCount ?? 0,
-          allocatedIpsCount: summary.metrics?.allocatedIpsCount ?? 0
-        });
-        setCeleryStats({
-          status: summary.celery_stats?.status ?? 'offline',
-          active_tasks_count: summary.celery_stats?.active_tasks_count ?? 0,
-          reserved_tasks_count: summary.celery_stats?.reserved_tasks_count ?? 0,
-          scheduled_tasks_count: summary.celery_stats?.scheduled_tasks_count ?? 0,
-          workers_count: summary.celery_stats?.workers_count ?? 0
-        });
-        setCpuLeaderboard(summary.cpu_leaderboard ?? []);
-        setMemLeaderboard(summary.mem_leaderboard ?? []);
-        setRecentJobs(summary.recent_jobs ?? []);
-      }
-
-      // 2. Fetch ZTP pool
-      try {
-        const ztpData = await fetchZtpPoolAdmin(tenantId);
-        if (ztpData) {
-          setZtpDevices(ztpData);
-        }
-      } catch (err) {
-        console.error("Failed to load ZTP pool:", err);
-      }
-
-      // 3. Fetch Real Telemetry Metrics (CPU & Memory utilization)
-      try {
-        const cpuData = await fetchTelemetryMetric('cpu_utilization', tenantId) ?? [];
-        const memData = await fetchTelemetryMetric('memory_utilization', tenantId) ?? [];
-
-        const pointsMap: { [timestamp: string]: TelemetryPoint } = {};
-        
-        cpuData.forEach((item: any) => {
-          const dateStr = new Date(item.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-          if (!pointsMap[dateStr]) {
-            pointsMap[dateStr] = { timestamp: dateStr, cpu: 0, memory: 0 };
-          }
-          pointsMap[dateStr].cpu = parseFloat(item.metric_value) || 0;
-        });
-
-        memData.forEach((item: any) => {
-          const dateStr = new Date(item.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-          if (!pointsMap[dateStr]) {
-            pointsMap[dateStr] = { timestamp: dateStr, cpu: 0, memory: 0 };
-          }
-          pointsMap[dateStr].memory = parseFloat(item.metric_value) || 0;
-        });
-
-        const sortedPoints = Object.values(pointsMap).reverse();
-        setTelemetryHistory(sortedPoints);
-      } catch (err) {
-        console.error("Failed to load telemetry history:", err);
-      }
-
-      // 4. Fetch Recent Audit Logs
-      try {
-        const auditData = await fetchAuditLogs({ page: 1, limit: 5 }, tenantId);
-        if (auditData) {
-          setAuditLogs(auditData.items || []);
-        }
-      } catch (err) {
-        console.error("Failed to load audit logs:", err);
-      }
-
-    } catch (err) {
-      console.error("Error loading dashboard metrics:", err);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+  const handleRefresh = async () => {
+    const result = await refetch();
+    if (result.error) {
+      toast.error('Failed to refresh dashboard');
+    } else {
+      toast.success('Dashboard refreshed');
     }
   };
-
-  useEffect(() => {
-    fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 30000); // refresh every 30s
-    return () => clearInterval(interval);
-  }, [selectedTenant]);
 
   const handleRunAudit = () => {
     setAuditRunning(true);
     setAuditStep(1);
+    toast.info('Compliance audit started');
 
     const triggerAudit = async () => {
       try {
         await runComplianceAudit(selectedTenant);
       } catch (e) {
         console.error("Failed to run audit on backend:", e);
+        toast.error('Failed to trigger compliance audit');
       }
     };
     triggerAudit();
@@ -230,7 +101,7 @@ export const Dashboard: React.FC = () => {
           clearInterval(stepInterval);
           setTimeout(() => {
             setAuditRunning(false);
-            fetchDashboardData();
+            handleRefresh();
           }, 1000);
           return 3;
         }
@@ -239,18 +110,52 @@ export const Dashboard: React.FC = () => {
     }, 1200);
   };
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="space-y-6">
-        <h1 className="text-3xl font-extrabold font-display tracking-tight text-atlas-ink">NOC Control Room</h1>
+        <DashboardHeader
+          isLoading={true}
+          auditRunning={auditRunning}
+          auditStep={auditStep}
+          onRefresh={handleRefresh}
+          onRunAudit={handleRunAudit}
+        />
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          <Card className="animate-pulse h-[240px] lg:col-span-1 bg-slate-100 border-none" />
-          <Card className="animate-pulse h-[240px] lg:col-span-3 bg-slate-100 border-none" />
+          <WidgetSkeleton className="h-[240px] lg:col-span-1" />
+          <WidgetSkeleton className="h-[240px] lg:col-span-3" />
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <Card className="h-[380px] lg:col-span-2 animate-pulse bg-slate-100 border-none" />
-          <Card className="h-[380px] animate-pulse bg-slate-100 border-none" />
+          <WidgetSkeleton className="h-[380px] lg:col-span-2" />
+          <WidgetSkeleton className="h-[380px]" />
         </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <WidgetSkeleton className="h-[380px]" />
+          <WidgetSkeleton className="h-[380px] lg:col-span-2" />
+        </div>
+        <WidgetSkeleton className="h-[200px]" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <WidgetSkeleton className="h-[360px]" />
+          <WidgetSkeleton className="h-[360px]" />
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !data) {
+    return (
+      <div className="space-y-6">
+        <DashboardHeader
+          isLoading={isFetching}
+          auditRunning={auditRunning}
+          auditStep={auditStep}
+          onRefresh={handleRefresh}
+          onRunAudit={handleRunAudit}
+        />
+        <WidgetError
+          message={error.message}
+          onRetry={handleRefresh}
+          className="h-[300px]"
+        />
       </div>
     );
   }
@@ -325,34 +230,14 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      
-      {/* Control Room Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-extrabold font-display tracking-tight text-atlas-ink">NOC Control Room</h1>
-          <p className="text-xs text-slate-400 mt-1">Real-Time Core Orchestrator & Telemetry Stream</p>
-        </div>
-        <div className="flex gap-3">
-          <button 
-            onClick={() => fetchDashboardData(true)}
-            disabled={refreshing}
-            className="p-2.5 rounded-xl border border-slate-200 bg-white text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-all flex items-center justify-center"
-            title="Refresh Dashboard"
-          >
-            <RotateCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-          </button>
-          <button 
-            onClick={handleRunAudit}
-            disabled={auditRunning}
-            className="btn-secondary flex items-center gap-2"
-          >
-            <Play className={`w-4 h-4 ${auditRunning ? 'animate-spin' : ''}`} />
-            <span>
-              {auditRunning ? `Running Verification (Step ${auditStep}/3)...` : 'Trigger Compliance Run'}
-            </span>
-          </button>
-        </div>
-      </div>
+      <DashboardHeader
+        isLoading={isFetching}
+        lastUpdated={data?.last_updated}
+        auditRunning={auditRunning}
+        auditStep={auditStep}
+        onRefresh={handleRefresh}
+        onRunAudit={handleRunAudit}
+      />
 
       {/* Top Section: Health Radial & Core Stats */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
