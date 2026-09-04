@@ -3,13 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { loginUser, changePassword } from '../lib/api';
 import logoImg from '../assets/logo_transparent.png';
-import { ShieldAlert, Info, Key, Lock, UserCheck, Shield } from 'lucide-react';
+import { ShieldAlert, Info, Key, Lock, UserCheck } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('admin');
-  const [password, setPassword] = useState('admin_password_123!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,12 +71,6 @@ export const Login: React.FC = () => {
     } catch {
       return {};
     }
-  };
-
-  // Helper login buttons to swap roles quickly
-  const handleQuickLogin = (quickEmail: string, quickPass: string) => {
-    setEmail(quickEmail);
-    setPassword(quickPass);
   };
 
   return (
@@ -195,36 +189,6 @@ export const Login: React.FC = () => {
               </button>
             </form>
           )}
-
-          {/* Quick SSO role-swappers */}
-          <div className="mt-7 pt-5 border-t border-slate-800/80">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
-                Quick Role Simulation
-              </span>
-              <Shield className="w-3.5 h-3.5 text-slate-500" />
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <button 
-                onClick={() => handleQuickLogin('admin', 'admin_password_123!')}
-                className="bg-slate-950 hover:bg-slate-800/90 border border-slate-800 text-slate-300 hover:text-white py-2 px-2 rounded-xl transition-all text-center text-[10px] font-bold cursor-pointer"
-              >
-                Platform Admin
-              </button>
-              <button 
-                onClick={() => handleQuickLogin('operator', 'operator_password_123!')}
-                className="bg-slate-950 hover:bg-slate-800/90 border border-slate-800 text-slate-300 hover:text-white py-2 px-2 rounded-xl transition-all text-center text-[10px] font-bold cursor-pointer"
-              >
-                Tenant Operator
-              </button>
-              <button 
-                onClick={() => handleQuickLogin('auditor', 'auditor_password_123!')}
-                className="bg-slate-950 hover:bg-slate-800/90 border border-slate-800 text-slate-300 hover:text-white py-2 px-2 rounded-xl transition-all text-center text-[10px] font-bold cursor-pointer"
-              >
-                Tenant Auditor
-              </button>
-            </div>
-          </div>
 
         </div>
 
