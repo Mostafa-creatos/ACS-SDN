@@ -1360,29 +1360,16 @@ def get_compliance_history(
 
     results = []
     for r in runs:
-        import json
-        score_pct = 0
-        total_findings = 0
-        passed_checks = 0
-        failed_checks = 0
-        if r.summary:
-            try:
-                summary_data = json.loads(r.summary)
-                score_pct = summary_data.get("compliance_score_pct", 0)
-                total_findings = summary_data.get("total_checks", 0)
-                passed_checks = summary_data.get("passed_checks", 0)
-                failed_checks = summary_data.get("failed_checks", 0)
-            except (json.JSONDecodeError, AttributeError):
-                pass
+        summary_data = _compliance_remediation_summary(db, r.run_id)
         results.append({
             "run_id": str(r.run_id),
             "started_at": r.started_at.isoformat() if r.started_at else None,
             "completed_at": r.completed_at.isoformat() if r.completed_at else None,
             "triggered_by": r.triggered_by,
-            "compliance_score_pct": score_pct,
-            "total_findings": total_findings,
-            "passed_checks": passed_checks,
-            "failed_checks": failed_checks,
+            "compliance_score_pct": summary_data.get("compliance_score_pct", 0),
+            "total_findings": summary_data.get("total_findings", 0),
+            "passed_checks": summary_data.get("passed_checks", 0),
+            "failed_checks": summary_data.get("failed_checks", 0),
             "status": r.status
         })
 
