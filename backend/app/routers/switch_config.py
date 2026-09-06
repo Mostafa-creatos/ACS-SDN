@@ -264,7 +264,8 @@ async def push_switch_config(
             "collision_warnings": [msg for sev, msg in collision_warnings if sev == "warn"],
             "snapshots": snapshot_results,
         }
-@router.get("/api/v5/switch-config/history")
+
+
 def _aggregate_push_status(approval: models.PolicyApproval) -> str:
     """Derive the display status for a config_push approval from stored per-switch results."""
     if approval.vrf_name != "config_push":
@@ -288,6 +289,7 @@ def _aggregate_push_status(approval: models.PolicyApproval) -> str:
     return "partial"
 
 
+@router.get("/api/v5/switch-config/history")
 def get_config_push_history(
     limit: int = 50,
     db: Session = Depends(get_db),
