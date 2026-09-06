@@ -47,8 +47,8 @@ celery_app.conf.update(
     task_events=True,
     task_send_sent_event=True,
     beat_schedule={
-        'run-config-compliance-mgr-every-15-mins': {
-            'task': 'app.workers.config_lifecycle.config_compliance_mgr',
+        'run-config-drift-mgr-every-15-mins': {
+            'task': 'app.workers.config_lifecycle.config_drift_mgr',
             'schedule': 900.0,
         },
     }

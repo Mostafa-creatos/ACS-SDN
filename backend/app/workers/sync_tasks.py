@@ -174,13 +174,20 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str, approval
                     config_hash = hashlib.md5(new_config.encode("utf-8")).hexdigest()
                     switch.running_config = new_config
                     switch.configuration_checksum = config_hash
-                    
+
+                    # A successful config push establishes the new golden baseline.
+                    db.query(models.ConfigSnapshot).filter(
+                        models.ConfigSnapshot.switch_id == switch.switch_id,
+                        models.ConfigSnapshot.is_baseline == True
+                    ).update({"is_baseline": False})
+
                     snapshot = models.ConfigSnapshot(
                         snapshot_id=_uuid.uuid4(),
                         switch_id=switch.switch_id,
                         taken_at=datetime.now(timezone.utc),
                         raw_config=new_config,
                         config_hash=config_hash,
+                        is_baseline=True,
                         taken_by="system_config_push",
                     )
                     db.add(snapshot)

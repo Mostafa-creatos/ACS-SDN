@@ -81,7 +81,7 @@ def _flatten_srlinux_info(config_text: str) -> str:
 def _adapt_nokia_expected_pattern(expected_str: str) -> str:
     """Translate Dell-CLI style compliance patterns into SR Linux equivalents."""
     adapted = expected_str
-    if adapted.strip() == "aaa authentication login default local":
+    if adapted.strip() in ("aaa authentication login default local", "aaa authentication login default group tacacs+ local"):
         adapted = "aaa"
     replacements = [
         ("logging server ", "logging remote-server "),
@@ -153,11 +153,27 @@ def build_remediation_config(switch: models.Switch, rule_name: str, context: dic
         if "aaa" in name:
             return "aaa authentication login default local\n"
         if "spanning" in name or "mst" in name:
+            if "bpduguard" in name or "bpdu" in name:
+                return "spanning-tree bpduguard disable-timeout 300\n"
             return "spanning-tree mode mst\n"
+        if "errdisable" in name and ("bpduguard" in name or "bpdu" in name):
+            return "errdisable recovery cause bpduguard\nerrdisable recovery interval 300\n"
         if "ssh" in name:
             return "ip ssh server enable\n"
         if "telnet" in name:
             return "no ip telnet server enable\n"
+        if "tacacs" in name:
+            return "tacacs-server host 10.10.10.10 key S3cr3tK3y\n"
+        if "aaa" in name:
+            return "aaa authentication login default group tacacs+ local\n"
+        if "vrf" in name and "management" in name:
+            return "ip vrf management\n"
+        if "snmp" in name:
+            return "snmp-server view RESTRICTED_VIEW 1.3.6.1 included\nsnmp-server group READ_ONLY v3 auth read RESTRICTED_VIEW\n"
+        if "copp" in name or "control-plane" in name:
+            return "class-map type control-plane match-any COPP_CLASS\n match protocol ssh\npolicy-map type control-plane COPP_POLICY\n class COPP_CLASS\n control-plane\n service-policy in type control-plane COPP_POLICY\n"
+        if "acl" in name and "management" in name:
+            return "ip access-list MGMT-ACL\n permit ip 10.0.0.0/8 any\n deny ip any any\n"
         if "bgp" in name:
             return f"router bgp {context.get('switch.local_bgp_asn', switch.local_bgp_asn)}\n exit\n"
         if "vlt" in name:
@@ -242,7 +258,10 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
     # Update switch model fields
     switch.configuration_checksum = config_hash
     switch.last_successful_sync = datetime.datetime.now(datetime.timezone.utc)
-    switch.lifecycle_status = "compliant_active"
+    # Only a baseline snapshot represents the intended golden state.
+    # Audit snapshots must not mask a previously detected configuration drift.
+    if is_baseline:
+        switch.lifecycle_status = "compliant_active"
     
     # Parse active VRF names from configuration
     vrfs_found = []
@@ -272,32 +291,49 @@ def take_config_snapshot(db: Session, switch_id: uuid.UUID, taken_by: str = "sys
 from app.workers.celery_app import celery_app
 
 @celery_app.task(name="app.workers.config_lifecycle.config_compliance_mgr")
-def config_compliance_mgr(fabric_id_str: str = None, tenant_id_str: str = None):
+def config_compliance_mgr(run_id: str = None, fabric_id_str: str = None, tenant_id_str: str = None):
     from app.db import SessionLocal
     db = SessionLocal()
     try:
         fid = uuid.UUID(fabric_id_str) if fabric_id_str else None
         tid = uuid.UUID(tenant_id_str) if tenant_id_str else None
-        run_compliance_check(db, fabric_id=fid, tenant_id=tid)
+        run_compliance_check(db, run_id=run_id, fabric_id=fid, tenant_id=tid)
     finally:
         db.close()
 
-def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uuid.UUID = None) -> models.ComplianceRun:
+def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID = None, tenant_id: uuid.UUID = None) -> models.ComplianceRun:
     """
     Executes golden config rules auditing across target switches.
     Saves findings in the database.
     """
-    # Create ComplianceRun record
-    run = models.ComplianceRun(
-        run_id=uuid.uuid4(),
-        fabric_id=fabric_id,
-        tenant_id=tenant_id,
-        started_at=datetime.datetime.now(datetime.timezone.utc),
-        status="running"
-    )
-    db.add(run)
-    db.commit()
-    db.refresh(run)
+    # Use the API-created run if an ID was provided, otherwise create a new one.
+    if run_id:
+        try:
+            run = db.query(models.ComplianceRun).filter(models.ComplianceRun.run_id == uuid.UUID(run_id)).first()
+        except ValueError:
+            run = None
+    else:
+        run = None
+
+    if not run:
+        run = models.ComplianceRun(
+            run_id=uuid.uuid4(),
+            fabric_id=fabric_id,
+            tenant_id=tenant_id,
+            started_at=datetime.datetime.now(datetime.timezone.utc),
+            status="running"
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+    else:
+        run.status = "running"
+        if fabric_id:
+            run.fabric_id = fabric_id
+        if tenant_id:
+            run.tenant_id = tenant_id
+        db.commit()
+        db.refresh(run)
 
     # Fetch active compliance rules
     rules = db.query(models.ComplianceRule).filter(models.ComplianceRule.is_active == True).all()
@@ -446,6 +482,7 @@ def run_compliance_check(db: Session, fabric_id: uuid.UUID = None, tenant_id: uu
     }
 
     run.status = "completed"
+    run.completed_at = datetime.datetime.now(datetime.timezone.utc)
     run.summary = json.dumps(summary_data)
     db.commit()
     db.refresh(run)
@@ -555,8 +592,8 @@ def categorize_drift(diff_text: str) -> str:
         return "Identity"
     return "Unknown Category"
 
-@shared_task
-def config_compliance_mgr():
+@shared_task(name="app.workers.config_lifecycle.config_drift_mgr")
+def config_drift_mgr():
     """
     Periodic task to detect config drift for all compliant switches.
     """

@@ -166,11 +166,11 @@ def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends
     db.refresh(run)
 
     try:
-        config_compliance_mgr.delay()
+        config_compliance_mgr.delay(run_id=str(run.run_id))
     except Exception as err:
         logger.warning(f"[COMPLIANCE API] Celery dispatch failed, running inline: {err}")
         from app.workers.config_lifecycle import run_compliance_check
-        run = run_compliance_check(db)
+        run = run_compliance_check(db, run_id=str(run.run_id))
 
     return {
         "run_id": str(run.run_id),
@@ -180,11 +180,12 @@ def trigger_compliance_run(db: Session = Depends(get_db), claims: dict = Depends
     }
 
 def _compliance_remediation_summary(db: Session, run_id: uuid.UUID) -> dict:
-    """Count findings of a compliance run by remediation status.
+    """Count findings of a compliance run by remediation status and recompute the effective score.
 
     Computed at read time so the summary reflects remediation results that
     land after the run has completed (Celery worker updates).
     """
+    import json
     findings = db.query(models.ComplianceFinding).filter(
         models.ComplianceFinding.compliance_run_id == run_id
     ).all()
@@ -194,6 +195,23 @@ def _compliance_remediation_summary(db: Session, run_id: uuid.UUID) -> dict:
         key = {"success": "resolved", "pending": "pending", "failed": "failed"}.get(status, "open")
         counts[key] += 1
     counts["total_findings"] = len(findings)
+
+    run = db.query(models.ComplianceRun).filter(models.ComplianceRun.run_id == run_id).first()
+    total_checks = 0
+    if run and run.summary:
+        try:
+            total_checks = json.loads(run.summary).get("total_checks", 0)
+        except Exception:
+            total_checks = len(findings)
+    if total_checks == 0:
+        total_checks = len(findings)
+
+    if total_checks > 0:
+        effective_passed = total_checks - (counts["open"] + counts["pending"] + counts["failed"])
+        counts["compliance_score_pct"] = round((effective_passed / total_checks) * 100, 1)
+    else:
+        counts["compliance_score_pct"] = 100.0
+
     return counts
 
 @router.get("/api/v5/visibility/compliance/latest")
