@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card } from '../components/Card';
 import { useAuth } from '../context/AuthContext';
+import { toast } from 'sonner';
 import {
   Send,
   Check,
@@ -19,11 +20,12 @@ import {
   Terminal,
   Eye,
   X,
+  RotateCcw,
 } from 'lucide-react';
 import { CategoryPanel } from '../components/config-push/CategoryPanel';
 import { CommandForm } from '../components/config-push/CommandForm';
 import { CommandPreview } from '../components/config-push/CommandPreview';
-import { fetchAdminSwitches, fetchSwitchConfigHistory, pushSwitchConfig, fetchSwitchInterfaces } from '../lib/api';
+import { fetchAdminSwitches, fetchSwitchConfigHistory, pushSwitchConfig, retryConfigPush, fetchSwitchInterfaces } from '../lib/api';
 import type { CommandTemplate, BuiltCommand } from '../types/config-push-types';
 
 interface SwitchItem {
@@ -42,6 +44,14 @@ interface PushResult {
   task_id?: string;
 }
 
+interface SwitchPushResult {
+  status: string;
+  output?: string;
+  error?: string;
+  completed_at?: string;
+  task_id?: string;
+}
+
 interface PushHistoryEntry {
   id: string;
   tenant: string;
@@ -51,7 +61,10 @@ interface PushHistoryEntry {
   status: string;
   diff: string;
   created_at: string;
+  completed_at?: string;
   requested_by?: string;
+  push_results?: Record<string, SwitchPushResult>;
+  task_ids?: Record<string, string>;
 }
 
 interface DiffLine {
@@ -115,6 +128,8 @@ export const ConfigPushPage: React.FC = () => {
   const [switches, setSwitches] = useState<SwitchItem[]>([]);
   const [history, setHistory] = useState<PushHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [inspectPayload, setInspectPayload] = useState<string | null>(null);
   const [inspectTitle, setInspectTitle] = useState('');
 
@@ -211,6 +226,23 @@ export const ConfigPushPage: React.FC = () => {
   useEffect(() => {
     if (activeTab === 'history') fetchHistory();
   }, [activeTab, selectedTenant]);
+
+  const handleRetry = async (entry: PushHistoryEntry) => {
+    setRetryingId(entry.id);
+    try {
+      const res = await retryConfigPush(entry.id, selectedTenant);
+      if (res.ok) {
+        toast.success('Retry queued for failed switches');
+        fetchHistory();
+      } else {
+        toast.error(res.data?.detail || 'Retry failed');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Retry failed');
+    } finally {
+      setRetryingId(null);
+    }
+  };
 
   // Builder helpers
   const toggleCategory = (id: string) => {
@@ -1064,51 +1096,125 @@ export const ConfigPushPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map(h => (
-                    <tr key={h.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
-                      <td className="py-3 px-3 text-slate-500 font-mono">
-                        {h.created_at ? new Date(h.created_at).toLocaleString() : '-'}
-                      </td>
-                      <td className="py-3 px-3 text-slate-700 font-semibold">{h.tenant}</td>
-                      <td className="py-3 px-3 text-slate-600">{h.summary}</td>
-                      <td className="py-3 px-3 text-slate-600 max-w-[200px] truncate" title={getTargetSwitchNames(h.target_switches)}>
-                        {getTargetSwitchNames(h.target_switches)}
-                      </td>
-                      <td className="py-3 px-3 text-slate-500 font-medium">{h.requested_by || 'system'}</td>
-                      <td className="py-3 px-3">
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          h.blast_radius > 5 ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-500'
-                        }`}>
-                          {h.blast_radius}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3">
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
-                          h.status === 'approved' ? 'bg-emerald-50 text-emerald-600' :
-                          h.status === 'rejected' ? 'bg-rose-50 text-rose-600' :
-                          h.status === 'pending' ? 'bg-amber-50 text-amber-600' :
-                          'bg-slate-100 text-slate-500'
-                        }`}>
-                          {h.status === 'approved' ? 'pushed' :
-                           h.status === 'pending' ? 'waiting approval' :
-                           h.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <button
-                          onClick={() => {
-                            setInspectPayload(h.diff || 'No candidate configuration payload recorded.');
-                            setInspectTitle(`${h.tenant} config push (${new Date(h.created_at).toLocaleDateString()})`);
-                          }}
-                          className="text-slate-400 hover:text-slate-700 font-bold flex items-center gap-1.5 justify-end ml-auto"
-                          title="Inspect applied configuration payload"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          Inspect
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {history.map(h => {
+                    const isExpandable = !!h.push_results && Object.keys(h.push_results).length > 0;
+                    const isExpanded = expandedId === h.id;
+                    const canRetry = (h.status === 'failed' || h.status === 'partial') && canPush;
+                    return (
+                      <React.Fragment key={h.id}>
+                        <tr className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                          <td className="py-3 px-3 text-slate-500 font-mono">
+                            {h.created_at ? new Date(h.created_at).toLocaleString() : '-'}
+                          </td>
+                          <td className="py-3 px-3 text-slate-700 font-semibold">{h.tenant}</td>
+                          <td className="py-3 px-3 text-slate-600">{h.summary}</td>
+                          <td className="py-3 px-3 text-slate-600 max-w-[200px] truncate" title={getTargetSwitchNames(h.target_switches)}>
+                            {getTargetSwitchNames(h.target_switches)}
+                          </td>
+                          <td className="py-3 px-3 text-slate-500 font-medium">{h.requested_by || 'system'}</td>
+                          <td className="py-3 px-3">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              h.blast_radius > 5 ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              {h.blast_radius}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                              h.status === 'success' ? 'bg-emerald-50 text-emerald-600' :
+                              h.status === 'failed' ? 'bg-rose-50 text-rose-600' :
+                              h.status === 'partial' ? 'bg-amber-50 text-amber-600' :
+                              h.status === 'in_progress' ? 'bg-blue-50 text-blue-600' :
+                              h.status === 'approved' ? 'bg-emerald-50 text-emerald-600' :
+                              h.status === 'rejected' ? 'bg-rose-50 text-rose-600' :
+                              h.status === 'pending' ? 'bg-amber-50 text-amber-600' :
+                              'bg-slate-100 text-slate-500'
+                            }`}>
+                              {h.status === 'approved' ? 'pushed' :
+                               h.status === 'pending' ? 'waiting approval' :
+                               h.status.replace(/_/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <div className="flex items-center justify-end gap-3">
+                              {isExpandable && (
+                                <button
+                                  onClick={() => setExpandedId(isExpanded ? null : h.id)}
+                                  className="text-slate-400 hover:text-atlas-primary font-bold flex items-center gap-1"
+                                  title="Show per-switch results"
+                                >
+                                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                  Details
+                                </button>
+                              )}
+                              {canRetry && (
+                                <button
+                                  onClick={() => handleRetry(h)}
+                                  disabled={retryingId === h.id}
+                                  className="text-atlas-primary hover:text-atlas-primary/80 font-bold flex items-center gap-1 disabled:opacity-50"
+                                  title="Retry failed switches"
+                                >
+                                  <RotateCcw className={`w-3.5 h-3.5 ${retryingId === h.id ? 'animate-spin' : ''}`} />
+                                  {retryingId === h.id ? 'Retrying...' : 'Retry'}
+                                </button>
+                              )}
+                              <button
+                                onClick={() => {
+                                  setInspectPayload(h.diff || 'No candidate configuration payload recorded.');
+                                  setInspectTitle(`${h.tenant} config push (${new Date(h.created_at).toLocaleDateString()})`);
+                                }}
+                                className="text-slate-400 hover:text-slate-700 font-bold flex items-center gap-1.5"
+                                title="Inspect applied configuration payload"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                Inspect
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                        {isExpanded && h.push_results && (
+                          <tr className="bg-slate-50/50">
+                            <td colSpan={8} className="py-3 px-3">
+                              <div className="space-y-2">
+                                <p className="text-[10px] font-bold text-slate-500 uppercase">Per-Switch Results</p>
+                                {Object.entries(h.push_results).map(([switchId, result]) => {
+                                  const hostname = switches.find(s => s.switch_id === switchId)?.hostname || switchId;
+                                  const isSuccess = result.status === 'SYNC_COMPLETED';
+                                  const isFailed = result.status === 'SYNC_FAILED';
+                                  return (
+                                    <div key={switchId} className="flex items-start justify-between gap-3 text-xs bg-white border border-slate-100 rounded-lg p-3">
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-semibold text-slate-700">{hostname}</span>
+                                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                                            isSuccess ? 'bg-emerald-50 text-emerald-600' :
+                                            isFailed ? 'bg-rose-50 text-rose-600' :
+                                            'bg-blue-50 text-blue-600'
+                                          }`}>
+                                            {isSuccess ? 'Success' : isFailed ? 'Failed' : result.status}
+                                          </span>
+                                        </div>
+                                        {(result.output || result.error) && (
+                                          <p className={`mt-1 text-[10px] ${isFailed ? 'text-rose-600' : 'text-slate-500'} font-mono`}>
+                                            {result.error || result.output}
+                                          </p>
+                                        )}
+                                      </div>
+                                      {result.completed_at && (
+                                        <span className="text-[10px] text-slate-400 whitespace-nowrap">
+                                          {new Date(result.completed_at).toLocaleString()}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

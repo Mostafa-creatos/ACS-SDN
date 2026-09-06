@@ -247,10 +247,16 @@ async def push_switch_config(
         db.add(approval)
         db.commit()
 
-        task_ids = []
+        task_id_map = {}
         for sid in payload.switch_ids:
-            task = sync_switch_config_task.delay(sid, payload.config_payload)
-            task_ids.append({"switch_id": sid, "task_id": task.id})
+            task = sync_switch_config_task.delay(sid, payload.config_payload, str(approval.approval_id))
+            task_id_map[sid] = task.id
+
+        approval.task_ids = task_id_map
+        approval.status = "in_progress"
+        db.commit()
+
+        task_ids = [{"switch_id": sid, "task_id": tid} for sid, tid in task_id_map.items()]
         return {
             "status": "PUSH_QUEUED",
             "task_ids": task_ids,
@@ -259,6 +265,29 @@ async def push_switch_config(
             "snapshots": snapshot_results,
         }
 @router.get("/api/v5/switch-config/history")
+def _aggregate_push_status(approval: models.PolicyApproval) -> str:
+    """Derive the display status for a config_push approval from stored per-switch results."""
+    if approval.vrf_name != "config_push":
+        return approval.status
+
+    target_ids = [s.strip() for s in (approval.target_switch_serials or "").split(",") if s.strip()]
+    results = approval.push_results or {}
+
+    if not results and approval.status in ("approved", "in_progress"):
+        return "in_progress"
+
+    completed = {sid: r for sid, r in results.items() if r.get("status") in ("SYNC_COMPLETED", "SYNC_FAILED")}
+    if len(completed) < len(target_ids):
+        return "in_progress"
+
+    statuses = [r.get("status") for r in completed.values()]
+    if all(s == "SYNC_COMPLETED" for s in statuses):
+        return "success"
+    if all(s == "SYNC_FAILED" for s in statuses):
+        return "failed"
+    return "partial"
+
+
 def get_config_push_history(
     limit: int = 50,
     db: Session = Depends(get_db),
@@ -285,10 +314,77 @@ def get_config_push_history(
             "summary": f"Config push to {len(a.target_switch_serials.split(','))} switch(es)" if a.vrf_name == "config_push" else f"VRF {a.vrf_name} VLAN {a.vlan_id}",
             "target_switches": a.target_switch_serials,
             "blast_radius": a.blast_radius,
-            "status": a.status,
+            "status": _aggregate_push_status(a),
             "diff": a.diff_payload or "",
             "created_at": a.created_at.isoformat() if a.created_at else None,
-            "requested_by": a.requested_by or "system"
+            "completed_at": a.completed_at.isoformat() if a.completed_at else None,
+            "requested_by": a.requested_by or "system",
+            "push_results": a.push_results or {},
+            "task_ids": a.task_ids or {}
         })
 
     return results
+
+
+@router.post("/api/v5/switch-config/retry/{approval_id}")
+def retry_config_push(
+    approval_id: str,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("switch_config:dry_run"))
+):
+    """Re-queue configuration push tasks for failed switches of an existing push."""
+    try:
+        approval_uuid = uuid.UUID(approval_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid approval_id")
+
+    approval = db.query(models.PolicyApproval).filter(models.PolicyApproval.approval_id == approval_uuid).first()
+    if not approval:
+        raise HTTPException(status_code=404, detail="Config push not found")
+
+    if approval.vrf_name != "config_push":
+        raise HTTPException(status_code=400, detail="Retry is only available for config push entries")
+
+    user_role = claims.get("role")
+    user_tenant_id = claims.get("tenant_id")
+    if user_role != "platform_admin" and user_tenant_id and approval.tenant_id:
+        if approval.tenant_id != uuid.UUID(str(user_tenant_id)):
+            raise HTTPException(status_code=403, detail="Access denied for this tenant")
+
+    target_ids = [s.strip() for s in (approval.target_switch_serials or "").split(",") if s.strip()]
+    if not target_ids:
+        raise HTTPException(status_code=400, detail="No target switches recorded for this push")
+
+    results = approval.push_results or {}
+    failed_ids = [
+        sid for sid in target_ids
+        if results.get(sid, {}).get("status") != "SYNC_COMPLETED"
+    ]
+
+    if not failed_ids:
+        raise HTTPException(status_code=400, detail="No failed switches to retry")
+
+    from app.workers.sync_tasks import sync_switch_config_task
+
+    config_payload = approval.diff_payload or ""
+    if not config_payload.strip():
+        raise HTTPException(status_code=400, detail="Original configuration payload is not available")
+
+    task_id_map = approval.task_ids or {}
+    for sid in failed_ids:
+        task = sync_switch_config_task.delay(sid, config_payload, str(approval.approval_id))
+        task_id_map[sid] = task.id
+        results[sid] = {"status": "pending", "output": "", "error": "", "completed_at": None}
+
+    approval.task_ids = task_id_map
+    approval.push_results = results
+    approval.status = "in_progress"
+    approval.completed_at = None
+    db.commit()
+
+    return {
+        "status": "PUSH_QUEUED",
+        "approval_id": approval_id,
+        "retried_switch_ids": failed_ids,
+        "task_ids": [{"switch_id": sid, "task_id": task_id_map[sid]} for sid in failed_ids]
+    }

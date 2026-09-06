@@ -50,7 +50,7 @@ async def start_periodic_telemetry_loop(interval_sec: int):
 from .celery_app import celery_app
 
 @celery_app.task(bind=True, name="app.workers.sync_tasks.sync_switch_config_task")
-def sync_switch_config_task(self, switch_id_str: str, config_data: str):
+def sync_switch_config_task(self, switch_id_str: str, config_data: str, approval_id: str | None = None):
     """
     Asynchronous Celery task for pushing configuration changes to southbound drivers.
     """
@@ -63,6 +63,45 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str):
 
     db = SessionLocal()
     task_id = str(self.request.id) if self.request.id else None
+
+    def _update_approval_result(status: str, output: str = "", error: str = ""):
+        if not approval_id:
+            return
+        try:
+            approval_uuid = uuid.UUID(str(approval_id))
+            approval = db.query(models.PolicyApproval).filter(models.PolicyApproval.approval_id == approval_uuid).first()
+            if not approval:
+                return
+
+            push_results = approval.push_results or {}
+            push_results[switch_id_str] = {
+                "status": status,
+                "output": output,
+                "error": error,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "task_id": task_id,
+            }
+            approval.push_results = push_results
+
+            target_ids = [s.strip() for s in (approval.target_switch_serials or "").split(",") if s.strip()]
+            completed = {sid: r for sid, r in push_results.items() if r.get("status") in ("SYNC_COMPLETED", "SYNC_FAILED")}
+            if len(completed) >= len(target_ids):
+                approval.completed_at = datetime.now(timezone.utc)
+                statuses = [r.get("status") for r in completed.values()]
+                if all(s == "SYNC_COMPLETED" for s in statuses):
+                    approval.status = "success"
+                elif all(s == "SYNC_FAILED" for s in statuses):
+                    approval.status = "failed"
+                else:
+                    approval.status = "partial"
+            else:
+                approval.status = "in_progress"
+
+            db.commit()
+        except Exception as update_err:
+            logger.warning(f"[SYNC TASK] Failed to update approval {approval_id}: {update_err}")
+            db.rollback()
+
     try:
         sw_uuid = uuid.UUID(switch_id_str)
         switch = db.query(models.Switch).filter(models.Switch.switch_id == sw_uuid).first()
@@ -159,14 +198,20 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str):
             })
         db.commit()
 
+        output = result.get("output", "")
+        if success:
+            _update_approval_result("SYNC_COMPLETED", output=output)
+        else:
+            _update_approval_result("SYNC_FAILED", output=output)
         return {
             "status": "SYNC_COMPLETED" if success else "SYNC_FAILED",
             "switch_id": switch_id_str,
-            "output": result.get("output", "")
+            "output": output
         }
     except Exception as e:
         db.rollback()
         error_msg = str(e)[:2000]
+        _update_approval_result("SYNC_FAILED", error=error_msg)
         if task_id:
             try:
                 db.query(models.ComplianceFinding).filter(

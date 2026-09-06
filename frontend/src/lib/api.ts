@@ -614,6 +614,15 @@ export const pushSwitchConfig = async (
     return { ok: res.ok, data };
 };
 
+export const retryConfigPush = async (approvalId: string, tenantId?: string | null) => {
+    const res = await apiRequest(`/api/v5/switch-config/retry/${approvalId}`, {
+        method: 'POST',
+        tenantId
+    });
+    const data = await res.json();
+    return { ok: res.ok, data };
+};
+
 // ── Fabrics (quiet load for dropdowns: no tenant header, null on !ok) ────────
 export const fetchFabricsQuiet = async () => {
     const res = await apiRequest('/api/v5/admin/fabrics');

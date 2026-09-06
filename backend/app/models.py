@@ -469,10 +469,13 @@ class PolicyApproval(Base):
     requested_cidr = Column(String(45), nullable=False)
     target_switch_serials = Column(String, nullable=False)  # Comma-separated list of hostnames
     blast_radius = Column(Integer, nullable=False)
-    status = Column(String(32), default="pending")  # 'pending', 'approved', 'rejected'
+    status = Column(String(32), default="pending")  # 'pending', 'approved', 'rejected', 'in_progress', 'success', 'failed', 'partial'
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    completed_at = Column(DateTime, nullable=True)
     diff_payload = Column(String, nullable=True)
     requested_by = Column(String(100), nullable=True, default="system")
+    task_ids = Column(JSON, nullable=True)       # {switch_id: celery_task_id}
+    push_results = Column(JSON, nullable=True)   # {switch_id: {status, output, error, completed_at}}
 
     tenant = relationship("Tenant")
 
