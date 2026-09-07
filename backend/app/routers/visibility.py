@@ -206,9 +206,13 @@ def _compliance_remediation_summary(db: Session, run_id: uuid.UUID) -> dict:
     if total_checks == 0:
         total_checks = len(findings)
 
+    failed_checks = counts["open"] + counts["pending"] + counts["failed"]
+    passed_checks = max(0, total_checks - failed_checks)
+    counts["passed_checks"] = passed_checks
+    counts["failed_checks"] = failed_checks
+
     if total_checks > 0:
-        effective_passed = total_checks - (counts["open"] + counts["pending"] + counts["failed"])
-        counts["compliance_score_pct"] = round((effective_passed / total_checks) * 100, 1)
+        counts["compliance_score_pct"] = round((passed_checks / total_checks) * 100, 1)
     else:
         counts["compliance_score_pct"] = 100.0
 
