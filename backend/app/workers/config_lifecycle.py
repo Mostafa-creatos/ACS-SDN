@@ -361,6 +361,7 @@ def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID =
     # SSH/console ports are closed) now fail their 3s TCP probe in parallel
     # instead of stacking 10-30s connect timeouts sequentially.
     fetched_configs = {}
+    cached_switch_ids = set()
     with ThreadPoolExecutor(max_workers=8) as ex:
         futures = {ex.submit(_fetch_switch_running_config, sw): sw for sw in switches}
         for fut in futures:
@@ -368,9 +369,23 @@ def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID =
             try:
                 fetched_configs[sw.switch_id] = fut.result()
             except Exception as e:
-                logger.warning(f"[COMPLIANCE] Switch {sw.hostname} unreachable, skipping audit: {e}")
-                unreachable_switches.append(sw.hostname)
-                unreachable_switch_ids.add(sw.switch_id)
+                logger.warning(f"[COMPLIANCE] Switch {sw.hostname} live fetch failed, trying cached config: {e}")
+                # Fall back to the most recently stored running config or snapshot
+                # so compliance can still report drift even when devices are offline.
+                cached = (sw.running_config or "").strip()
+                if not cached:
+                    latest_snapshot = db.query(models.ConfigSnapshot).filter(
+                        models.ConfigSnapshot.switch_id == sw.switch_id
+                    ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
+                    cached = (latest_snapshot.raw_config or "").strip() if latest_snapshot else ""
+                if cached:
+                    fetched_configs[sw.switch_id] = cached
+                    cached_switch_ids.add(sw.switch_id)
+                    logger.info(f"[COMPLIANCE] Switch {sw.hostname} audited from cached config")
+                else:
+                    logger.warning(f"[COMPLIANCE] Switch {sw.hostname} unreachable and no cached config, skipping audit")
+                    unreachable_switches.append(sw.hostname)
+                    unreachable_switch_ids.add(sw.switch_id)
 
     for sw in switches:
         if sw.switch_id in unreachable_switch_ids:
@@ -379,9 +394,14 @@ def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID =
         # Load switch's associated fabric
         fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == sw.fabric_id).first()
 
-        # Always pull a fresh live configuration snapshot during compliance audit.
-        snapshot = take_config_snapshot(db, sw.switch_id, "compliance-auditor", raw_config=fetched_configs[sw.switch_id])
-        config = snapshot.raw_config or ""
+        live_config = fetched_configs.get(sw.switch_id)
+        if sw.switch_id in cached_switch_ids:
+            # Cached config: do not overwrite the live snapshot/baseline state.
+            config = live_config or ""
+        else:
+            # Always pull a fresh live configuration snapshot during compliance audit.
+            snapshot = take_config_snapshot(db, sw.switch_id, "compliance-auditor", raw_config=live_config)
+            config = snapshot.raw_config or ""
 
         # Nokia SR Linux configs are CLI `info` dumps: flatten them
         if sw.vendor == "nokia":
@@ -471,9 +491,12 @@ def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID =
             else:
                 passed_rules += 1
 
+    cached_hostnames = [sw.hostname for sw in switches if sw.switch_id in cached_switch_ids]
     summary_data = {
-        "switches_audited": len(switches),
-        "switches_reachable": len(switches) - len(unreachable_switches),
+        "switches_audited": len(switches) - len(unreachable_switches),
+        "switches_reachable": len(switches) - len(unreachable_switches) - len(cached_switch_ids),
+        "switches_cached": len(cached_switch_ids),
+        "cached_switches": cached_hostnames,
         "unreachable_switches": unreachable_switches,
         "total_checks": total_rules,
         "passed_checks": passed_rules,
