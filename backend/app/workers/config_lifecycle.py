@@ -191,13 +191,16 @@ def _strip_control_nuls(text: str) -> str:
 def _fetch_switch_running_config(switch: models.Switch) -> str:
     """Fetch a switch's live running config from the device.
 
-    Pure network I/O with no DB access, so it is safe to run concurrently from
-    worker threads. Raises on transport failure so callers can mark the switch
-    as unreachable instead of treating error text as configuration.
+    Dell switches are reached through the PNetLab console redirection used by
+    config-push, so audits work even when switch.management_ip points to a
+    stale/old ContainerLab address. Nokia switches are contacted directly via
+    gNMI on their management IP.
     """
     if switch.vendor == "dell_os10" or switch.vendor == "dell":
         from app.drivers.dell_os10 import connect_os10_collector
-        collector, _transport = connect_os10_collector(switch.management_ip, "admin", "admin")
+        from app.workers.ztp_tasks import resolve_console_target
+        target_host, target_port = resolve_console_target(switch, db=None)
+        collector, _transport = connect_os10_collector(target_host, "admin", "admin", port=target_port)
         try:
             return collector.collect_running_config()
         finally:
