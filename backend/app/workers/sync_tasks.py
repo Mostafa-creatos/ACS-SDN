@@ -1,5 +1,6 @@
 import asyncio
 import os
+from celery import shared_task
 from sqlalchemy.orm import Session
 from ..db import SessionLocal
 from ..telemetry.gnmi_discovery import run_gnmi_discovery
@@ -255,20 +256,19 @@ def backup_switch_config_task(self, switch_id_str: str, username: str = "system"
         # Pull configuration based on vendor
         if switch.vendor.lower() in ("dell_os10", "dell"):
             from ..drivers.dell_os10_collector import DellOS10Collector
-            ssh_user = os.environ.get("DELL_SSH_USERNAME", "admin")
-            ssh_pass = os.environ.get("DELL_SSH_PASSWORD", "admin")
-            ssh_port = int(os.environ.get("DELL_SSH_PORT", "22"))
-            
-            # Try console first, then SSH
+            from ..workers.ztp_tasks import resolve_console_target
+
+            # Reach Dell switches through the PNetLab console redirection used by
+            # config-push and compliance. The stored management_ip points to the
+            # old ContainerLab network and is not reachable from the controller.
+            target_host, target_port = resolve_console_target(switch, db)
+            logger.info(f"[BACKUP TASK] Resolved console target for {switch.hostname}: {target_host}:{target_port}")
+
             try:
-                with DellOS10Collector(host=switch.management_ip, username=ssh_user, password=ssh_pass, port=5000, use_ssh=False) as collector:
+                with DellOS10Collector(host=target_host, username="admin", password="admin", port=target_port, use_ssh=False) as collector:
                     config_content = collector._send_command("show running-configuration")
-            except Exception:
-                try:
-                    with DellOS10Collector(host=switch.management_ip, username=ssh_user, password=ssh_pass, port=ssh_port, use_ssh=True) as collector:
-                        config_content = collector._send_command("show running-configuration")
-                except Exception as e:
-                    raise Exception(f"Failed to retrieve Dell running config: {e}")
+            except Exception as e:
+                raise Exception(f"Failed to retrieve Dell running config: {e}")
                     
         elif switch.vendor.lower() == "nokia":
             # For Nokia SRLinux, we can retrieve running config via gNMI
@@ -487,15 +487,26 @@ def auto_provision_subnet_task(job_id_str: str):
                 job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Pushing config payload to switch {sw.hostname} at {target_host}:{target_port}...\n"
                 db.commit()
 
-                # Run async push command
+                # Run async push command with strict 25-second timeout guard
                 try:
                     push_res = loop.run_until_complete(
-                        driver.push_config(target_host, username, password, config_data, port=target_port)
+                        asyncio.wait_for(
+                            driver.push_config(target_host, username, password, config_data, port=target_port),
+                            timeout=25.0
+                        )
                     )
+                except asyncio.TimeoutError:
+                    push_res = {"success": False, "output": f"Telnet/SSH connection to switch {sw.hostname} at {target_host}:{target_port} timed out after 25 seconds."}
                 except TypeError:
-                    push_res = loop.run_until_complete(
-                        driver.push_config(target_host, username, password, config_data)
-                    )
+                    try:
+                        push_res = loop.run_until_complete(
+                            asyncio.wait_for(
+                                driver.push_config(target_host, username, password, config_data),
+                                timeout=25.0
+                            )
+                        )
+                    except asyncio.TimeoutError:
+                        push_res = {"success": False, "output": f"Telnet/SSH connection to switch {sw.hostname} timed out after 25 seconds."}
 
                 if push_res.get("success", False):
                     job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Config push to {sw.hostname} succeeded.\n"
@@ -549,4 +560,95 @@ def auto_provision_subnet_task(job_id_str: str):
         db.close()
 
     return {"status": final_status}
+
+
+@shared_task(name="app.workers.sync_tasks.retry_single_switch_task")
+def retry_single_switch_task(job_id_str: str, hostname: str):
+    """Re-push configuration payload to a single target switch within a provisioning job."""
+    from .config_lifecycle import take_config_snapshot
+    from app.drivers.factory import resolve_southbound_driver
+
+    db = SessionLocal()
+    try:
+        job_uuid = uuid.UUID(job_id_str)
+        job = db.query(models.ProvisioningJob).filter(models.ProvisioningJob.job_id == job_uuid).first()
+        if not job:
+            return {"status": "FAILED", "error": "ProvisioningJob not found"}
+
+        dev_status = dict(job.device_statuses or {})
+        if hostname not in dev_status:
+            return {"status": "FAILED", "error": f"Switch '{hostname}' not found in job target devices."}
+
+        sw = db.query(models.Switch).filter(models.Switch.hostname == hostname).first()
+        if not sw:
+            return {"status": "FAILED", "error": f"Switch '{hostname}' not found in database."}
+
+        subnet = db.query(models.IpamSubnet).filter(models.IpamSubnet.subnet_id == job.subnet_id).first()
+        vrf = db.query(models.TenantVrf).filter(models.TenantVrf.vrf_id == subnet.vrf_id).first() if subnet else None
+
+        if not subnet or not vrf:
+            return {"status": "FAILED", "error": "Associated subnet/VRF context not found."}
+
+        # Set switch status to in_progress
+        dev_status[hostname]["status"] = "in_progress"
+        dev_status[hostname]["error"] = None
+        job.device_statuses = dict(dev_status)
+        job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Retrying config push for switch {hostname}...\n"
+        db.commit()
+
+        config_data = generate_subnet_config(sw, subnet, vrf)
+        dev_status[hostname]["commands"] = config_data
+
+        driver = resolve_southbound_driver(sw.vendor)
+        username = "admin"
+        password = os.environ.get("GNMI_DEFAULT_PASSWORD", "NokiaSrl1!") if sw.vendor in ["nokia", "nokia_srlinux", "timetra"] else "admin"
+
+        from .ztp_tasks import resolve_console_target
+        target_host, target_port = resolve_console_target(sw, db)
+
+        loop = asyncio.new_event_loop()
+        try:
+            try:
+                push_res = loop.run_until_complete(
+                    asyncio.wait_for(
+                        driver.push_config(target_host, username, password, config_data, port=target_port),
+                        timeout=25.0
+                    )
+                )
+            except asyncio.TimeoutError:
+                push_res = {"success": False, "output": f"Telnet/SSH connection to {hostname} timed out after 25 seconds."}
+        finally:
+            loop.close()
+
+        if push_res.get("success", False):
+            job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Retry push to {hostname} SUCCEEDED.\n"
+            dev_status[hostname]["status"] = "success"
+            dev_status[hostname]["error"] = None
+            dev_status[hostname]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            try:
+                take_config_snapshot(db, sw.switch_id, "system_retry_provision")
+            except Exception:
+                pass
+        else:
+            job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Retry push to {hostname} FAILED:\n{push_res.get('output', 'Unknown error')}\n"
+            dev_status[hostname]["status"] = "failed"
+            dev_status[hostname]["error"] = push_res.get('output', 'Unknown error')
+            dev_status[hostname]["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        job.device_statuses = dict(dev_status)
+        
+        # Check if all switches are now success
+        all_succeeded = all(val.get("status") == "success" for val in dev_status.values())
+        if all_succeeded:
+            job.status = "success"
+            job.error_message = None
+            job.completed_at = datetime.now(timezone.utc)
+        else:
+            job.status = "failed"
+
+        db.commit()
+        return {"status": "SUCCESS" if push_res.get("success") else "FAILED"}
+    finally:
+        db.close()
+
 
