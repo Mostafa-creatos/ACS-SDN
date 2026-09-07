@@ -62,10 +62,6 @@ def clean_and_seed():
                 template_pattern=r"SSH Server:\s+Enabled", remediation_guide="Enable SSH server for secure management access.", is_active=True
             ),
             models.ComplianceRule(
-                name="Telnet Server Disabled", category="Security", severity="critical", match_type="regex",
-                template_pattern=r"no ip telnet server(\s+enable)?", remediation_guide="Disable insecure Telnet management server.", is_active=True
-            ),
-            models.ComplianceRule(
                 name="Syslog Logging Server", category="Observability", severity="warning", match_type="regex",
                 template_pattern=r"logging server {fabric.expected_syslog_server}", remediation_guide="Point centralized logging at the fabric syslog collector.", is_active=True
             ),
