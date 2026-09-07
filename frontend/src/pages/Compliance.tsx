@@ -138,9 +138,10 @@ const SwitchGroup: React.FC<{
   findings: Finding[];
   isUnreachable?: boolean;
   isCompliant?: boolean;
+  totalRules?: number;
   onRemediate: (id: string) => void;
   remediating: Set<string>;
-}> = ({ hostname, vendor, ip, findings, isUnreachable, isCompliant, onRemediate, remediating }) => {
+}> = ({ hostname, vendor, ip, findings, isUnreachable, isCompliant, totalRules = 0, onRemediate, remediating }) => {
   const [open, setOpen] = useState(false);
 
   const openCount   = findings.filter(f => f.remediation_status === 'open').length;
@@ -171,7 +172,7 @@ const SwitchGroup: React.FC<{
           )}
           {!isUnreachable && isCompliant && (
             <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-300 flex items-center gap-1">
-              <CheckCircle className="w-3 h-3" /> {fixedCount > 0 ? `100% Compliant (${fixedCount} Remediated)` : '100% Compliant (13/13 Passed)'}
+              <CheckCircle className="w-3 h-3" /> {fixedCount > 0 ? `100% Compliant (${fixedCount} Remediated)` : `100% Compliant (${totalRules}/${totalRules} Passed)`}
             </span>
           )}
           {!isUnreachable && openCount > 0 && (
@@ -732,6 +733,7 @@ export const Compliance: React.FC = () => {
                   findings={sc.findings}
                   isUnreachable={sc.isUnreachable}
                   isCompliant={sc.isCompliant}
+                  totalRules={rules.filter((r: any) => r.is_active).length}
                   onRemediate={handleRemediate}
                   remediating={remediating}
                 />
