@@ -437,7 +437,7 @@ def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID =
             # Skip vendor-specific rules that don't apply to this switch
             if "vlt" in rule.name.lower() and sw.vendor not in ["dell", "dell_os10"]:
                 continue
-            if ("spanning" in rule.name.lower() or "mst" in rule.name.lower()) and sw.vendor not in ["dell", "dell_os10"]:
+            if ("spanning" in rule.name.lower() or "mst" in rule.name.lower() or "bpduguard" in rule.name.lower() or "bpdu" in rule.name.lower()) and sw.vendor not in ["dell", "dell_os10"]:
                 continue
 
             total_rules += 1

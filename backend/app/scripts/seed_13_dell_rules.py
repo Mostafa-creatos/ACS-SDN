@@ -52,11 +52,6 @@ def seed_dell_rules():
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
-                name="Spanning-Tree BPDU Guard", category="Layer-2", severity="warning", match_type="contains",
-                template_pattern="errdisable recovery cause bpduguard", remediation_guide="Configure BPDU Guard disable timeout for edge ports.", is_active=True
-            ),
-            models.ComplianceRule(
-                rule_id=uuid.uuid4(),
                 name="Errdisable BPDU Guard Recovery", category="Layer-2", severity="warning", match_type="contains",
                 template_pattern="errdisable recovery cause bpduguard", remediation_guide="Enable errdisable recovery for BPDU Guard violations.", is_active=True
             ),
