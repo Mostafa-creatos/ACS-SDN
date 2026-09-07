@@ -152,14 +152,12 @@ def build_remediation_config(switch: models.Switch, rule_name: str, context: dic
             return "lldp enable\n"
         if "aaa" in name:
             return "aaa authentication login default local\n"
-        if "spanning" in name or "mst" in name:
-            if "bpduguard" in name or "bpdu" in name:
-                return "spanning-tree bpduguard disable-timeout 300\n"
-            return "spanning-tree mode mst\n"
-        if "errdisable" in name and ("bpduguard" in name or "bpdu" in name):
+        if ("spanning" in name or "errdisable" in name) and ("bpduguard" in name or "bpdu" in name):
             return "errdisable recovery cause bpduguard\nerrdisable recovery interval 300\n"
+        if "spanning" in name or "mst" in name:
+            return "spanning-tree mode mst\n"
         if "ssh" in name:
-            return "ip ssh server enable\n"
+            return "ip ssh server enable\nip ssh server version 2\n"
         if "telnet" in name:
             return "no ip telnet server enable\n"
         if "tacacs" in name:
@@ -169,7 +167,7 @@ def build_remediation_config(switch: models.Switch, rule_name: str, context: dic
         if "vrf" in name and "management" in name:
             return "ip vrf management\n"
         if "snmp" in name:
-            return "snmp-server view RESTRICTED_VIEW 1.3.6.1 included\nsnmp-server group READ_ONLY v3 auth read RESTRICTED_VIEW\n"
+            return "snmp-server view RESTRICTED_VIEW 1.3.6.1 included\nsnmp-server group READ_ONLY 3 auth read RESTRICTED_VIEW\nsnmp-server user sdnadmin READ_ONLY 3 auth sha sdnAuthPass123\n"
         if "copp" in name or "control-plane" in name:
             return "class-map type control-plane match-any COPP_CLASS\n match protocol ssh\npolicy-map type control-plane COPP_POLICY\n class COPP_CLASS\n control-plane\n service-policy in type control-plane COPP_POLICY\n"
         if "acl" in name and "management" in name:
@@ -195,6 +193,10 @@ def _fetch_switch_running_config(switch: models.Switch) -> str:
     config-push, so audits work even when switch.management_ip points to a
     stale/old ContainerLab address. Nokia switches are contacted directly via
     gNMI on their management IP.
+
+    For Dell OS10, the SSH/telnet service state does not always appear in the
+    running-config, so we append the output of ``show ip ssh`` so the SSH
+    compliance rule can verify the service is enabled.
     """
     if switch.vendor == "dell_os10" or switch.vendor == "dell":
         from app.drivers.dell_os10 import connect_os10_collector
@@ -202,7 +204,13 @@ def _fetch_switch_running_config(switch: models.Switch) -> str:
         target_host, target_port = resolve_console_target(switch, db=None)
         collector, _transport = connect_os10_collector(target_host, "admin", "admin", port=target_port)
         try:
-            return collector.collect_running_config()
+            config = collector.collect_running_config()
+            try:
+                ssh_status = collector._send_command("show ip ssh")
+                config = config + "\n! show ip ssh\n" + ssh_status
+            except Exception:
+                pass
+            return config
         finally:
             collector.close()
     elif switch.vendor == "nokia":

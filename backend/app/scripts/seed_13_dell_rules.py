@@ -32,13 +32,13 @@ def seed_dell_rules():
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
-                name="SSH Server Enable", category="Security", severity="critical", match_type="contains",
-                template_pattern="ip ssh server enable", remediation_guide="Enable SSH server for secure management access.", is_active=True
+                name="SSH Server Enable", category="Security", severity="critical", match_type="regex",
+                template_pattern=r"SSH Server:\s+Enabled", remediation_guide="Enable SSH server for secure management access.", is_active=True
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
                 name="Telnet Server Disabled", category="Security", severity="critical", match_type="regex",
-                template_pattern=r"no ip telnet server", remediation_guide="Disable insecure Telnet management server.", is_active=True
+                template_pattern=r"no ip telnet server(\s+enable)?", remediation_guide="Disable insecure Telnet management server.", is_active=True
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
@@ -58,7 +58,7 @@ def seed_dell_rules():
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
                 name="Spanning-Tree BPDU Guard", category="Layer-2", severity="warning", match_type="contains",
-                template_pattern="spanning-tree bpduguard disable-timeout 300", remediation_guide="Configure BPDU Guard disable timeout for edge ports.", is_active=True
+                template_pattern="errdisable recovery cause bpduguard", remediation_guide="Configure BPDU Guard disable timeout for edge ports.", is_active=True
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
@@ -68,17 +68,12 @@ def seed_dell_rules():
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
                 name="SNMPv3 Group", category="Observability", severity="warning", match_type="contains",
-                template_pattern="snmp-server group READ_ONLY v3 auth read RESTRICTED_VIEW", remediation_guide="Configure SNMPv3 read-only group with restricted view.", is_active=True
+                template_pattern="snmp-server group READ_ONLY 3 auth read RESTRICTED_VIEW", remediation_guide="Configure SNMPv3 read-only group with restricted view.", is_active=True
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
                 name="Management ACL", category="Security", severity="critical", match_type="contains",
                 template_pattern="ip access-list MGMT-ACL", remediation_guide="Configure management access control list.", is_active=True
-            ),
-            models.ComplianceRule(
-                rule_id=uuid.uuid4(),
-                name="Control Plane Policing", category="Security", severity="warning", match_type="contains",
-                template_pattern="policy-map type control-plane COPP_POLICY", remediation_guide="Apply control plane policing policy.", is_active=True
             ),
         ]
 

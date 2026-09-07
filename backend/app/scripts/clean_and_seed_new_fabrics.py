@@ -58,12 +58,12 @@ def clean_and_seed():
                 template_pattern="aaa authentication login default group tacacs+ local", remediation_guide="Enable AAA authentication with TACACS+ fallback to local.", is_active=True
             ),
             models.ComplianceRule(
-                name="SSH Server Enable", category="Security", severity="critical", match_type="contains",
-                template_pattern="ip ssh server enable", remediation_guide="Enable SSH server for secure management access.", is_active=True
+                name="SSH Server Enable", category="Security", severity="critical", match_type="regex",
+                template_pattern=r"SSH Server:\s+Enabled", remediation_guide="Enable SSH server for secure management access.", is_active=True
             ),
             models.ComplianceRule(
                 name="Telnet Server Disabled", category="Security", severity="critical", match_type="regex",
-                template_pattern=r"no ip telnet server", remediation_guide="Disable insecure Telnet management server.", is_active=True
+                template_pattern=r"no ip telnet server(\s+enable)?", remediation_guide="Disable insecure Telnet management server.", is_active=True
             ),
             models.ComplianceRule(
                 name="Syslog Logging Server", category="Observability", severity="warning", match_type="regex",
@@ -79,7 +79,7 @@ def clean_and_seed():
             ),
             models.ComplianceRule(
                 name="Spanning-Tree BPDU Guard", category="Layer-2", severity="warning", match_type="contains",
-                template_pattern="spanning-tree bpduguard disable-timeout 300", remediation_guide="Configure BPDU Guard disable timeout for edge ports.", is_active=True
+                template_pattern="errdisable recovery cause bpduguard", remediation_guide="Configure BPDU Guard disable timeout for edge ports.", is_active=True
             ),
             models.ComplianceRule(
                 name="Errdisable BPDU Guard Recovery", category="Layer-2", severity="warning", match_type="contains",
@@ -87,15 +87,11 @@ def clean_and_seed():
             ),
             models.ComplianceRule(
                 name="SNMPv3 Group", category="Observability", severity="warning", match_type="contains",
-                template_pattern="snmp-server group READ_ONLY v3 auth read RESTRICTED_VIEW", remediation_guide="Configure SNMPv3 read-only group with restricted view.", is_active=True
+                template_pattern="snmp-server group READ_ONLY 3 auth read RESTRICTED_VIEW", remediation_guide="Configure SNMPv3 read-only group with restricted view.", is_active=True
             ),
             models.ComplianceRule(
                 name="Management ACL", category="Security", severity="critical", match_type="contains",
                 template_pattern="ip access-list MGMT-ACL", remediation_guide="Configure management access control list.", is_active=True
-            ),
-            models.ComplianceRule(
-                name="Control Plane Policing", category="Security", severity="warning", match_type="contains",
-                template_pattern="policy-map type control-plane COPP_POLICY", remediation_guide="Apply control plane policing policy.", is_active=True
             ),
         ]
         db.add_all(rules)
