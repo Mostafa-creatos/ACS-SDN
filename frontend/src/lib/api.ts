@@ -265,6 +265,43 @@ export const retrySwitchProvisioning = async (jobId: string, hostname: string): 
     return res.json();
 };
 
+export const allocateIpamIp = async (payload: { subnet_id: string; ip_address?: string; bound_entity_id?: string; assignment_type?: string }): Promise<any> => {
+    const res = await fetch('/api/v5/ipam/allocate-ip', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to allocate IP address');
+    }
+    return res.json();
+};
+
+export const getSubnetAllocations = async (subnetId: string): Promise<any[]> => {
+    const res = await fetch(`/api/v5/ipam/subnets/${subnetId}/allocations`, {
+        method: 'GET',
+        headers: getHeaders()
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to fetch subnet allocations');
+    }
+    return res.json();
+};
+
+export const deleteIpamAllocation = async (allocationId: string): Promise<any> => {
+    const res = await fetch(`/api/v5/ipam/allocations/${allocationId}`, {
+        method: 'DELETE',
+        headers: getHeaders()
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to release IP allocation');
+    }
+    return res.json();
+};
+
 
 export const remediateComplianceFinding = async (findingId: string, tenantId?: string | null): Promise<{ ok: boolean; errorText?: string }> => {
     const res = await apiRequest(`/api/v5/visibility/compliance/findings/${findingId}/remediate`, {

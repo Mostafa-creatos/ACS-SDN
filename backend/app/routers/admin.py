@@ -375,6 +375,130 @@ def search_ipam_ip(ip: str, db: Session = Depends(get_db), claims: dict = Depend
     }
 
 
+class AllocateIpRequest(BaseModel):
+    subnet_id: str
+    ip_address: Optional[str] = None
+    bound_entity_id: Optional[str] = "Static Reservation"
+    assignment_type: Optional[str] = "static_reservation"
+
+
+@router.post("/api/v5/ipam/allocate-ip")
+def allocate_ipam_ip(payload: AllocateIpRequest, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
+    """Manually or automatically allocate an IP address within an IPAM subnet."""
+    try:
+        sub_uuid = uuid.UUID(payload.subnet_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid subnet_id format.")
+
+    subnet = db.query(models.IpamSubnet).filter(models.IpamSubnet.subnet_id == sub_uuid).first()
+    if not subnet:
+        raise HTTPException(status_code=404, detail="Subnet not found.")
+
+    try:
+        sub_net = ipaddress.ip_network(subnet.subnet_cidr, strict=False)
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Invalid subnet CIDR stored in database.")
+
+    target_ip = payload.ip_address.strip() if payload.ip_address else None
+
+    # Get all allocated/discovered IPs for collision checking
+    existing_allocs = {a.ip_address for a in db.query(models.IpamIpAllocation).filter(models.IpamIpAllocation.subnet_id == sub_uuid).all()}
+    discovered_eps = {e.ip_address for e in db.query(models.DiscoveredEndpoint).all() if e.ip_address}
+    mgmt_ips = {s.management_ip for s in db.query(models.Switch).all() if s.management_ip}
+    all_used = existing_allocs | discovered_eps | mgmt_ips
+
+    if target_ip:
+        try:
+            ip_obj = ipaddress.ip_address(target_ip)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid IP address format: {target_ip}")
+
+        if ip_obj not in sub_net:
+            raise HTTPException(status_code=400, detail=f"IP address {target_ip} is outside subnet CIDR {subnet.subnet_cidr}")
+
+        if target_ip in all_used:
+            raise HTTPException(status_code=400, detail=f"IP address {target_ip} is already allocated or active on the network.")
+    else:
+        # Auto-assign next available IP
+        available_ip = None
+        for host in sub_net.hosts():
+            host_str = str(host)
+            if host_str == subnet.anycast_gateway_ip:
+                continue
+            if host_str not in all_used:
+                available_ip = host_str
+                break
+
+        if not available_ip:
+            raise HTTPException(status_code=400, detail=f"No free IP addresses available in subnet {subnet.subnet_cidr}")
+
+        target_ip = available_ip
+
+    new_alloc = models.IpamIpAllocation(
+        allocation_id=uuid.uuid4(),
+        subnet_id=sub_uuid,
+        ip_address=target_ip,
+        assignment_type=payload.assignment_type or "static_reservation",
+        bound_entity_id=payload.bound_entity_id or "Static Reservation"
+    )
+    db.add(new_alloc)
+    db.commit()
+    db.refresh(new_alloc)
+
+    return {
+        "status": "success",
+        "allocation_id": str(new_alloc.allocation_id),
+        "subnet_id": str(new_alloc.subnet_id),
+        "ip_address": new_alloc.ip_address,
+        "assignment_type": new_alloc.assignment_type,
+        "bound_entity_id": new_alloc.bound_entity_id,
+        "allocated_at": new_alloc.allocated_at.isoformat() if new_alloc.allocated_at else datetime.datetime.now(datetime.timezone.utc).isoformat()
+    }
+
+
+@router.get("/api/v5/ipam/subnets/{subnet_id}/allocations")
+def get_subnet_allocations(subnet_id: str, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
+    """Retrieve all IP allocations for a specific subnet."""
+    try:
+        sub_uuid = uuid.UUID(subnet_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid subnet_id format.")
+
+    allocs = db.query(models.IpamIpAllocation).filter(models.IpamIpAllocation.subnet_id == sub_uuid).order_by(models.IpamIpAllocation.allocated_at.desc()).all()
+
+    return [
+        {
+            "allocation_id": str(a.allocation_id),
+            "subnet_id": str(a.subnet_id),
+            "ip_address": a.ip_address,
+            "assignment_type": a.assignment_type,
+            "bound_entity_id": a.bound_entity_id,
+            "allocated_at": a.allocated_at.isoformat() if a.allocated_at else datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        for a in allocs
+    ]
+
+
+@router.delete("/api/v5/ipam/allocations/{allocation_id}")
+def delete_ipam_allocation(allocation_id: str, db: Session = Depends(get_db), claims: dict = Depends(require_permission("inventory:read"))):
+    """Release an IP allocation from IPAM."""
+    try:
+        alloc_uuid = uuid.UUID(allocation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid allocation_id format.")
+
+    alloc = db.query(models.IpamIpAllocation).filter(models.IpamIpAllocation.allocation_id == alloc_uuid).first()
+    if not alloc:
+        raise HTTPException(status_code=404, detail="Allocation not found.")
+
+    if alloc.assignment_type == "gateway":
+        raise HTTPException(status_code=400, detail="Cannot release default subnet gateway IP allocation.")
+
+    db.delete(alloc)
+    db.commit()
+    return {"status": "success", "message": f"IP allocation {alloc.ip_address} released."}
+
+
 @router.get("/api/v5/admin/topology")
 async def get_admin_topology(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     try:

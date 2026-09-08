@@ -10,9 +10,26 @@ import {
   Terminal,
   Clock,
   RefreshCw,
-  Server
+  Server,
+  ChevronDown,
+  ChevronUp,
+  Trash2,
+  Layers,
+  Check
 } from 'lucide-react';
-import { fetchFabrics, fetchVrfs, createSubnet, fetchProvisioningJobs, redeploySubnet, retrySwitchProvisioning, fetchAllSubnets, searchIp } from '../lib/api';
+import { 
+  fetchFabrics, 
+  fetchVrfs, 
+  createSubnet, 
+  fetchProvisioningJobs, 
+  redeploySubnet, 
+  retrySwitchProvisioning, 
+  fetchAllSubnets, 
+  searchIp,
+  allocateIpamIp,
+  getSubnetAllocations,
+  deleteIpamAllocation
+} from '../lib/api';
 
 interface Subnet {
   subnet_id: string;
@@ -86,6 +103,103 @@ export const IPAM: React.FC = () => {
     } catch (err: any) {
       alert(err.message || `Failed to retry push on switch ${hostname}`);
       setRetryingSwitch(null);
+    }
+  };
+
+  // Allocate IP Modal State
+  const [isAllocateModalOpen, setIsAllocateModalOpen] = useState(false);
+  const [allocSubnetId, setAllocSubnetId] = useState('');
+  const [allocIpAddress, setAllocIpAddress] = useState('');
+  const [allocBoundEntity, setAllocBoundEntity] = useState('');
+  const [allocAssignmentType, setAllocAssignmentType] = useState('static_reservation');
+  const [allocAutoAssign, setAllocAutoAssign] = useState(true);
+  const [allocSubmitting, setAllocSubmitting] = useState(false);
+  const [allocError, setAllocError] = useState<string | null>(null);
+
+  // Subnet Allocations Viewer Drawer State
+  const [expandedSubnetAllocId, setExpandedSubnetAllocId] = useState<string | null>(null);
+  const [subnetAllocationsData, setSubnetAllocationsData] = useState<any[]>([]);
+  const [subnetAllocationsLoading, setSubnetAllocationsLoading] = useState(false);
+  const [releasingAllocId, setReleasingAllocId] = useState<string | null>(null);
+
+  const handleOpenAllocateModal = (subnetId?: string) => {
+    if (subnetId) {
+      setAllocSubnetId(subnetId);
+    } else if (subnets.length > 0) {
+      setAllocSubnetId(subnets[0].subnet_id);
+    }
+    setAllocIpAddress('');
+    setAllocBoundEntity('');
+    setAllocAssignmentType('static_reservation');
+    setAllocAutoAssign(true);
+    setAllocError(null);
+    setIsAllocateModalOpen(true);
+  };
+
+  const handleAllocateIpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!allocSubnetId) {
+      setAllocError('Please select a target subnet.');
+      return;
+    }
+    setAllocSubmitting(true);
+    setAllocError(null);
+
+    try {
+      const payload: any = {
+        subnet_id: allocSubnetId,
+        bound_entity_id: allocBoundEntity || 'Static Reservation',
+        assignment_type: allocAssignmentType
+      };
+      if (!allocAutoAssign && allocIpAddress.trim()) {
+        payload.ip_address = allocIpAddress.trim();
+      }
+
+      await allocateIpamIp(payload);
+      setIsAllocateModalOpen(false);
+      fetchSubnetsData();
+      if (expandedSubnetAllocId === allocSubnetId) {
+        loadSubnetAllocations(allocSubnetId);
+      }
+    } catch (err: any) {
+      setAllocError(err.message || 'Failed to allocate IP address');
+    } finally {
+      setAllocSubmitting(false);
+    }
+  };
+
+  const toggleExpandSubnetAllocations = async (subnetId: string) => {
+    if (expandedSubnetAllocId === subnetId) {
+      setExpandedSubnetAllocId(null);
+    } else {
+      setExpandedSubnetAllocId(subnetId);
+      loadSubnetAllocations(subnetId);
+    }
+  };
+
+  const loadSubnetAllocations = async (subnetId: string) => {
+    setSubnetAllocationsLoading(true);
+    try {
+      const data = await getSubnetAllocations(subnetId);
+      setSubnetAllocationsData(data);
+    } catch (err: any) {
+      console.error("Failed to load subnet allocations:", err);
+    } finally {
+      setSubnetAllocationsLoading(false);
+    }
+  };
+
+  const handleReleaseIp = async (allocationId: string, subnetId: string) => {
+    if (!confirm('Are you sure you want to release this IP allocation back to the pool?')) return;
+    setReleasingAllocId(allocationId);
+    try {
+      await deleteIpamAllocation(allocationId);
+      loadSubnetAllocations(subnetId);
+      fetchSubnetsData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to release IP allocation');
+    } finally {
+      setReleasingAllocId(null);
     }
   };
 
@@ -378,13 +492,22 @@ export const IPAM: React.FC = () => {
           <h1 className="text-3xl font-extrabold font-display tracking-tight text-atlas-ink">IP Management</h1>
           <p className="text-xs text-slate-400 mt-1">Network Subnets Allocation, VRF IP Planner, and Closed-Loop Leaf Provisioning Status</p>
         </div>
-        <button 
-          onClick={() => setIsModalOpen(true)}
-          className="btn-primary flex items-center gap-1.5"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Add Subnet</span>
-        </button>
+        <div className="flex gap-2">
+          <button 
+            onClick={() => handleOpenAllocateModal()}
+            className="btn-secondary flex items-center gap-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 font-bold px-4 py-2 rounded-lg text-xs transition-colors cursor-pointer"
+          >
+            <Plus className="w-4 h-4 text-emerald-600" />
+            <span>Allocate IP</span>
+          </button>
+          <button 
+            onClick={() => setIsModalOpen(true)}
+            className="btn-primary flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add Subnet</span>
+          </button>
+        </div>
       </div>
 
       {/* Tabs Menu */}
@@ -515,62 +638,166 @@ export const IPAM: React.FC = () => {
                       // Find latest provisioning job for this subnet
                       const subnetJob = jobs.find(j => j.subnet_id === sub.subnet_id);
                       return (
-                        <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="py-3 font-semibold text-slate-800 text-xs">{sub.vrf_name}</td>
-                          <td className="py-3 font-mono text-[11px] text-atlas-primary font-semibold">{sub.subnet_cidr}</td>
-                          <td className="py-3 font-mono text-[11px] text-slate-500">{sub.anycast_gateway_ip}</td>
-                          <td className="py-3 text-xs text-slate-600">VLAN {sub.vlan_id}</td>
-                          <td className="py-3 text-xs text-slate-600">
-                            <strong>{sub.used_ips}</strong> / {sub.total_ips}
-                          </td>
-                          <td className="py-3 w-44">
-                            <div className="flex items-center gap-3 w-full">
-                              <div className="flex-1">
-                                <ProgressBar value={percent} showLabel={false} />
-                              </div>
-                              <span className="text-[10px] font-bold text-slate-500 min-w-[32px] text-right">
-                                {percent.toFixed(1)}%
-                              </span>
-                            </div>
-                          </td>
-                          <td className="py-3">
-                            {subnetJob ? (
+                        <React.Fragment key={sub.subnet_id || idx}>
+                          <tr className="hover:bg-slate-50/50 transition-colors">
+                            <td className="py-3 font-semibold text-slate-800 text-xs">{sub.vrf_name}</td>
+                            <td className="py-3 font-mono text-[11px] text-atlas-primary font-semibold">{sub.subnet_cidr}</td>
+                            <td className="py-3 font-mono text-[11px] text-slate-500">{sub.anycast_gateway_ip}</td>
+                            <td className="py-3 text-xs text-slate-600">VLAN {sub.vlan_id}</td>
+                            <td className="py-3 text-xs text-slate-600">
                               <button
-                                onClick={() => {
-                                  setSelectedJob(subnetJob);
-                                  setActiveTab('provisioning');
-                                }}
-                                className="cursor-pointer hover:scale-105 transition-transform"
-                                title="Click to view detailed switch provisioning statuses"
+                                onClick={() => toggleExpandSubnetAllocations(sub.subnet_id)}
+                                className="group flex items-center gap-1 font-semibold text-atlas-primary hover:underline cursor-pointer"
+                                title="Click to view detailed IP allocations"
                               >
-                                {getStatusBadge(subnetJob.status)}
+                                <strong>{sub.used_ips}</strong> / {sub.total_ips}
+                                {expandedSubnetAllocId === sub.subnet_id ? (
+                                  <ChevronUp className="w-3 h-3 text-atlas-primary" />
+                                ) : (
+                                  <ChevronDown className="w-3 h-3 text-slate-400 group-hover:text-atlas-primary" />
+                                )}
                               </button>
-                            ) : (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-400 border border-slate-200">
-                                NO JOB
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 text-center">
-                            <button
-                              onClick={() => handleRedeploy(sub.subnet_id)}
-                              disabled={redeployingSubnetId !== null || (subnetJob && (subnetJob.status === 'in_progress' || subnetJob.status === 'pending'))}
-                              className={`px-2.5 py-1 rounded text-[10px] font-bold border transition-colors ${
-                                redeployingSubnetId === sub.subnet_id
-                                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                                  : 'bg-white hover:bg-atlas-primary/5 text-atlas-primary border-atlas-primary/20 hover:border-atlas-primary/40'
-                              }`}
-                            >
-                              {redeployingSubnetId === sub.subnet_id ? (
-                                <span className="flex items-center gap-1">
-                                  <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Redeploying...
+                            </td>
+                            <td className="py-3 w-44">
+                              <div className="flex items-center gap-3 w-full">
+                                <div className="flex-1">
+                                  <ProgressBar value={percent} showLabel={false} />
+                                </div>
+                                <span className="text-[10px] font-bold text-slate-500 min-w-[32px] text-right">
+                                  {percent.toFixed(1)}%
                                 </span>
+                              </div>
+                            </td>
+                            <td className="py-3">
+                              {subnetJob ? (
+                                <button
+                                  onClick={() => {
+                                    setSelectedJob(subnetJob);
+                                    setActiveTab('provisioning');
+                                  }}
+                                  className="cursor-pointer hover:scale-105 transition-transform"
+                                  title="Click to view detailed switch provisioning statuses"
+                                >
+                                  {getStatusBadge(subnetJob.status)}
+                                </button>
                               ) : (
-                                'Redeploy'
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-400 border border-slate-200">
+                                  NO JOB
+                                </span>
                               )}
-                            </button>
-                          </td>
-                        </tr>
+                            </td>
+                            <td className="py-3 text-center">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  onClick={() => handleOpenAllocateModal(sub.subnet_id)}
+                                  className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded border border-emerald-200 transition-colors cursor-pointer flex items-center gap-1"
+                                  title="Allocate IP address in this subnet"
+                                >
+                                  <Plus className="w-3 h-3 text-emerald-600" />
+                                  <span>Allocate IP</span>
+                                </button>
+                                <button
+                                  onClick={() => handleRedeploy(sub.subnet_id)}
+                                  disabled={redeployingSubnetId !== null || (subnetJob && (subnetJob.status === 'in_progress' || subnetJob.status === 'pending'))}
+                                  className={`px-2 py-1 rounded text-[10px] font-bold border transition-colors ${
+                                    redeployingSubnetId === sub.subnet_id
+                                      ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                                      : 'bg-white hover:bg-atlas-primary/5 text-atlas-primary border-atlas-primary/20 hover:border-atlas-primary/40'
+                                  }`}
+                                >
+                                  {redeployingSubnetId === sub.subnet_id ? (
+                                    <span className="flex items-center gap-1">
+                                      <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Redeploying...
+                                    </span>
+                                  ) : (
+                                    'Redeploy'
+                                  )}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                          {/* Expandable IP Allocations Drawer */}
+                          {expandedSubnetAllocId === sub.subnet_id && (
+                            <tr className="bg-slate-50/80">
+                              <td colSpan={8} className="p-4 border-t border-b border-slate-200">
+                                <div className="space-y-3">
+                                  <div className="flex justify-between items-center">
+                                    <div className="flex items-center gap-2">
+                                      <Layers className="w-4 h-4 text-atlas-primary" />
+                                      <h4 className="text-xs font-bold text-slate-700">Active IP Allocations in {sub.subnet_cidr}</h4>
+                                      <span className="text-[10px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">
+                                        VLAN {sub.vlan_id}
+                                      </span>
+                                    </div>
+                                    <button
+                                      onClick={() => handleOpenAllocateModal(sub.subnet_id)}
+                                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold rounded shadow-sm transition-colors cursor-pointer flex items-center gap-1"
+                                    >
+                                      <Plus className="w-3 h-3" />
+                                      <span>Allocate IP to Subnet</span>
+                                    </button>
+                                  </div>
+
+                                  {subnetAllocationsLoading ? (
+                                    <div className="py-4 text-center text-xs text-slate-500">Loading subnet allocations...</div>
+                                  ) : subnetAllocationsData.length === 0 ? (
+                                    <div className="py-4 text-center text-xs text-slate-400 bg-white rounded border border-slate-100">
+                                      No IP allocations recorded for this subnet segment.
+                                    </div>
+                                  ) : (
+                                    <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+                                      <table className="min-w-full divide-y divide-slate-100 text-xs">
+                                        <thead className="bg-slate-100/70 text-slate-500 text-[10px] uppercase font-bold">
+                                          <tr>
+                                            <th className="px-3 py-2 text-left">IP Address</th>
+                                            <th className="px-3 py-2 text-left">Assignment Type</th>
+                                            <th className="px-3 py-2 text-left">Bound Entity / Host</th>
+                                            <th className="px-3 py-2 text-left">Allocated Date</th>
+                                            <th className="px-3 py-2 text-right">Actions</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                                          {subnetAllocationsData.map((alloc) => (
+                                            <tr key={alloc.allocation_id} className="hover:bg-slate-50">
+                                              <td className="px-3 py-2 font-mono text-atlas-primary font-bold">{alloc.ip_address}</td>
+                                              <td className="px-3 py-2">
+                                                <span className={`inline-block px-2 py-0.5 text-[9px] font-bold rounded uppercase ${
+                                                  alloc.assignment_type === 'gateway'
+                                                    ? 'bg-purple-100 text-purple-700'
+                                                    : alloc.assignment_type === 'interface_workload'
+                                                    ? 'bg-blue-100 text-blue-700'
+                                                    : 'bg-emerald-100 text-emerald-700'
+                                                }`}>
+                                                  {alloc.assignment_type}
+                                                </span>
+                                              </td>
+                                              <td className="px-3 py-2 font-mono text-slate-600">{alloc.bound_entity_id}</td>
+                                              <td className="px-3 py-2 text-slate-400 text-[10px]">
+                                                {alloc.allocated_at ? new Date(alloc.allocated_at).toLocaleString() : 'Active'}
+                                              </td>
+                                              <td className="px-3 py-2 text-right">
+                                                {alloc.assignment_type !== 'gateway' && (
+                                                  <button
+                                                    onClick={() => handleReleaseIp(alloc.allocation_id, sub.subnet_id)}
+                                                    disabled={releasingAllocId === alloc.allocation_id}
+                                                    className="px-2 py-1 text-rose-600 hover:bg-rose-50 rounded text-[10px] font-bold transition-colors cursor-pointer border border-rose-200 inline-flex items-center gap-1"
+                                                  >
+                                                    <Trash2 className="w-3 h-3" />
+                                                    <span>{releasingAllocId === alloc.allocation_id ? 'Releasing...' : 'Release'}</span>
+                                                  </button>
+                                                )}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       );
                     })
                   )}
@@ -818,6 +1045,121 @@ export const IPAM: React.FC = () => {
           </div>
 
         </div>
+      )}
+
+      {/* Allocate IP Modal */}
+      {isAllocateModalOpen && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm" onClick={() => setIsAllocateModalOpen(false)} />
+          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-white rounded-xl shadow-2xl z-50 p-6 border animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-2 mb-4">
+              <Plus className="w-5 h-5 text-emerald-600" />
+              <h3 className="text-base font-bold font-display text-atlas-ink">Allocate IP Address</h3>
+            </div>
+            
+            {allocError && (
+              <div className="bg-rose-50 border border-rose-100 text-rose-700 text-xs rounded-lg p-3 flex gap-2 items-start mb-4">
+                <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                <span>{allocError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleAllocateIpSubmit} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Target Subnet</label>
+                <select 
+                  value={allocSubnetId}
+                  onChange={(e) => setAllocSubnetId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs p-2.5 rounded-lg outline-none cursor-pointer text-slate-700 font-medium"
+                >
+                  {subnets.map((sub) => (
+                    <option key={sub.subnet_id} value={sub.subnet_id}>
+                      {sub.vrf_name} - {sub.subnet_cidr} (VLAN {sub.vlan_id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="bg-emerald-50/60 border border-emerald-100 p-3 rounded-lg flex items-center justify-between">
+                <div className="text-xs font-semibold text-emerald-900">
+                  Auto-Assign Next Available IP
+                  <span className="block text-[10px] font-normal text-emerald-700">Finds next collision-free host IP automatically</span>
+                </div>
+                <input 
+                  type="checkbox" 
+                  checked={allocAutoAssign}
+                  onChange={(e) => setAllocAutoAssign(e.target.checked)}
+                  className="w-4 h-4 text-emerald-600 rounded cursor-pointer"
+                />
+              </div>
+
+              {!allocAutoAssign && (
+                <div className="animate-in fade-in duration-150">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Specific IP Address</label>
+                  <input 
+                    type="text" 
+                    required={!allocAutoAssign}
+                    placeholder="e.g. 10.100.10.25"
+                    value={allocIpAddress}
+                    onChange={(e) => setAllocIpAddress(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-emerald-500 font-mono text-slate-700"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Bound Entity / Hostname</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Web-Server-01 or DC1-Leaf-1:vlan100"
+                  value={allocBoundEntity}
+                  onChange={(e) => setAllocBoundEntity(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-emerald-500 font-mono text-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Assignment Type</label>
+                <select 
+                  value={allocAssignmentType}
+                  onChange={(e) => setAllocAssignmentType(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs p-2.5 rounded-lg outline-none cursor-pointer text-slate-700 font-medium"
+                >
+                  <option value="static_reservation">Static Reservation (Pre-Reserved)</option>
+                  <option value="interface_workload">Interface Workload (Switch/VM)</option>
+                  <option value="infrastructure">Infrastructure Component</option>
+                </select>
+              </div>
+
+              <div className="flex gap-3 justify-end pt-2">
+                <button 
+                  type="button"
+                  onClick={() => setIsAllocateModalOpen(false)}
+                  className="btn bg-slate-50 border border-slate-200 text-slate-600 px-4 py-2 hover:bg-slate-100 rounded-lg transition-colors text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit"
+                  disabled={allocSubmitting}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-xs shadow transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  {allocSubmitting ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Allocating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Confirm IP Allocation</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </>
       )}
 
       {/* Add Subnet Modal */}
