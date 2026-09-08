@@ -12,7 +12,7 @@ import {
   RefreshCw,
   Server
 } from 'lucide-react';
-import { fetchFabrics, fetchVrfs, createSubnet, fetchProvisioningJobs, redeploySubnet, fetchAllSubnets, searchIp } from '../lib/api';
+import { fetchFabrics, fetchVrfs, createSubnet, fetchProvisioningJobs, redeploySubnet, retrySwitchProvisioning, fetchAllSubnets, searchIp } from '../lib/api';
 
 interface Subnet {
   subnet_id: string;
@@ -73,6 +73,21 @@ export const IPAM: React.FC = () => {
   const [selectedJob, setSelectedJob] = useState<ProvisioningJob | null>(null);
   const [expandedLeaf, setExpandedLeaf] = useState<string | null>(null);
   const [jobsLoading, setJobsLoading] = useState(false);
+  const [retryingSwitch, setRetryingSwitch] = useState<string | null>(null);
+
+  const handleRetrySwitch = async (jobId: string, hostname: string) => {
+    setRetryingSwitch(hostname);
+    try {
+      await retrySwitchProvisioning(jobId, hostname);
+      setTimeout(() => {
+        loadJobs(true);
+        setRetryingSwitch(null);
+      }, 2000);
+    } catch (err: any) {
+      alert(err.message || `Failed to retry push on switch ${hostname}`);
+      setRetryingSwitch(null);
+    }
+  };
 
   // Add Subnet Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -733,6 +748,16 @@ export const IPAM: React.FC = () => {
 
                               <div className="flex items-center gap-3 shrink-0">
                                 {getStatusBadge(dev.status)}
+                                {dev.status === 'failed' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRetrySwitch(selectedJob.job_id, hostname)}
+                                    disabled={retryingSwitch === hostname}
+                                    className="px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-700 text-[10px] font-bold rounded transition-colors cursor-pointer border border-rose-200"
+                                  >
+                                    {retryingSwitch === hostname ? 'Retrying...' : 'Retry Push'}
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   onClick={() => setExpandedLeaf(isExpanded ? null : hostname)}

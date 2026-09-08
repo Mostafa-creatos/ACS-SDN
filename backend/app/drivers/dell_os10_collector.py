@@ -99,7 +99,7 @@ class DellOS10Collector:
                     if not chunk:
                         break
                     buf += chunk
-                    if "login:" in buf or "Password:" in buf or "spine-" in buf or "#" in buf or ">" in buf:
+                    if "login:" in buf or "Password:" in buf or "#" in buf or ">" in buf:
                         break
                 except socket.timeout:
                     break
@@ -112,17 +112,15 @@ class DellOS10Collector:
                     try:
                         chunk = self._recv(4096)
                         buf += chunk
-                        if "login:" in buf or "Password:" in buf or "spine-" in buf or "#" in buf or ">" in buf:
+                        if "login:" in buf or "Password:" in buf or "#" in buf or ">" in buf:
                             break
                     except socket.timeout:
                         break
 
             # Handle login prompts if they appear
             if "login:" in buf:
-                # Send username
                 self._client.send(f"{self.username}\n".encode("utf-8"))
                 time.sleep(0.5)
-                # Read until password prompt
                 p_buf = ""
                 p_start = time.time()
                 while time.time() - p_start < 2:
@@ -133,20 +131,16 @@ class DellOS10Collector:
                             break
                     except socket.timeout:
                         break
-                # Send password
                 self._client.send(f"{self.password}\n".encode("utf-8"))
                 time.sleep(1.0)
                 
-            # Send end to make sure we are in exec mode and not config mode
-            self._client.send(b"end\n")
-            time.sleep(0.5)
             # Send terminal length 0 to prevent --More-- pagination
-            self._client.send(b"terminal length 0\n")
+            self._client.send(b"\r\nterminal length 0\r\n")
             time.sleep(0.5)
             
-            # Flush the buffer
+            # Flush the buffer cleanly
             try:
-                self._client.settimeout(0.1)
+                self._client.settimeout(0.2)
                 while self._recv(8192):
                     pass
             except socket.timeout:
@@ -1038,10 +1032,20 @@ class DellOS10Collector:
         raw_clean = raw.replace("\r", "")
         lines = raw_clean.split("\n")
         
-        # Remove echoed command at the beginning if present
-        if lines and "show running-configuration" in lines[0]:
-            lines.pop(0)
-            
+        ignored_headers = [
+            "show version", "show ip ssh", "show running-configuration",
+            "dell emc networking", "copyright (c)", "os version:",
+            "build version:", "build time:", "system type:", "terminal length"
+        ]
+        
+        # Remove any echoed commands or banner headers at the top
+        while lines:
+            line_lower = lines[0].strip().lower()
+            if not line_lower or any(h in line_lower for h in ignored_headers):
+                lines.pop(0)
+            else:
+                break
+
         # Remove prompt at the end if present
         if lines and (lines[-1].strip().endswith("#") or lines[-1].strip().endswith(">")):
             lines.pop()

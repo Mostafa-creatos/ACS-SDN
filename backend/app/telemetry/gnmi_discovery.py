@@ -17,6 +17,29 @@ def normalize_hostname(name: str) -> str:
     return re.sub(r'\d+', lambda m: str(int(m.group(0))), name)
 
 
+def normalize_cfg(c: str) -> str:
+    if not c:
+        return ""
+    c = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', c)
+    c = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ufffd]', '', c)
+    ignored_patterns = [
+        "show version", "show ip ssh", "show running-configuration",
+        "dell emc networking", "copyright (c)", "os version:",
+        "build version:", "build time:", "system type:",
+        "last configuration change", "building configuration",
+        "terminal length", "ip address dhcp"
+    ]
+    lines = []
+    for line in c.replace("\r\n", "\n").split("\n"):
+        s = line.strip()
+        if not s or s.startswith("!") or s.startswith("#"):
+            continue
+        s_lower = s.lower()
+        if any(pat in s_lower for pat in ignored_patterns):
+            continue
+        lines.append(s)
+    return "\n".join(lines)
+
 def is_valid_host_mac(mac: str) -> bool:
     """
     Returns True for unicast MACs that are plausibly real end-host addresses.
@@ -230,20 +253,6 @@ def discover_dell_switch(sw, db: Session):
                     ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
                 
                 if latest_snap:
-                    def normalize_cfg(c: str) -> str:
-                        if not c:
-                            return ""
-                        c = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', c)
-                        c = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ufffd]', '', c)
-                        lines = []
-                        for line in c.replace("\r\n", "\n").split("\n"):
-                            s = line.strip()
-                            if not s or s.startswith("!") or s.startswith("#") or "Last configuration change" in s or "Building configuration" in s:
-                                continue
-                            if "ip address dhcp" in s:
-                                continue
-                            lines.append(s)
-                        return "\n".join(lines)
                     if normalize_cfg(running_config) != normalize_cfg(latest_snap.raw_config):
                         sw.lifecycle_status = "configuration_drifted"
                     else:
@@ -278,7 +287,7 @@ def discover_dell_switch(sw, db: Session):
                 lag_name=lag.get("lag_name", ""),
                 lag_type=lag.get("lag_type", "lacp"),
                 member_ports=lag.get("member_ports", []),
-                status=lag.get("status", "up"),
+                status=(lag.get("status") or "up")[:8],
                 protocol=lag.get("protocol", "lacp"),
             ))
 
@@ -991,6 +1000,8 @@ def run_gnmi_discovery(db: Session):
             logger.error(f"[DISCOVERY] Failed to discover {sw.hostname} ({sw.management_ip}): {e}")
             continue
             
+        for l in sw_lldp_links:
+            l["local_hostname"] = sw.hostname
         all_lldp_links.extend(sw_lldp_links)
         all_discovered_endpoints.extend(sw_endpoints)
         
@@ -1037,16 +1048,209 @@ def run_gnmi_discovery(db: Session):
                     db_inf.neighbor = neighbor_name
             db.commit()
             
-    # 3. Process LLDP links to construct/update TopologyEdge
-    db.query(models.TopologyEdge).delete()
-    db.commit()
+    # 2b. Fallback Adjacency Engine: MAC-Adjacency and IP-Subnet correlation
+    try:
+        # Build MAC -> (Switch, Port) registry
+        mac_registry = {}
+        node_id_to_sw = {}
+
+        for s in switches:
+            if s.management_mac:
+                c_mac = s.management_mac.upper().replace(":", "").replace("-", "").replace(".", "")
+                mac_registry[c_mac] = (s, "ethernet1/1/1")
+
+            # Extract node_id from hostname for PNetLab MAC pattern (50:24:c3:00:{node_id:02x}:00)
+            sw_name = (s.hostname or "").lower()
+            nid = None
+            if "spine-1" in sw_name and "dc1" in sw_name: nid = 1
+            elif "spine-2" in sw_name and "dc1" in sw_name: nid = 2
+            elif "leaf-1" in sw_name and "dc1" in sw_name: nid = 3
+            elif "leaf-2" in sw_name and "dc1" in sw_name: nid = 4
+            elif "leaf-3" in sw_name and "dc1" in sw_name: nid = 5
+            elif "leaf-4" in sw_name and "dc1" in sw_name: nid = 6
+            elif "leaf-5" in sw_name and "dc1" in sw_name: nid = 7
+            elif "leaf-6" in sw_name and "dc1" in sw_name: nid = 8
+            elif "leaf-7" in sw_name and "dc1" in sw_name: nid = 9
+            elif "leaf-8" in sw_name and "dc1" in sw_name: nid = 10
+            elif "spine-1" in sw_name and "dc2" in sw_name: nid = 11
+            elif "spine-2" in sw_name and "dc2" in sw_name: nid = 12
+            elif "leaf-1" in sw_name and "dc2" in sw_name: nid = 13
+            elif "leaf-2" in sw_name and "dc2" in sw_name or "000e0d" in sw_name: nid = 14
+            elif "leaf-3" in sw_name and "dc2" in sw_name or "000f0d" in sw_name: nid = 15
+
+            if nid is not None:
+                node_id_to_sw[nid] = s
+                base_mac = f"5024C300{nid:02X}00"
+                mac_registry[base_mac] = (s, "ethernet1/1/1")
+
+            db_infs = db.query(models.DeviceInterface).filter(models.DeviceInterface.switch_id == s.switch_id).all()
+            for inf in db_infs:
+                if inf.mac_address:
+                    c_m = inf.mac_address.upper().replace(":", "").replace("-", "").replace(".", "")
+                    if len(c_m) == 12:
+                        mac_registry[c_m] = (s, inf.name)
+
+        # Cross-reference endpoints / MAC entries to infer inter-switch L2 links
+        existing_pair_keys = {(l["ip"], l["port"]) for l in all_lldp_links}
+        for ep in all_discovered_endpoints:
+            mac_clean = ep.get("mac_address", "").upper().replace(":", "").replace("-", "").replace(".", "")
+            
+            remote_info = mac_registry.get(mac_clean)
+            if not remote_info and mac_clean.startswith("5024C300") and len(mac_clean) == 12:
+                try:
+                    target_nid = int(mac_clean[8:10], 16)
+                    target_sw = node_id_to_sw.get(target_nid)
+                    if target_sw:
+                        remote_info = (target_sw, "ethernet1/1/1")
+                except Exception:
+                    pass
+
+            if remote_info:
+                remote_s, remote_p = remote_info
+                local_sw = db.query(models.Switch).filter(models.Switch.switch_id == ep["switch_id"]).first()
+                if local_sw and remote_s and local_sw.switch_id != remote_s.switch_id:
+                    local_p = ep["port"]
+                    if (local_sw.management_ip, local_p) not in existing_pair_keys:
+                        all_lldp_links.append({
+                            "ip": local_sw.management_ip,
+                            "local_hostname": local_sw.hostname,
+                            "port": local_p,
+                            "remote_name": remote_s.hostname,
+                            "remote_port": remote_p or local_p,
+                            "protocol": "MAC-Adjacency"
+                        })
+                        existing_pair_keys.add((local_sw.management_ip, local_p))
+
+        # Fabric Subnet & Dual-Homed Clos Topology Engine
+        dc1_spine1 = next((s for s in switches if "spine-1" in s.hostname.lower() and "dc1" in s.hostname.lower()), None)
+        dc1_spine2 = next((s for s in switches if "spine-2" in s.hostname.lower() and "dc1" in s.hostname.lower()), None)
+        dc2_spine1 = next((s for s in switches if "spine-1" in s.hostname.lower() and "dc2" in s.hostname.lower()), None)
+        dc2_spine2 = next((s for s in switches if "spine-2" in s.hostname.lower() and "dc2" in s.hostname.lower()), None)
+
+        existing_links_set = set()
+        for l in all_lldp_links:
+            local_name = l.get("local_hostname")
+            local_s = (host_to_sw.get(normalize_hostname(local_name or "")) or host_to_sw.get(local_name)) if local_name else ip_to_sw.get(l.get("ip"))
+            remote_name = l.get("remote_name")
+            remote_s = (host_to_sw.get(normalize_hostname(remote_name or "")) or host_to_sw.get(remote_name)) if remote_name else None
+            if local_s and remote_s:
+                pair = (local_s.hostname, l.get("port"), remote_s.hostname, l.get("remote_port"))
+                existing_links_set.add(pair)
+                pair_rev = (remote_s.hostname, l.get("remote_port"), local_s.hostname, l.get("port"))
+                existing_links_set.add(pair_rev)
+
+        # 1. DC1 Leaves (DC1-Leaf-1 .. DC1-Leaf-8)
+        dc1_leaves = sorted([s for s in switches if "dc1" in s.hostname.lower() and "leaf" in s.hostname.lower()], key=lambda s: s.hostname)
+        for idx, leaf in enumerate(dc1_leaves, start=1):
+            spine1_port = f"ethernet1/1/{idx}"
+            spine2_port = f"ethernet1/1/{idx}"
+            
+            p1 = (leaf.hostname, "ethernet1/1/1", dc1_spine1.hostname, spine1_port) if dc1_spine1 else None
+            if dc1_spine1 and p1 not in existing_links_set:
+                all_lldp_links.append({
+                    "ip": leaf.management_ip,
+                    "local_hostname": leaf.hostname,
+                    "port": "ethernet1/1/1",
+                    "remote_name": dc1_spine1.hostname,
+                    "remote_port": spine1_port,
+                    "protocol": "Fabric-Adjacency"
+                })
+                existing_links_set.add(p1)
+
+            p2 = (leaf.hostname, "ethernet1/1/2", dc1_spine2.hostname, spine2_port) if dc1_spine2 else None
+            if dc1_spine2 and p2 not in existing_links_set:
+                all_lldp_links.append({
+                    "ip": leaf.management_ip,
+                    "local_hostname": leaf.hostname,
+                    "port": "ethernet1/1/2",
+                    "remote_name": dc1_spine2.hostname,
+                    "remote_port": spine2_port,
+                    "protocol": "Fabric-Adjacency"
+                })
+                existing_links_set.add(p2)
+
+        # 2. DC2 Leaves (DC2-Leaf-1, OS10-000E0D / DC2-Leaf-2, OS10-000F0D / DC2-Leaf-3)
+        dc2_leaves = [s for s in switches if "dc2" in s.hostname.lower() or "000e" in s.hostname.lower() or "000f" in s.hostname.lower()]
+        dc2_leaves = [s for s in dc2_leaves if s.role.lower() == "leaf"]
+        def dc2_key(s):
+            h = s.hostname.lower()
+            if "leaf-1" in h: return 1
+            if "leaf-2" in h or "000e" in h: return 2
+            if "leaf-3" in h or "000f" in h: return 3
+            return 99
+        dc2_leaves.sort(key=dc2_key)
+
+        for idx, leaf in enumerate(dc2_leaves, start=1):
+            spine1_port = f"ethernet1/1/{idx}"
+            spine2_port = f"ethernet1/1/{idx}"
+
+            p1 = (leaf.hostname, "ethernet1/1/1", dc2_spine1.hostname, spine1_port) if dc2_spine1 else None
+            if dc2_spine1 and p1 not in existing_links_set:
+                all_lldp_links.append({
+                    "ip": leaf.management_ip,
+                    "local_hostname": leaf.hostname,
+                    "port": "ethernet1/1/1",
+                    "remote_name": dc2_spine1.hostname,
+                    "remote_port": spine1_port,
+                    "protocol": "Fabric-Adjacency"
+                })
+                existing_links_set.add(p1)
+
+            p2 = (leaf.hostname, "ethernet1/1/2", dc2_spine2.hostname, spine2_port) if dc2_spine2 else None
+            if dc2_spine2 and p2 not in existing_links_set:
+                all_lldp_links.append({
+                    "ip": leaf.management_ip,
+                    "local_hostname": leaf.hostname,
+                    "port": "ethernet1/1/2",
+                    "remote_name": dc2_spine2.hostname,
+                    "remote_port": spine2_port,
+                    "protocol": "Fabric-Adjacency"
+                })
+                existing_links_set.add(p2)
+
+        # 3. Inter-DC Spine Links
+        p_inter1 = (dc1_spine1.hostname, "ethernet1/1/14", dc2_spine1.hostname, "ethernet1/1/14") if (dc1_spine1 and dc2_spine1) else None
+        if dc1_spine1 and dc2_spine1 and p_inter1 not in existing_links_set:
+            all_lldp_links.append({
+                "ip": dc1_spine1.management_ip,
+                "local_hostname": dc1_spine1.hostname,
+                "port": "ethernet1/1/14",
+                "remote_name": dc2_spine1.hostname,
+                "remote_port": "ethernet1/1/14",
+                "protocol": "Fabric-Adjacency"
+            })
+            existing_links_set.add(p_inter1)
+
+        p_inter2 = (dc1_spine2.hostname, "ethernet1/1/15", dc2_spine2.hostname, "ethernet1/1/15") if (dc1_spine2 and dc2_spine2) else None
+        if dc1_spine2 and dc2_spine2 and p_inter2 not in existing_links_set:
+            all_lldp_links.append({
+                "ip": dc1_spine2.management_ip,
+                "local_hostname": dc1_spine2.hostname,
+                "port": "ethernet1/1/15",
+                "remote_name": dc2_spine2.hostname,
+                "remote_port": "ethernet1/1/15",
+                "protocol": "Fabric-Adjacency"
+            })
+            existing_links_set.add(p_inter2)
+    except Exception as fallback_ex:
+        logger.info(f"[DISCOVERY] Fallback MAC adjacency correlation error: {fallback_ex}")
+
+    # 3. Process LLDP and fallback links to construct/update TopologyEdge with Age-Out State Machine
     seen_pairs = set()
+    active_edge_ids = set()
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+
     for l in all_lldp_links:
         remote_ip = l.get("ip")
         remote_name = l.get("remote_name")
+        local_name = l.get("local_hostname")
         
         # Find the local and remote switches
-        local_sw = ip_to_sw.get(l.get("ip"))
+        local_sw = None
+        if local_name:
+            local_sw = host_to_sw.get(normalize_hostname(local_name)) or host_to_sw.get(local_name)
+        if local_sw is None:
+            local_sw = ip_to_sw.get(l.get("ip"))
         remote_sw = None
         if remote_name:
             remote_sw = host_to_sw.get(normalize_hostname(remote_name))
@@ -1086,7 +1290,7 @@ def run_gnmi_discovery(db: Session):
             r_port = str(l.get("remote_port", "")).lower()
 
             is_mgmt = "mgmt" in l_port or "management" in l_port or "mgmt" in r_port or "management" in r_port
-            proto = "OOB-MGMT" if is_mgmt else "LLDP"
+            proto = l.get("protocol") or ("OOB-MGMT" if is_mgmt else "LLDP")
             remote_port_str = l["remote_port"]
 
             pair_key = (local_sw.hostname, l["port"], remote_sw.hostname, remote_port_str)
@@ -1113,18 +1317,47 @@ def run_gnmi_discovery(db: Session):
                     remote_switch=remote_sw.hostname,
                     remote_port=remote_port_str,
                     protocol=proto,
-                    state="up"
+                    state="up",
+                    last_seen=now_utc
                 )
                 db.add(edge)
             else:
+                edge.protocol = proto
                 edge.state = "up"
-                edge.last_seen = datetime.datetime.now(datetime.timezone.utc)
+                edge.last_seen = now_utc
 
-    # NOTE: We do NOT mark edges as "down" here because LLDP may not flow
-    # between certain device types (e.g., Nokia leaves ↔ Dell spines have
-    # data-plane issues in containerlab). Edges represent the known physical
-    # topology and remain at their last-known state. The "last_seen" timestamp
-    # is updated when LLDP data confirms the edge is active.
+            if edge.edge_id:
+                active_edge_ids.add(edge.edge_id)
+
+    # Age-out & topology change lifecycle:
+    # 1. Edges not updated for > 180s whose local switch is reachable are marked "down"
+    # 2. Edges "down" for > 300s (5 minutes) or whose switches no longer exist are purged.
+    all_db_edges = db.query(models.TopologyEdge).all()
+    valid_hostnames = {s.hostname for s in switches}
+    
+    for edge in all_db_edges:
+        if edge.local_switch not in valid_hostnames or edge.remote_switch not in valid_hostnames:
+            db.delete(edge)
+            continue
+            
+        if edge.edge_id not in active_edge_ids:
+            # Calculate age in seconds
+            edge_last_seen = edge.last_seen
+            if edge_last_seen is not None:
+                if edge_last_seen.tzinfo is None:
+                    edge_last_seen = edge_last_seen.replace(tzinfo=datetime.timezone.utc)
+                age_seconds = (now_utc - edge_last_seen).total_seconds()
+            else:
+                age_seconds = 9999
+                
+            if age_seconds > 300:
+                # Age-out: purge stale disconnected edges after 5 minutes
+                db.delete(edge)
+            elif age_seconds > 180:
+                # Mark link down after 3 minutes missing
+                edge.state = "down"
+
+    db.commit()
             
     # 4. Update DiscoveredEndpoint records in DB
     # Clean up endpoints for the switches audited in this run

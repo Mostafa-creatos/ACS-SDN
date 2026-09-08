@@ -306,18 +306,19 @@ def build_dashboard_summary(db: Session, claims: dict) -> Dict[str, Any]:
     else:
         ztp_devices = []
 
-    ztp_list = [
-        {
+    ztp_list = []
+    for z in ztp_devices:
+        sw = db.query(models.Switch).filter(models.Switch.discovery_id == z.discovery_id).first()
+        effective_ip = (sw.management_ip if (sw and sw.management_ip) else z.current_dhcp_ip)
+        ztp_list.append({
             "discovery_id": str(z.discovery_id),
             "mac_address": z.mac_address,
             "serial_number": z.serial_number or "",
             "hardware_vendor": z.hardware_vendor,
             "hardware_model": z.hardware_model,
-            "current_dhcp_ip": z.current_dhcp_ip,
+            "current_dhcp_ip": effective_ip,
             "base_os_version": z.base_os_version,
-        }
-        for z in ztp_devices
-    ]
+        })
 
     # 8. Audit logs (tenant-scoped for non-admins)
     audit_query = db.query(models.AuditLog)

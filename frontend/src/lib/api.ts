@@ -253,6 +253,18 @@ export const redeploySubnet = async (subnetId: string): Promise<any> => {
     return res.json();
 };
 
+export const retrySwitchProvisioning = async (jobId: string, hostname: string): Promise<any> => {
+    const res = await fetch(`/api/v5/admin/provisioning-jobs/${jobId}/retry-switch/${hostname}`, {
+        method: 'POST',
+        headers: getHeaders()
+    });
+    if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Failed to retry push on switch ${hostname}`);
+    }
+    return res.json();
+};
+
 
 export const remediateComplianceFinding = async (findingId: string, tenantId?: string | null): Promise<{ ok: boolean; errorText?: string }> => {
     const res = await apiRequest(`/api/v5/visibility/compliance/findings/${findingId}/remediate`, {

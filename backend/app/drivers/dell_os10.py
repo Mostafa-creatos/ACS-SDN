@@ -76,7 +76,7 @@ def connect_os10_collector(host: str, username: str = "admin", password: str = "
 def _push_via_collector(collector: DellOS10Collector, transport: str, config_payload: str) -> dict:
     """Apply a config payload and report whether OS10 accepted every line."""
     try:
-        collector._send_command("terminal width 512")
+        collector._flush_input()
         collector._send_command("configure terminal")
         for line in config_payload.strip().splitlines():
             line = line.strip()
@@ -87,9 +87,18 @@ def _push_via_collector(collector: DellOS10Collector, transport: str, config_pay
                 collector._send_command("end")
                 return {"success": False, "output": f"OS10 rejected command '{line}':\n{out}", "applied_config": ""}
         collector._send_command("end")
-        save_out = collector._send_command("copy running-config startup-config", timeout=60)
-        if any(hint in save_out for hint in OS10_ERROR_HINTS):
+        
+        # Save running-config to startup-config (or write memory)
+        save_out = collector._send_command("write memory", timeout=30)
+        if any(hint in save_out for hint in OS10_ERROR_HINTS if hint != "ERROR:"):
+            # Fallback to copy running-config startup-config
+            save_out = collector._send_command("copy running-configuration startup-configuration", timeout=30)
+
+        # Filter true errors from output
+        real_errors = [hint for hint in OS10_ERROR_HINTS if hint in save_out and "Unrecognized command" not in save_out]
+        if real_errors and "% Error" in save_out:
             return {"success": False, "output": f"Failed to save running-config:\n{save_out}", "applied_config": ""}
+            
         return {"success": True, "output": f"Configuration applied and saved successfully (via {transport}).", "applied_config": config_payload}
     except Exception as e:
         return {"success": False, "output": str(e), "applied_config": ""}

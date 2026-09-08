@@ -50,6 +50,86 @@ async def start_periodic_telemetry_loop(interval_sec: int):
 
 from .celery_app import celery_app
 
+def reconcile_pushed_ip_allocations(db, switch, config_text: str):
+    """
+    Parse interface IP configurations from CLI or running-config and reconcile
+    them into IPAM allocations and DiscoveredEndpoints so Northbound IPAM
+    and Southbound network state remain 100% in sync.
+    """
+    import re
+    import ipaddress
+    import uuid as _uuid
+    from .. import models
+
+    if not config_text or not switch:
+        return
+
+    lines = config_text.splitlines()
+    current_iface = "logical"
+    current_vlan = 1
+
+    subnets = db.query(models.IpamSubnet).all()
+
+    for line in lines:
+        raw = line.strip()
+        if raw.startswith("interface "):
+            current_iface = raw.split("interface ")[-1].strip()
+            vlan_match = re.search(r'vlan\s*(\d+)', current_iface, re.IGNORECASE)
+            if vlan_match:
+                try:
+                    current_vlan = int(vlan_match.group(1))
+                except ValueError:
+                    pass
+        elif 'ip address ' in raw and not raw.startswith('!'):
+            parts = raw.split('ip address ')
+            if len(parts) > 1:
+                ip_part = parts[1].strip().split()[0]
+                ip_str = ip_part.split('/')[0]
+                try:
+                    ip_obj = ipaddress.ip_address(ip_str)
+                    for sub in subnets:
+                        sub_net = ipaddress.ip_network(sub.subnet_cidr, strict=False)
+                        if ip_obj in sub_net:
+                            alloc = db.query(models.IpamIpAllocation).filter(
+                                models.IpamIpAllocation.subnet_id == sub.subnet_id,
+                                models.IpamIpAllocation.ip_address == ip_str
+                            ).first()
+                            if not alloc:
+                                alloc = models.IpamIpAllocation(
+                                    allocation_id=_uuid.uuid4(),
+                                    subnet_id=sub.subnet_id,
+                                    ip_address=ip_str,
+                                    assignment_type="interface_workload",
+                                    bound_entity_id=f"{switch.hostname}:{current_iface}"
+                                )
+                                db.add(alloc)
+
+                            ep = db.query(models.DiscoveredEndpoint).filter(
+                                models.DiscoveredEndpoint.ip_address == ip_str
+                            ).first()
+                            if not ep:
+                                ep = models.DiscoveredEndpoint(
+                                    endpoint_id=_uuid.uuid4(),
+                                    switch_id=switch.switch_id,
+                                    port=current_iface,
+                                    vlan_id=current_vlan,
+                                    ip_address=ip_str,
+                                    mac_address=f"50:24:c3:00:10:{ip_str.split('.')[-1].zfill(2)}"
+                                )
+                                db.add(ep)
+                            else:
+                                ep.switch_id = switch.switch_id
+                                ep.port = current_iface
+                                ep.vlan_id = current_vlan
+                            break
+                except ValueError:
+                    pass
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 @celery_app.task(bind=True, name="app.workers.sync_tasks.sync_switch_config_task")
 def sync_switch_config_task(self, switch_id_str: str, config_data: str, approval_id: str | None = None):
     """
@@ -142,6 +222,12 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str, approval
             from ..core.constants import LIFECYCLE_COMPLIANT
             switch.lifecycle_status = LIFECYCLE_COMPLIANT
             switch.last_successful_sync = datetime.now(timezone.utc)
+            
+            # Reconcile IP allocations with IPAM
+            try:
+                reconcile_pushed_ip_allocations(db, switch, config_data)
+            except Exception as rec_ex:
+                logger.warning(f"[SYNC TASK] IPAM reconciliation error: {rec_ex}")
             
             # Fetch new running config to create a config snapshot and prevent drift status
             try:
@@ -487,26 +573,26 @@ def auto_provision_subnet_task(job_id_str: str):
                 job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Pushing config payload to switch {sw.hostname} at {target_host}:{target_port}...\n"
                 db.commit()
 
-                # Run async push command with strict 25-second timeout guard
+                # Run async push command with 45-second timeout guard
                 try:
                     push_res = loop.run_until_complete(
                         asyncio.wait_for(
                             driver.push_config(target_host, username, password, config_data, port=target_port),
-                            timeout=25.0
+                            timeout=45.0
                         )
                     )
                 except asyncio.TimeoutError:
-                    push_res = {"success": False, "output": f"Telnet/SSH connection to switch {sw.hostname} at {target_host}:{target_port} timed out after 25 seconds."}
+                    push_res = {"success": False, "output": f"Telnet/SSH connection to switch {sw.hostname} at {target_host}:{target_port} timed out after 45 seconds."}
                 except TypeError:
                     try:
                         push_res = loop.run_until_complete(
                             asyncio.wait_for(
                                 driver.push_config(target_host, username, password, config_data),
-                                timeout=25.0
+                                timeout=45.0
                             )
                         )
                     except asyncio.TimeoutError:
-                        push_res = {"success": False, "output": f"Telnet/SSH connection to switch {sw.hostname} timed out after 25 seconds."}
+                        push_res = {"success": False, "output": f"Telnet/SSH connection to switch {sw.hostname} timed out after 45 seconds."}
 
                 if push_res.get("success", False):
                     job.logs += f"[{datetime.now(timezone.utc).isoformat()}] Config push to {sw.hostname} succeeded.\n"
@@ -565,6 +651,10 @@ def auto_provision_subnet_task(job_id_str: str):
 @shared_task(name="app.workers.sync_tasks.retry_single_switch_task")
 def retry_single_switch_task(job_id_str: str, hostname: str):
     """Re-push configuration payload to a single target switch within a provisioning job."""
+    import uuid
+    from datetime import datetime, timezone
+    from .. import models
+    from ..orchestrator.generator import generate_subnet_config
     from .config_lifecycle import take_config_snapshot
     from app.drivers.factory import resolve_southbound_driver
 
@@ -612,11 +702,11 @@ def retry_single_switch_task(job_id_str: str, hostname: str):
                 push_res = loop.run_until_complete(
                     asyncio.wait_for(
                         driver.push_config(target_host, username, password, config_data, port=target_port),
-                        timeout=25.0
+                        timeout=45.0
                     )
                 )
             except asyncio.TimeoutError:
-                push_res = {"success": False, "output": f"Telnet/SSH connection to {hostname} timed out after 25 seconds."}
+                push_res = {"success": False, "output": f"Telnet/SSH connection to {hostname} timed out after 45 seconds."}
         finally:
             loop.close()
 

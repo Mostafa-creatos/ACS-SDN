@@ -224,21 +224,21 @@ async def get_discovery_pool(
     response_data = []
     for r in records:
         switch = db.query(models.Switch).filter(models.Switch.discovery_id == r.discovery_id).first()
+        effective_ip = (switch.management_ip if (switch and switch.management_ip) else r.current_dhcp_ip)
         sn = (switch.serial_number if switch and switch.serial_number else r.serial_number) or ""
         if not sn or sn.startswith("SN-AUTODISCOVER"):
-            ip_suffix = r.current_dhcp_ip.split(".")[-1] if (r.current_dhcp_ip and "." in r.current_dhcp_ip) else "12"
+            ip_suffix = effective_ip.split(".")[-1] if (effective_ip and "." in effective_ip) else "12"
             if (r.hardware_vendor or "").lower() in ("dell", "dell_os10"):
                 sn = f"CN09XJ2F-V000200-{ip_suffix.zfill(2)}"
             else:
                 sn = f"SN-NOKIA-{ip_suffix.zfill(2)}"
-
         response_data.append({
             "discovery_id": str(r.discovery_id),
             "mac_address": r.mac_address,
             "serial_number": sn,
             "hardware_vendor": r.hardware_vendor,
             "os_version": r.base_os_version,
-            "current_dhcp_ip": r.current_dhcp_ip,
+            "current_dhcp_ip": effective_ip,
             "first_seen": r.first_seen.isoformat() if r.first_seen else None,
             "onboarding_status": r.onboarding_status,
             "error_message": r.error_message,
@@ -284,13 +284,14 @@ async def get_ztp_record_status(
                 "taken_at": snap.taken_at.isoformat() if snap.taken_at else None
             }
 
+    effective_ip = (switch.management_ip if (switch and switch.management_ip) else record.current_dhcp_ip)
     return {
         "discovery_id": str(record.discovery_id),
         "serial_number": record.serial_number,
         "mac_address": record.mac_address,
         "hardware_vendor": record.hardware_vendor,
         "os_version": record.base_os_version,
-        "current_dhcp_ip": record.current_dhcp_ip,
+        "current_dhcp_ip": effective_ip,
         "first_seen": record.first_seen.isoformat() if record.first_seen else None,
         "onboarding_status": record.onboarding_status,
         "error_message": record.error_message,

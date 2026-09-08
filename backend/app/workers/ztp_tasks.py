@@ -63,19 +63,42 @@ def _build_dell_baseline_commands(hostname: str, is_fallback: bool = False, fabr
     return commands
 
 
+PNET_HOSTNAME_MAP = {
+    "DC1-Spine-1": 30001,
+    "DC1-Spine-2": 30002,
+    "DC1-Leaf-1": 30003,
+    "DC1-Leaf-2": 30004,
+    "DC1-Leaf-3": 30005,
+    "DC1-Leaf-4": 30006,
+    "DC1-Leaf-5": 30007,
+    "DC1-Leaf-6": 30008,
+    "DC1-Leaf-7": 30009,
+    "DC1-Leaf-8": 30010,
+    "DC2-Spine-1": 30011,
+    "DC2-Spine-2": 30012,
+    "DC2-Leaf-1": 30013,
+    "DC2-Leaf-2": 30014,
+    "DC2-Leaf-3": 30015,
+}
+
 def resolve_console_target(switch, db=None, default_port: int = 5000):
     """
     Resolves the reachable console host and port for a switch.
     If the switch has a private PNetLab IP (172.20.20.x or 127.x), it automatically
     derives the PNetLab telnet console port (30000 + node_id) on host 128.105.145.2.
     """
-    target_host = switch.management_ip
+    sw_host = getattr(switch, "hostname", "") or ""
+    for name, port in PNET_HOSTNAME_MAP.items():
+        if name.lower() == sw_host.lower():
+            return "128.105.145.2", port
+
+    target_host = getattr(switch, "management_ip", "") or ""
     target_port = default_port
 
     if target_host.startswith("172.20.20.") or target_host.startswith("127.") or target_host.startswith("10.") or target_host == "128.105.145.2" or getattr(switch, "vendor", "") in ("dell_os10", "dell"):
         pnet_host = "128.105.145.2"
         mac = ""
-        if db and switch.discovery_id:
+        if db and getattr(switch, "discovery_id", None):
             disc = db.query(ZtpDiscoveryPool).filter(ZtpDiscoveryPool.discovery_id == switch.discovery_id).first()
             if disc and disc.mac_address:
                 mac = disc.mac_address
@@ -90,12 +113,6 @@ def resolve_console_target(switch, db=None, default_port: int = 5000):
                 try:
                     # In PNetLab MAC pattern (50:24:c3:00:{node_id}:{iface}), index 4 is node_id
                     node_id = int(parts[4], 16)
-                except Exception: pass
-        elif getattr(switch, "serial_number", None):
-            sn_parts = switch.serial_number.split("-")
-            if len(sn_parts) >= 2:
-                try:
-                    node_id = int(sn_parts[-1][:2], 16)
                 except Exception: pass
 
         pnet_port = 30000 + node_id

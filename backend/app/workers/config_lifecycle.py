@@ -204,13 +204,7 @@ def _fetch_switch_running_config(switch: models.Switch) -> str:
         target_host, target_port = resolve_console_target(switch, db=None)
         collector, _transport = connect_os10_collector(target_host, "admin", "admin", port=target_port)
         try:
-            config = collector.collect_running_config()
-            try:
-                ssh_status = collector._send_command("show ip ssh")
-                config = config + "\n! show ip ssh\n" + ssh_status
-            except Exception:
-                pass
-            return config
+            return collector.collect_running_config()
         finally:
             collector.close()
     elif switch.vendor == "nokia":
@@ -457,6 +451,9 @@ def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID =
             if sw.vendor in ["dell_os10", "dell"] and expected_str == "lldp enable":
                 # On Dell OS10, LLDP is enabled by default. It is compliant unless disabled explicitly.
                 is_compliant = "disable" not in config.lower() and "no protocol lldp" not in config.lower()
+            elif sw.vendor in ["dell_os10", "dell"] and ("ssh" in rule.name.lower() or "ssh" in expected_str.lower()):
+                # On Dell OS10, SSH server is enabled by default unless explicitly disabled
+                is_compliant = "no ip ssh" not in config.lower() and "ssh server disable" not in config.lower()
             elif sw.vendor in ["dell_os10", "dell"] and "logging host" in expected_str:
                 adapted_dell = expected_str.replace("logging host", "logging server")
                 pattern = re.compile(r'^\s*' + re.escape(adapted_dell) + r'\s*$', re.MULTILINE | re.IGNORECASE)

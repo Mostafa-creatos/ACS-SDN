@@ -957,9 +957,11 @@ def export_reports_csv(
                 models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
             ).filter(models.TenantVrf.tenant_id == t_uuid).all()
         for r in records:
-            sn = r.serial_number or ""
+            sw = db.query(models.Switch).filter(models.Switch.discovery_id == r.discovery_id).first()
+            effective_ip = (sw.management_ip if (sw and sw.management_ip) else r.current_dhcp_ip)
+            sn = (sw.serial_number if sw and sw.serial_number else r.serial_number) or ""
             if not sn or sn.startswith("SN-AUTODISCOVER"):
-                ip_suffix = r.current_dhcp_ip.split(".")[-1] if (r.current_dhcp_ip and "." in r.current_dhcp_ip) else "12"
+                ip_suffix = effective_ip.split(".")[-1] if (effective_ip and "." in effective_ip) else "12"
                 if (r.hardware_vendor or "").lower() in ("dell", "dell_os10"):
                     sn = f"CN09XJ2F-V000200-{ip_suffix.zfill(2)}"
                 else:
@@ -969,7 +971,7 @@ def export_reports_csv(
                 sn,
                 r.hardware_vendor,
                 r.hardware_model,
-                r.current_dhcp_ip,
+                effective_ip,
                 r.base_os_version,
                 r.onboarding_status,
                 r.first_seen.isoformat() if r.first_seen else "",
@@ -1264,9 +1266,11 @@ def get_reports_preview(
                 models.TenantVrf, models.TenantVrf.vrf_id == models.IpamSubnet.vrf_id
             ).filter(models.TenantVrf.tenant_id == t_uuid).limit(3).all()
         for r in records:
-            sn = r.serial_number or ""
+            sw = db.query(models.Switch).filter(models.Switch.discovery_id == r.discovery_id).first()
+            effective_ip = (sw.management_ip if (sw and sw.management_ip) else r.current_dhcp_ip)
+            sn = (sw.serial_number if sw and sw.serial_number else r.serial_number) or ""
             if not sn or sn.startswith("SN-AUTODISCOVER"):
-                ip_suffix = r.current_dhcp_ip.split(".")[-1] if (r.current_dhcp_ip and "." in r.current_dhcp_ip) else "12"
+                ip_suffix = effective_ip.split(".")[-1] if (effective_ip and "." in effective_ip) else "12"
                 if (r.hardware_vendor or "").lower() in ("dell", "dell_os10"):
                     sn = f"CN09XJ2F-V000200-{ip_suffix.zfill(2)}"
                 else:
@@ -1276,7 +1280,7 @@ def get_reports_preview(
                 sn,
                 r.hardware_vendor,
                 r.hardware_model,
-                r.current_dhcp_ip,
+                effective_ip,
                 r.base_os_version,
                 r.onboarding_status,
                 r.first_seen.isoformat() if r.first_seen else "",

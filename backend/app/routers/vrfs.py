@@ -629,3 +629,28 @@ def redeploy_subnet(
     return {"status": "REDEPLOY_QUEUED", "job_id": str(job.job_id)}
 
 
+@router.post("/provisioning-jobs/{job_id}/retry-switch/{hostname}")
+def retry_switch_provisioning(
+    job_id: str,
+    hostname: str,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("global:manage"))
+):
+    """Trigger a retry for a single target switch within a provisioning job."""
+    j_uuid = uuid.UUID(job_id)
+    job = db.query(models.ProvisioningJob).filter(models.ProvisioningJob.job_id == j_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    dev_status = job.device_statuses or {}
+    if hostname not in dev_status:
+        raise HTTPException(status_code=404, detail=f"Switch '{hostname}' not found in job target list.")
+
+    # Trigger single-switch Celery task
+    from app.workers.sync_tasks import retry_single_switch_task
+    retry_single_switch_task.delay(str(job.job_id), hostname)
+
+    return {"status": "RETRY_QUEUED", "job_id": str(job.job_id), "hostname": hostname}
+
+
+

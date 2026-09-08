@@ -234,9 +234,11 @@ def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(req
 
     res = []
     for z in ztp_devices:
-        sn = z.serial_number or ""
+        sw = db.query(models.Switch).filter(models.Switch.discovery_id == z.discovery_id).first()
+        effective_ip = (sw.management_ip if (sw and sw.management_ip) else z.current_dhcp_ip)
+        sn = (sw.serial_number if sw and sw.serial_number else z.serial_number) or ""
         if not sn or sn.startswith("SN-AUTODISCOVER"):
-            ip_suffix = z.current_dhcp_ip.split(".")[-1] if (z.current_dhcp_ip and "." in z.current_dhcp_ip) else "12"
+            ip_suffix = effective_ip.split(".")[-1] if (effective_ip and "." in effective_ip) else "12"
             if (z.hardware_vendor or "").lower() in ("dell", "dell_os10"):
                 sn = f"CN09XJ2F-V000200-{ip_suffix.zfill(2)}"
             else:
@@ -247,7 +249,7 @@ def get_admin_ztp_pool(db: Session = Depends(get_db), claims: dict = Depends(req
             "serial_number": sn,
             "hardware_vendor": z.hardware_vendor,
             "hardware_model": z.hardware_model,
-            "current_dhcp_ip": z.current_dhcp_ip,
+            "current_dhcp_ip": effective_ip,
             "base_os_version": z.base_os_version,
         })
     return res
@@ -353,7 +355,20 @@ def search_ipam_ip(ip: str, db: Session = Depends(get_db), claims: dict = Depend
             "status": "assigned"
         }
 
-    # 3. Otherwise return unassigned structure
+    # 3. Search in Switch management IPs
+    sw_mgmt = db.query(models.Switch).filter(models.Switch.management_ip == ip).first()
+    if sw_mgmt:
+        return {
+            "ip": ip,
+            "switch_name": sw_mgmt.hostname,
+            "interface_name": "Management (eth0)",
+            "vlan": 1,
+            "vrf": "Out-of-Band Management",
+            "last_seen": sw_mgmt.last_successful_sync.isoformat() if sw_mgmt.last_successful_sync else "Active",
+            "status": "assigned"
+        }
+
+    # 4. Otherwise return unassigned structure
     return {
         "ip": ip,
         "status": "unassigned"
