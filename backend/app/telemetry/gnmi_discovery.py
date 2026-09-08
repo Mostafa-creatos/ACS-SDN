@@ -1109,6 +1109,10 @@ def run_gnmi_discovery(db: Session):
                 remote_s, remote_p = remote_info
                 local_sw = db.query(models.Switch).filter(models.Switch.switch_id == ep["switch_id"]).first()
                 if local_sw and remote_s and local_sw.switch_id != remote_s.switch_id:
+                    # Prevent cross-fabric leaf-to-leaf synthetic edges
+                    if local_sw.role == 'leaf' and remote_s.role == 'leaf' and local_sw.fabric_id != remote_s.fabric_id:
+                        continue
+
                     local_p = ep["port"]
                     if (local_sw.management_ip, local_p) not in existing_pair_keys:
                         all_lldp_links.append({
@@ -1353,8 +1357,8 @@ def run_gnmi_discovery(db: Session):
             if age_seconds > 300:
                 # Age-out: purge stale disconnected edges after 5 minutes
                 db.delete(edge)
-            elif age_seconds > 180:
-                # Mark link down after 3 minutes missing
+            else:
+                # Mark missing link down immediately so topology renders RED cable
                 edge.state = "down"
 
     db.commit()

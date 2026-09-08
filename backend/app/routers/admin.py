@@ -502,7 +502,7 @@ def delete_ipam_allocation(allocation_id: str, db: Session = Depends(get_db), cl
 @router.get("/api/v5/admin/topology")
 async def get_admin_topology(db: Session = Depends(get_db), claims: dict = Depends(require_permission("global:manage"))):
     try:
-        edges = db.query(models.TopologyEdge).filter(models.TopologyEdge.state == "up").all()
+        edges = db.query(models.TopologyEdge).filter(models.TopologyEdge.state != "purged").all()
         if not edges:
             # Fallback list matching default topology to keep visual map working immediately
             return [
@@ -592,7 +592,7 @@ async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depen
                 "fabric_name": fabric_name
             })
             
-        edges = db.query(models.TopologyEdge).filter(models.TopologyEdge.state == "up").all()
+        edges = db.query(models.TopologyEdge).filter(models.TopologyEdge.state != "purged").all()
         edges_list = []
         
         for e in edges:
@@ -609,6 +609,7 @@ async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depen
                     "sourcePort": e.local_port,
                     "targetPort": e.remote_port,
                     "protocol": e.protocol or "LLDP",
+                    "state": e.state or "up",
                     "label": f"{e.local_port} <-> {e.remote_port}"
                 })
                 

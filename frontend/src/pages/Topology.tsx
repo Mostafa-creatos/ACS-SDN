@@ -32,6 +32,7 @@ interface EdgeData {
   targetPort?: string;
   protocol?: 'LLDP' | 'CDP' | 'OOB-MGMT' | string;
   label?: string;
+  state?: 'up' | 'down' | string;
 }
 
 interface EndpointData {
@@ -47,7 +48,7 @@ interface EndpointData {
 const VENDOR_ICONS: Record<string, string> = {
   dell_spine: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#1e1b4b"/><rect x="15" y="32" width="70" height="44" rx="6" fill="#0f172a" stroke="#6366f1" stroke-width="2.5"/><rect x="32" y="16" width="36" height="14" rx="4" fill="#4338ca" stroke="#a5b4fc" stroke-width="1.5"/><text x="50" y="27" fill="#ffffff" font-size="9.5" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle">SPINE</text><rect x="22" y="42" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="37" y="42" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="53" y="42" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="68" y="42" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="22" y="57" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="37" y="57" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="53" y="57" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="68" y="57" width="10" height="9" rx="1.5" fill="#818cf8"/><circle cx="20" cy="24" r="2.5" fill="#10b981"/><circle cx="27" cy="24" r="2.5" fill="#38bdf8"/></svg>')}`,
   
-  dell_leaf: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#064e3b"/><rect x="15" y="32" width="70" height="44" rx="6" fill="#022c22" stroke="#10b981" stroke-width="2.5"/><rect x="33" y="16" width="34" height="14" rx="4" fill="#047857" stroke="#6ee7b7" stroke-width="1.5"/><text x="50" y="27" fill="#ffffff" font-size="9.5" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle">LEAF</text><rect x="20" y="43" width="9" height="8" rx="1" fill="#34d399"/><rect x="32" y="43" width="9" height="8" rx="1" fill="#34d399"/><rect x="44" y="43" width="9" height="8" rx="1" fill="#34d399"/><rect x="56" y="43" width="9" height="8" rx="1" fill="#34d399"/><rect x="68" y="43" width="9" height="8" rx="1" fill="#34d399"/><rect x="20" y="56" width="9" height="8" rx="1" fill="#34d399"/><rect x="32" y="56" width="9" height="8" rx="1" fill="#34d399"/><rect x="44" y="56" width="9" height="8" rx="1" fill="#34d399"/><rect x="56" y="56" width="9" height="8" rx="1" fill="#34d399"/><rect x="68" y="56" width="9" height="8" rx="1" fill="#34d399"/><circle cx="20" cy="24" r="2.5" fill="#34d399"/></svg>')}`,
+  dell_leaf: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#064e3b"/><rect x="15" y="32" width="70" height="44" rx="6" fill="#022c22" stroke="#10b981" stroke-width="2.5"/><rect x="32" y="16" width="36" height="14" rx="4" fill="#047857" stroke="#6ee7b7" stroke-width="1.5"/><text x="50" y="27" fill="#ffffff" font-size="9.5" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle">LEAF</text><rect x="22" y="42" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="37" y="42" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="53" y="42" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="68" y="42" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="22" y="57" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="37" y="57" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="53" y="57" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="68" y="57" width="10" height="9" rx="1.5" fill="#34d399"/><circle cx="20" cy="24" r="2.5" fill="#34d399"/><circle cx="27" cy="24" r="2.5" fill="#34d399"/></svg>')}`,
   
   cisco: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#0b5cad" stroke="#ffffff" stroke-width="1.5"/><path d="M10 20v-4m3 6v-8m3 10V10m3 12v-14m3 16V6m3 14v-10m3 12v-8m3 6v-4" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round"/></svg>')}`,
   juniper: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#6c2e9c" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="20" fill="#ffffff" font-size="14" font-family="Times New Roman, serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">J</text></svg>')}`,
@@ -264,8 +265,9 @@ export const Topology: React.FC = () => {
           if (seenLinkPairs.has(linkKey)) continue;
           seenLinkPairs.add(linkKey);
 
+          const isDown = e.state === 'down';
           const isCDP = e.protocol === 'CDP';
-          const color = isMgmt ? '#38bdf8' : (isCDP ? '#00c3ff' : '#00e676');
+          const color = isDown ? '#ef4444' : (isMgmt ? '#38bdf8' : (isCDP ? '#00c3ff' : '#00e676'));
 
           deduplicatedEdges.push({
             data: {
@@ -276,7 +278,9 @@ export const Topology: React.FC = () => {
               targetPort,
               protocol: isMgmt ? 'OOB-MGMT' : (e.protocol || 'LLDP'),
               color,
-              isMgmt
+              isMgmt,
+              isDown,
+              state: e.state || 'up'
             }
           });
         }
@@ -436,6 +440,17 @@ export const Topology: React.FC = () => {
             'line-style': 'dashed',
             'line-dash-pattern': [6, 4],
             'opacity': 0.85
+          }
+        },
+        {
+          selector: 'edge[?isDown]',
+          style: {
+            'line-style': 'dashed',
+            'line-dash-pattern': [6, 4],
+            'line-color': '#ef4444',
+            'target-arrow-color': '#ef4444',
+            'width': 2.2,
+            'opacity': 0.95
           }
         },
         {
@@ -766,6 +781,10 @@ export const Topology: React.FC = () => {
           <div className="flex items-center gap-1.5 text-emerald-400">
             <span className="w-3.5 h-1 bg-[#00e676] rounded-full shadow-sm shadow-emerald-500/50" />
             <span>Data Link (LLDP)</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-rose-400">
+            <span className="w-3.5 h-1 border-b-2 border-dashed border-[#ef4444] shadow-sm shadow-rose-500/50" />
+            <span>Data Link (Alarm - DOWN)</span>
           </div>
           {showMgmtLinks && (
             <div className="flex items-center gap-1.5 text-sky-400">
