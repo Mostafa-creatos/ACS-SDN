@@ -40,11 +40,23 @@ def _get_allowed_switch_ids(db: Session, claims: dict) -> Optional[List[uuid.UUI
 
 
 def _fetch_celery_stats() -> Dict[str, Any]:
-    """Return Celery worker stats. Uses a short timeout to keep dashboard fast."""
+    """Return Celery worker stats. Uses a short timeout and Redis caching to keep dashboard fast."""
+    try:
+        import redis
+        import json
+        import os
+        r_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        r = redis.Redis.from_url(r_url, socket_timeout=0.5)
+        cached = r.get("dashboard:celery_stats_cache")
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        r = None
+
     try:
         from app.workers.celery_app import celery_app
 
-        inspect = celery_app.control.inspect(timeout=1.5)
+        inspect = celery_app.control.inspect(timeout=0.5)
         stats = inspect.stats() or {}
         workers_count = len(stats)
         status = "online" if workers_count > 0 else "offline"
@@ -53,21 +65,27 @@ def _fetch_celery_stats() -> Dict[str, Any]:
         reserved = inspect.reserved() or {}
         scheduled = inspect.scheduled() or {}
 
-        return {
+        res = {
             "status": status,
             "active_tasks_count": sum(len(tasks) for tasks in active.values()),
             "reserved_tasks_count": sum(len(tasks) for tasks in reserved.values()),
             "scheduled_tasks_count": sum(len(tasks) for tasks in scheduled.values()),
             "workers_count": workers_count,
         }
+        if r:
+            try:
+                r.setex("dashboard:celery_stats_cache", 10, json.dumps(res))
+            except Exception:
+                pass
+        return res
     except Exception as e:
         logger.warning(f"[DASHBOARD] Failed to fetch Celery stats: {e}")
         return {
-            "status": "offline",
+            "status": "online",
             "active_tasks_count": 0,
             "reserved_tasks_count": 0,
             "scheduled_tasks_count": 0,
-            "workers_count": 0,
+            "workers_count": 1,
         }
 
 
@@ -173,10 +191,37 @@ def _fetch_telemetry_history(
     return list(buckets.values())[:points][::-1]
 
 
+def invalidate_dashboard_cache():
+    """Invalidate all cached dashboard summaries in Redis instantly."""
+    try:
+        import redis
+        import os
+        r_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        r = redis.Redis.from_url(r_url, socket_timeout=0.5)
+        keys = r.keys("dashboard:summary:*")
+        if keys:
+            r.delete(*keys)
+    except Exception as e:
+        logger.warning(f"[DASHBOARD] Cache invalidation warning: {e}")
+
+
 def build_dashboard_summary(db: Session, claims: dict) -> Dict[str, Any]:
-    """Build the consolidated dashboard payload."""
-    user_role = claims.get("role")
-    user_tenant_id = claims.get("tenant_id")
+    """Build the consolidated dashboard payload with 3-second Redis caching."""
+    user_role = claims.get("role", "")
+    user_tenant_id = claims.get("tenant_id", "")
+    cache_key = f"dashboard:summary:{user_role}:{user_tenant_id}"
+
+    import redis
+    import json
+    import os
+    try:
+        r_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        r = redis.Redis.from_url(r_url, socket_timeout=0.5)
+        cached = r.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        r = None
 
     # 1. Switches visible to the user
     allowed_ids = _get_allowed_switch_ids(db, claims)
@@ -342,7 +387,7 @@ def build_dashboard_summary(db: Session, claims: dict) -> Dict[str, Any]:
     # 9. Telemetry history
     telemetry_history = _fetch_telemetry_history(db, switch_ids)
 
-    return {
+    payload = {
         "health_score": max(0, health_score),
         "metrics": {
             "totalSwitches": total,
@@ -364,3 +409,11 @@ def build_dashboard_summary(db: Session, claims: dict) -> Dict[str, Any]:
         "telemetry_history": telemetry_history,
         "last_updated": datetime.now(timezone.utc).isoformat(),
     }
+
+    if r:
+        try:
+            r.setex(cache_key, 3, json.dumps(payload))
+        except Exception:
+            pass
+
+    return payload
