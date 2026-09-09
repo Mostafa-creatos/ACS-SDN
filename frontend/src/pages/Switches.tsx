@@ -37,7 +37,8 @@ export const Switches: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
-  const [vendorFilter, setVendorFilter] = useState('ALL');
+  const [fabricFilter, setFabricFilter] = useState('ALL');
+  const [availableFabrics, setAvailableFabrics] = useState<string[]>([]);
   const [roleFilter, setRoleFilter] = useState('ALL');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -82,7 +83,7 @@ export const Switches: React.FC = () => {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
       if (statusFilter !== 'ALL') params.set('status', statusFilter);
-      if (vendorFilter !== 'ALL') params.set('vendor', vendorFilter.toLowerCase());
+      if (fabricFilter !== 'ALL') params.set('fabric', fabricFilter);
       if (roleFilter !== 'ALL') params.set('role', roleFilter.toLowerCase());
       params.set('page', String(page));
       params.set('per_page', String(itemsPerPage));
@@ -94,6 +95,9 @@ export const Switches: React.FC = () => {
         setSwitches(data.items);
         setTotalPages(data.total_pages);
         setTotalItems(data.total);
+        // Collect fabrics
+        const fabs = Array.from(new Set(data.items.map((s: any) => s.fabric_name).filter(Boolean))) as string[];
+        setAvailableFabrics(prev => Array.from(new Set([...prev, ...fabs])));
       } else {
         setSwitches([]); setTotalPages(1); setTotalItems(0);
       }
@@ -103,7 +107,7 @@ export const Switches: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [search, statusFilter, vendorFilter, roleFilter, page, selectedTenant]);
+  }, [search, statusFilter, fabricFilter, roleFilter, page, selectedTenant]);
 
   useEffect(() => { fetchSwitches(); }, [fetchSwitches]);
 
@@ -329,44 +333,49 @@ export const Switches: React.FC = () => {
       </div>
 
       {/* Filter bar */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
-        <div className="relative">
+      <div className="flex flex-col md:flex-row gap-3 items-center justify-between">
+        <div className="relative flex-1 w-full min-w-[240px]">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
           <input
             type="text"
             placeholder="Search hostname, IP, serial..."
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }}
-            className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:border-atlas-primary transition-colors"
+            className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:border-atlas-primary transition-colors shadow-sm"
           />
         </div>
-        <div className="flex items-center gap-2">
-          <ListFilter className="h-4 w-4 text-atlas-primary flex-shrink-0" />
-          <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
-            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 focus:outline-none focus:border-atlas-primary">
-            <option value="ALL">All Status</option>
-            <option value="compliant_active">Compliant</option>
-            <option value="drifted">Drifted</option>
-            <option value="discovered">Discovered</option>
-          </select>
-        </div>
-        <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-atlas-primary flex-shrink-0" />
-          <select value={vendorFilter} onChange={e => { setVendorFilter(e.target.value); setPage(1); }}
-            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 focus:outline-none focus:border-atlas-primary">
-            <option value="ALL">All Vendors</option>
-            <option value="nokia">Nokia</option>
-            <option value="dell">Dell</option>
-          </select>
-        </div>
-        <div className="flex items-center gap-2">
-          <Network className="h-4 w-4 text-atlas-primary flex-shrink-0" />
-          <select value={roleFilter} onChange={e => { setRoleFilter(e.target.value); setPage(1); }}
-            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 focus:outline-none focus:border-atlas-primary">
-            <option value="ALL">All Roles</option>
-            <option value="spine">Spine</option>
-            <option value="leaf">Leaf</option>
-          </select>
+        <div className="flex flex-wrap md:flex-nowrap items-center gap-3 w-full md:w-auto">
+          <div className="flex items-center gap-2 flex-1 md:w-44">
+            <ListFilter className="h-4 w-4 text-atlas-primary flex-shrink-0" />
+            <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
+              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 focus:outline-none focus:border-atlas-primary shadow-sm">
+              <option value="ALL">All Status</option>
+              <option value="compliant_active">Compliant</option>
+              <option value="drifted">Drifted</option>
+              <option value="discovered">Discovered</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2 flex-1 md:w-48">
+            <Filter className="h-4 w-4 text-atlas-primary flex-shrink-0" />
+            <select value={fabricFilter} onChange={e => { setFabricFilter(e.target.value); setPage(1); }}
+              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 focus:outline-none focus:border-atlas-primary shadow-sm">
+              <option value="ALL">All Fabrics</option>
+              <option value="DC1 Fabric">DC1 Fabric</option>
+              <option value="DC2 Fabric">DC2 Fabric</option>
+              {availableFabrics.filter(f => f !== 'DC1 Fabric' && f !== 'DC2 Fabric').map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2 flex-1 md:w-40">
+            <Network className="h-4 w-4 text-atlas-primary flex-shrink-0" />
+            <select value={roleFilter} onChange={e => { setRoleFilter(e.target.value); setPage(1); }}
+              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 focus:outline-none focus:border-atlas-primary shadow-sm">
+              <option value="ALL">All Roles</option>
+              <option value="spine">Spine</option>
+              <option value="leaf">Leaf</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -620,19 +629,71 @@ export const Switches: React.FC = () => {
 
                             {/* ── VLANs ── */}
                             {activeTab === 'vlans' && (
-                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                {sw.vlans && sw.vlans.length > 0 ? sw.vlans.map(vl => (
-                                  <div key={vl.vlan_id} className="p-3 bg-white border border-slate-200 rounded-xl flex items-start gap-3 shadow-sm">
-                                    <div className="h-9 w-9 rounded-lg bg-atlas-primary/10 border border-atlas-primary/20 flex items-center justify-center text-atlas-primary flex-shrink-0"><Hash className="h-4 w-4" /></div>
-                                    <div className="overflow-hidden">
-                                      <div className="text-atlas-ink font-bold text-sm">VLAN {vl.vlan_id}</div>
-                                      <div className="text-xs text-slate-500 truncate">{vl.name}</div>
-                                      {vl.member_ports && vl.member_ports.length > 0 && (
-                                        <div className="text-[10px] text-slate-400 mt-1 truncate">Ports: {vl.member_ports.join(', ')}</div>
+                              <div className="space-y-3">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-[11px] font-bold text-slate-500">Configured VLANs ({sw.vlans?.length || 0})</span>
+                                </div>
+                                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white max-h-80 overflow-y-auto shadow-sm">
+                                  <table className="w-full text-left text-xs">
+                                    <thead>
+                                      <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                                        <th className="px-4 py-3">VLAN ID</th>
+                                        <th className="px-4 py-3">VLAN Name</th>
+                                        <th className="px-4 py-3">Status</th>
+                                        <th className="px-4 py-3">Member Interfaces / Ports</th>
+                                        <th className="px-4 py-3 text-right">Port Count</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-50">
+                                      {sw.vlans && sw.vlans.length > 0 ? (
+                                        sw.vlans.map((vl) => {
+                                          const portCount = vl.member_ports?.length || 0;
+                                          return (
+                                            <tr key={vl.vlan_id} className="hover:bg-slate-50/50 font-sans">
+                                              <td className="px-4 py-3">
+                                                <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-atlas-primary/10 border border-atlas-primary/20 text-atlas-primary font-bold font-mono text-xs">
+                                                  <Hash className="w-3 h-3" />
+                                                  VLAN {vl.vlan_id}
+                                                </span>
+                                              </td>
+                                              <td className="px-4 py-3 font-semibold text-atlas-ink text-xs">
+                                                {vl.name || `VLAN_${vl.vlan_id}`}
+                                              </td>
+                                              <td className="px-4 py-3">
+                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-bold text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                                  ACTIVE
+                                                </span>
+                                              </td>
+                                              <td className="px-4 py-3">
+                                                {vl.member_ports && vl.member_ports.length > 0 ? (
+                                                  <div className="flex flex-wrap gap-1 max-w-md">
+                                                    {vl.member_ports.map((p: string) => (
+                                                      <span key={p} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-medium">
+                                                        {p}
+                                                      </span>
+                                                    ))}
+                                                  </div>
+                                                ) : (
+                                                  <span className="text-slate-300 italic text-[11px]">No member ports bound</span>
+                                                )}
+                                              </td>
+                                              <td className="px-4 py-3 text-right font-mono font-bold text-slate-600">
+                                                {portCount} ports
+                                              </td>
+                                            </tr>
+                                          );
+                                        })
+                                      ) : (
+                                        <tr>
+                                          <td colSpan={5} className="py-6 text-center text-slate-400 text-xs">
+                                            No VLANs configured on this switch.
+                                          </td>
+                                        </tr>
                                       )}
-                                    </div>
-                                  </div>
-                                )) : <div className="col-span-full py-6 text-center text-slate-400 text-sm">No VLANs on this switch.</div>}
+                                    </tbody>
+                                  </table>
+                                </div>
                               </div>
                             )}
 

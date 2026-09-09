@@ -284,11 +284,23 @@ def get_inventory_details(
     search: Optional[str] = Query(None, description="Search hostname, mgmt_ip, serial, service_tag"),
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by lifecycle_status"),
     vendor: Optional[str] = Query(None, description="Filter by vendor"),
+    role: Optional[str] = Query(None, description="Filter by role"),
+    fabric: Optional[str] = Query(None, description="Filter by fabric name"),
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(50, ge=1, le=200, description="Items per page"),
     sort_by: str = Query("hostname", description="Sort field"),
     sort_order: str = Query("asc", regex="^(asc|desc)$"),
 ):
+    # Sanitize Query objects if default FastAPI objects are passed
+    if not isinstance(search, str): search = None
+    if not isinstance(status_filter, str): status_filter = None
+    if not isinstance(vendor, str): vendor = None
+    if not isinstance(role, str): role = None
+    if not isinstance(fabric, str): fabric = None
+    if not isinstance(sort_by, str): sort_by = "hostname"
+    if not isinstance(sort_order, str): sort_order = "asc"
+    if not isinstance(page, int): page = 1
+    if not isinstance(per_page, int): per_page = 50
     user_role = claims.get("role")
     user_tenant_id = claims.get("tenant_id")
 
@@ -315,14 +327,52 @@ def get_inventory_details(
                 models.Switch.serial_number.ilike(search_term),
                 models.Switch.service_tag.ilike(search_term),
                 models.Switch.model.ilike(search_term),
+                models.Switch.lifecycle_status.ilike(search_term),
+                models.Switch.status.ilike(search_term),
+                models.Switch.role.ilike(search_term),
+                models.Switch.vendor.ilike(search_term),
             )
         )
 
     # Server-side filter
-    if status_filter:
-        query = query.filter(models.Switch.lifecycle_status == status_filter)
+    if status_filter and status_filter != "ALL":
+        st_lower = status_filter.lower()
+        if "drift" in st_lower:
+            query = query.filter(
+                or_(
+                    models.Switch.lifecycle_status.ilike("%drift%"),
+                    models.Switch.status.ilike("%drift%")
+                )
+            )
+        elif "discover" in st_lower:
+            query = query.filter(
+                or_(
+                    models.Switch.lifecycle_status.ilike("%discover%"),
+                    models.Switch.status.ilike("%discover%")
+                )
+            )
+        elif "compliant" in st_lower:
+            query = query.filter(
+                or_(
+                    models.Switch.lifecycle_status.ilike("%compliant%"),
+                    models.Switch.status.ilike("%compliant%")
+                )
+            )
+        else:
+            query = query.filter(
+                or_(
+                    models.Switch.lifecycle_status.ilike(f"%{status_filter}%"),
+                    models.Switch.status.ilike(f"%{status_filter}%")
+                )
+            )
     if vendor:
         query = query.filter(models.Switch.vendor.ilike(vendor))
+    if role:
+        query = query.filter(models.Switch.role.ilike(role))
+    if fabric:
+        query = query.join(models.Fabric, models.Switch.fabric_id == models.Fabric.fabric_id, isouter=True).filter(
+            models.Fabric.fabric_name.ilike(f"%{fabric}%")
+        )
 
     # Total count before pagination
     total_count = query.count()

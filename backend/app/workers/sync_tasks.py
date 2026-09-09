@@ -148,13 +148,15 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str, approval
     def _update_approval_result(status: str, output: str = "", error: str = ""):
         if not approval_id:
             return
+        from sqlalchemy.orm.attributes import flag_modified
+        safe_db = SessionLocal()
         try:
             approval_uuid = uuid.UUID(str(approval_id))
-            approval = db.query(models.PolicyApproval).filter(models.PolicyApproval.approval_id == approval_uuid).first()
+            approval = safe_db.query(models.PolicyApproval).filter(models.PolicyApproval.approval_id == approval_uuid).first()
             if not approval:
                 return
 
-            push_results = approval.push_results or {}
+            push_results = dict(approval.push_results or {})
             push_results[switch_id_str] = {
                 "status": status,
                 "output": output,
@@ -163,6 +165,7 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str, approval
                 "task_id": task_id,
             }
             approval.push_results = push_results
+            flag_modified(approval, "push_results")
 
             target_ids = [s.strip() for s in (approval.target_switch_serials or "").split(",") if s.strip()]
             completed = {sid: r for sid, r in push_results.items() if r.get("status") in ("SYNC_COMPLETED", "SYNC_FAILED")}
@@ -178,10 +181,12 @@ def sync_switch_config_task(self, switch_id_str: str, config_data: str, approval
             else:
                 approval.status = "in_progress"
 
-            db.commit()
+            safe_db.commit()
         except Exception as update_err:
             logger.warning(f"[SYNC TASK] Failed to update approval {approval_id}: {update_err}")
-            db.rollback()
+            safe_db.rollback()
+        finally:
+            safe_db.close()
 
     try:
         sw_uuid = uuid.UUID(switch_id_str)

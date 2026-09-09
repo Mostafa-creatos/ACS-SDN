@@ -80,7 +80,7 @@ def check_collisions(db: Session, switch_ids: List[str], config_payload: str) ->
             if collision:
                 results.append(("warn", f"[{hostname}] VLAN ID(s) {sorted(collision)} already exist"))
 
-        # --- IP collisions ---
+        # --- IP collisions (Local switch + Cross-switch IPAM Allocations) ---
         if parsed_ips:
             existing_ifs = db.query(models.DeviceInterface).filter(
                 models.DeviceInterface.switch_id == sw_uuid,
@@ -93,7 +93,19 @@ def check_collisions(db: Session, switch_ids: List[str], config_payload: str) ->
                     existing_ip_set.add(ip_no_cidr)
             collision_ips = existing_ip_set & parsed_ips
             if collision_ips:
-                results.append(("error", f"[{hostname}] IP address(es) {sorted(collision_ips)} already in use"))
+                results.append(("error", f"[{hostname}] Local IP address(es) {sorted(collision_ips)} already in use"))
+
+            # Cross-switch IPAM Allocation Check
+            ipam_allocations = db.query(models.IpamIpAllocation).filter(
+                models.IpamIpAllocation.ip_address.in_(parsed_ips)
+            ).all()
+            for alloc in ipam_allocations:
+                if alloc.assignment_type == "GATEWAY":
+                    continue
+                if alloc.bound_entity_id and hostname.lower() in alloc.bound_entity_id.lower():
+                    continue
+                bound_info = f"allocated to {alloc.bound_entity_id}" if alloc.bound_entity_id else "allocated in IPAM"
+                results.append(("warn", f"[{hostname}] IP address {alloc.ip_address} is already {bound_info}"))
 
         # --- Port-channel collisions ---
         if parsed_pcs:
