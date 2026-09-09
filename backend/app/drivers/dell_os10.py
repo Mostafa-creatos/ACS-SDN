@@ -77,7 +77,13 @@ def _push_via_collector(collector: DellOS10Collector, transport: str, config_pay
     """Apply a config payload and report whether OS10 accepted every line."""
     try:
         collector._flush_input()
-        collector._send_command("configure terminal")
+        # Reset prompt to root EXEC mode in case previous session died in a sub-mode
+        collector._send_command("end")
+        collector._flush_input()
+        out_cfg = collector._send_command("configure terminal")
+        if any(h in out_cfg for h in ("% Error", "% Invalid", "Unrecognized")):
+            collector._send_command("end")
+            collector._send_command("configure terminal")
         for line in config_payload.strip().splitlines():
             line = line.strip()
             if not line:

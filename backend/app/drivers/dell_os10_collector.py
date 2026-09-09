@@ -192,7 +192,7 @@ class DellOS10Collector:
                 return
             try:
                 old_timeout = self._channel.gettimeout()
-                self._channel.settimeout(0.05)
+                self._channel.settimeout(0.3)
                 while self._recv(8192):
                     pass
             except socket.timeout:
@@ -209,7 +209,7 @@ class DellOS10Collector:
                 return
             try:
                 old_timeout = self._client.gettimeout()
-                self._client.settimeout(0.05)
+                self._client.settimeout(0.3)
                 while self._recv(8192):
                     pass
             except socket.timeout:
