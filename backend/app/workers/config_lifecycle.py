@@ -143,21 +143,21 @@ def build_remediation_config(switch: models.Switch, rule_name: str, context: dic
         if "hostname" in name or "host-name" in name or "identity" in name:
             return f"hostname {context.get('switch.hostname', switch.hostname)}\n"
         if "ntp" in name:
-            return f"ntp server {context.get('fabric.expected_ntp_servers', '192.168.100.1')}\n"
+            return f"ntp server {context.get('fabric.expected_ntp_servers', '10.0.0.1')}\n"
         if "dns" in name:
             return f"ip name-server {context.get('fabric.expected_dns_servers', '8.8.8.8')}\n"
         if "syslog" in name or "logging" in name:
-            return f"logging server {context.get('fabric.expected_syslog_server', '10.10.100.5')}\n"
+            return f"logging server {context.get('fabric.expected_syslog_server', '10.0.0.2')}\n"
         if "lldp" in name:
             return "lldp enable\n"
         if "aaa" in name:
             return "aaa authentication login default local\n"
         if ("spanning" in name or "errdisable" in name) and ("bpduguard" in name or "bpdu" in name):
             return "errdisable recovery cause bpduguard\nerrdisable recovery interval 300\n"
-        if "spanning" in name or "mst" in name:
-            return "spanning-tree mode mst\n"
+        if "spanning" in name or "mst" in name or "rstp" in name:
+            return "spanning-tree mode rstp\n"
         if "ssh" in name:
-            return "ip ssh server enable\nip ssh server version 2\n"
+            return "ip ssh server enable\n"
         if "telnet" in name:
             return "no ip telnet server enable\n"
         if "tacacs" in name:
@@ -484,6 +484,20 @@ def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID =
                 elif "lldp" in rule.name.lower():
                     detail_msg = "LLDP protocol is not enabled globally on this device."
 
+                prev_f = prev_findings_map.get((sw.switch_id, rule.name))
+                rem_status = "open"
+                rem_task_id = None
+                rem_by = None
+                rem_at = None
+                rem_err = None
+                if prev_f:
+                    if prev_f.remediation_status in ("pending", "failed"):
+                        rem_status = prev_f.remediation_status
+                        rem_task_id = prev_f.remediation_task_id
+                        rem_by = prev_f.remediation_triggered_by
+                        rem_at = prev_f.remediation_triggered_at
+                        rem_err = prev_f.remediation_error
+
                 finding = models.ComplianceFinding(
                     finding_id=uuid.uuid4(),
                     compliance_run_id=run.run_id,
@@ -492,12 +506,34 @@ def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID =
                     severity=rule.severity,
                     detail=detail_msg,
                     expected=expected_str,
-                    remediation_status="open"
+                    remediation_status=rem_status,
+                    remediation_task_id=rem_task_id,
+                    remediation_triggered_by=rem_by,
+                    remediation_triggered_at=rem_at,
+                    remediation_error=rem_err
                 )
                 db.add(finding)
                 findings_list.append(finding)
             else:
                 passed_rules += 1
+                prev_f = prev_findings_map.get((sw.switch_id, rule.name))
+                if prev_f:
+                    finding = models.ComplianceFinding(
+                        finding_id=uuid.uuid4(),
+                        compliance_run_id=run.run_id,
+                        switch_id=sw.switch_id,
+                        rule_name=rule.name,
+                        severity=rule.severity,
+                        detail=f"Resolved: Configuration requirement '{expected_str}' is now compliant.",
+                        expected=expected_str,
+                        remediation_status="success",
+                        remediation_task_id=prev_f.remediation_task_id,
+                        remediation_triggered_by=prev_f.remediation_triggered_by,
+                        remediation_triggered_at=prev_f.remediation_triggered_at,
+                        resolved_at=datetime.datetime.now(datetime.timezone.utc)
+                    )
+                    db.add(finding)
+                    findings_list.append(finding)
 
     cached_hostnames = [sw.hostname for sw in switches if sw.switch_id in cached_switch_ids]
     summary_data = {
@@ -700,14 +736,14 @@ def apply_remediation(self, finding_id_str: str):
 
         fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == switch.fabric_id).first()
         context = {
-            "fabric.expected_ntp_servers": fabric.expected_ntp_servers if fabric and fabric.expected_ntp_servers else "192.168.100.1",
+            "fabric.expected_ntp_servers": fabric.expected_ntp_servers if fabric and fabric.expected_ntp_servers else "10.0.0.1",
             "fabric.expected_dns_servers": fabric.expected_dns_servers if fabric and fabric.expected_dns_servers else "8.8.8.8",
-            "fabric.expected_syslog_server": fabric.expected_syslog_server if fabric and fabric.expected_syslog_server else "10.10.100.5",
+            "fabric.expected_syslog_server": fabric.expected_syslog_server if fabric and fabric.expected_syslog_server else "10.0.0.2",
             "fabric.global_bgp_asn": str(fabric.global_bgp_asn) if fabric else "65000",
             "switch.hostname": switch.hostname,
             "switch.management_ip": switch.management_ip,
             "switch.local_bgp_asn": str(switch.local_bgp_asn),
-            "switch.loopback_0_ip": switch.loopback_0_ip
+            "switch.loopback_0_ip": switch.loopback_0_ip or ""
         }
         config_payload = build_remediation_config(switch, finding.rule_name, context)
 
@@ -737,6 +773,13 @@ def apply_remediation(self, finding_id_str: str):
         finding.remediation_status = "success" if success else "failed"
         finding.remediation_error = None if success else (result.get("output", "") or "Config push failed")[:2000]
         finding.resolved_at = datetime.datetime.now(datetime.timezone.utc) if success else None
+
+        if success:
+            try:
+                take_config_snapshot(db, switch.switch_id, "remediation-engine")
+            except Exception as e:
+                logger.warning(f"[REMEDIATION] Failed to refresh running config snapshot post remediation: {e}")
+
         db.commit()
 
         return {
