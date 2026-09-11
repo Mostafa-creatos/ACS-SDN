@@ -268,7 +268,10 @@ def discover_dell_switch(sw, db: Session):
 
         seen_vlans = set()
         for vl in vlans:
-            vid = vl.get("vlan_id", 1)
+            try:
+                vid = int(vl.get("vlan_id", 1))
+            except Exception:
+                continue
             if vid in seen_vlans:
                 continue
             seen_vlans.add(vid)
@@ -482,9 +485,14 @@ def discover_dell_switch(sw, db: Session):
                 logger.info(f"[Dell Discovery] Failed to save STP state: {stp_err}")
 
     except Exception as e:
-        logger.info(f"[Dell Discovery] SSH discovery failed for {sw.hostname}: {e}")
-        sw.status = "Down"
-        db.commit()
+        db.rollback()
+        target_sw_id = getattr(sw, "switch_id", None)
+        logger.info(f"[Dell Discovery] SSH discovery failed: {e}")
+        if target_sw_id:
+            sw_obj = db.query(models.Switch).filter(models.Switch.switch_id == target_sw_id).first()
+            if sw_obj:
+                sw_obj.status = "Down"
+                db.commit()
         endpoints = []
         mac_to_ip = {}
         
