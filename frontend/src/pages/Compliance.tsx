@@ -488,8 +488,9 @@ export const Compliance: React.FC = () => {
         const swFindings = findingsBySwitch[sw.switch_id] || [];
         const openCount = swFindings.filter(f => f.remediation_status === 'open').length;
         const pendingCount = swFindings.filter(f => f.remediation_status === 'pending').length;
+        const failedCount = swFindings.filter(f => f.remediation_status === 'failed').length;
         const isRunCompleted = data?.status === 'completed';
-        const isCompliant = isRunCompleted && !isUnreachable && openCount === 0 && pendingCount === 0;
+        const isCompliant = isRunCompleted && !isUnreachable && openCount === 0 && pendingCount === 0 && failedCount === 0;
 
         return {
           switch_id: sw.switch_id,
