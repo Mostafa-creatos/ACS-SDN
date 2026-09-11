@@ -221,8 +221,9 @@ def _compliance_remediation_summary(db: Session, run_id: uuid.UUID) -> dict:
 @router.get("/api/v5/visibility/compliance/latest")
 def get_latest_compliance(
     page: int = 1,
-    page_size: int = 25,
-    severity: Optional[str] = None,    switch_id: Optional[str] = None,
+    page_size: int = 1000,
+    severity: Optional[str] = None,
+    switch_id: Optional[str] = None,
     status: Optional[str] = None,
     db: Session = Depends(get_db),
     claims: dict = Depends(require_permission("compliance:run"))
