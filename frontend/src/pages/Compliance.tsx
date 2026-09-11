@@ -523,6 +523,11 @@ export const Compliance: React.FC = () => {
     );
   }, [inventorySwitches, data, switchFilter]);
 
+  const [switchPage, setSwitchPage] = useState(1);
+  const SWITCHES_PER_PAGE = 10;
+  const totalSwitchPages = Math.ceil((switchCards?.length || 0) / SWITCHES_PER_PAGE) || 1;
+  const pagedSwitchCards = (switchCards || []).slice((switchPage - 1) * SWITCHES_PER_PAGE, switchPage * SWITCHES_PER_PAGE);
+
   const handleSeverityChange = async (ruleId: string, val: string) => {
     const orig = rules.find(r => r.rule_id === ruleId)?.severity || 'info';
     setRules(prev => prev.map(r => r.rule_id === ruleId ? { ...r, severity: val } : r));
@@ -542,8 +547,6 @@ export const Compliance: React.FC = () => {
   const uniqueSwitches = inventorySwitches.length > 0
     ? inventorySwitches.map(sw => ({ id: sw.switch_id, hostname: sw.hostname }))
     : data ? Object.values(data.findings || []).map(f => ({ id: f.switch_id, hostname: f.switch_hostname })) : [];
-
-  const pagination = data?.pagination;
 
   return (
     <div className="space-y-6 font-sans">
@@ -577,7 +580,7 @@ export const Compliance: React.FC = () => {
         </div>
       )}
 
-      {/* ── Stats Row ──────────────────────────────────────────────────────── */}
+      {/* ── Stats Row ────────────────────────────────────────────────        */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
 
         {/* Score Gauge */}
@@ -649,14 +652,19 @@ export const Compliance: React.FC = () => {
         </Card>
       </div>
 
-      {/* ── Tab Bar ────────────────────────────────────────────────────────── */}
+      {/* ── Navigation Tabs ────────────────────────────────────────────────── */}
       <div className="flex border-b border-slate-200">
         {(['findings', 'rules', 'history'] as const).map(tab => (
-          <button key={tab} onClick={() => setActiveTab(tab)}
-            className={`px-4 pb-3 text-xs uppercase tracking-wider font-extrabold border-b-2 transition-all duration-200 ${
-              activeTab === tab ? 'border-atlas-primary text-atlas-primary' : 'border-transparent text-slate-400 hover:text-slate-600'
-            }`}>
-            {tab === 'findings' && `Open Findings (${data?.summary?.open ?? 0})`}
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`pb-3 px-4 text-xs font-bold transition-all relative ${
+              activeTab === tab
+                ? 'text-atlas-primary border-b-2 border-atlas-primary'
+                : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            {tab === 'findings' && `Open Findings (${data?.findings?.filter(f => f.remediation_status === 'open').length ?? 0})`}
             {tab === 'rules' && `Audit Policies (${rules.length})`}
             {tab === 'history' && <span className="flex items-center gap-1"><History className="w-3.5 h-3.5" />Run History</span>}
           </button>
@@ -670,12 +678,12 @@ export const Compliance: React.FC = () => {
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4 mb-4">
             <h3 className="text-base font-bold font-display text-atlas-ink">
               Golden Configuration Findings
-              {pagination && <span className="ml-2 text-xs font-normal text-slate-400">({pagination.total_items} total)</span>}
+              <span className="ml-2 text-xs font-normal text-slate-400">({switchCards.length} switches)</span>
             </h3>
             <div className="flex gap-2 flex-wrap">
               {/* Switch filter */}
               <div className="relative">
-                <select value={switchFilter} onChange={e => { setSwitchFilter(e.target.value); setPage(1); }}
+                <select value={switchFilter} onChange={e => { setSwitchFilter(e.target.value); setPage(1); setSwitchPage(1); }}
                   className="appearance-none bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-600 py-1.5 pl-3 pr-7 rounded-lg outline-none cursor-pointer">
                   <option value="">All Switches</option>
                   {uniqueSwitches.map(s => <option key={s.id} value={s.id}>{s.hostname}</option>)}
@@ -684,7 +692,7 @@ export const Compliance: React.FC = () => {
               </div>
               {/* Severity filter */}
               <div className="relative">
-                <select value={severityFilter} onChange={e => { setSeverityFilter(e.target.value); setPage(1); }}
+                <select value={severityFilter} onChange={e => { setSeverityFilter(e.target.value); setPage(1); setSwitchPage(1); }}
                   className="appearance-none bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-600 py-1.5 pl-3 pr-7 rounded-lg outline-none cursor-pointer">
                   <option value="">All Severities</option>
                   <option value="critical">Critical</option>
@@ -695,7 +703,7 @@ export const Compliance: React.FC = () => {
               </div>
               {/* Status filter */}
               <div className="relative">
-                <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
+                <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1); setSwitchPage(1); }}
                   className="appearance-none bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-600 py-1.5 pl-3 pr-7 rounded-lg outline-none cursor-pointer">
                   <option value="">All Statuses</option>
                   <option value="open">Open</option>
@@ -724,7 +732,7 @@ export const Compliance: React.FC = () => {
             ) : !switchCards || switchCards.length === 0 ? (
               <p className="text-xs text-slate-400 text-center py-8">No inventory switches match the selected filters.</p>
             ) : (
-              switchCards.map((sc: any) => (
+              pagedSwitchCards.map((sc: any) => (
                 <SwitchGroup
                   key={sc.switch_id}
                   hostname={sc.hostname}
@@ -741,38 +749,33 @@ export const Compliance: React.FC = () => {
             )}
           </div>
 
-          {/* Pagination */}
-          {pagination && pagination.total_pages > 1 && (
+          {/* Switch Pagination (10 switches per page) */}
+          {totalSwitchPages > 1 && (
             <div className="flex items-center justify-between pt-4 mt-4 border-t border-slate-100">
-              <span className="text-xs text-slate-400">
-                Page {pagination.page} of {pagination.total_pages} · {pagination.total_items} findings
+              <span className="text-xs text-slate-400 font-medium">
+                Page {switchPage} of {totalSwitchPages} · Showing {(switchPage - 1) * SWITCHES_PER_PAGE + 1} – {Math.min(switchPage * SWITCHES_PER_PAGE, switchCards.length)} of {switchCards.length} switches
               </span>
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={pagination.page <= 1}
+                  onClick={() => setSwitchPage(p => Math.max(1, p - 1))}
+                  disabled={switchPage <= 1}
                   className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
-                {Array.from({ length: Math.min(5, pagination.total_pages) }, (_, i) => {
-                  const startPage = Math.max(1, pagination.page - 2);
-                  const p = startPage + i;
-                  if (p > pagination.total_pages) return null;
-                  return (
-                    <button key={p} onClick={() => setPage(p)}
-                      className={`w-8 h-8 text-xs font-bold rounded-lg border transition-colors ${
-                        p === pagination.page
-                          ? 'bg-atlas-primary text-white border-atlas-primary'
-                          : 'border-slate-200 text-slate-500 hover:bg-slate-50'
-                      }`}>
-                      {p}
-                    </button>
-                  );
-                })}
+                {Array.from({ length: totalSwitchPages }, (_, i) => i + 1).map(p => (
+                  <button key={p} onClick={() => setSwitchPage(p)}
+                    className={`w-8 h-8 text-xs font-bold rounded-lg border transition-colors ${
+                      p === switchPage
+                        ? 'bg-atlas-primary text-white border-atlas-primary'
+                        : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+                    }`}>
+                    {p}
+                  </button>
+                ))}
                 <button
-                  onClick={() => setPage(p => Math.min(pagination.total_pages, p + 1))}
-                  disabled={pagination.page >= pagination.total_pages}
+                  onClick={() => setSwitchPage(p => Math.min(totalSwitchPages, p + 1))}
+                  disabled={switchPage >= totalSwitchPages}
                   className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   <ChevronRightIcon className="w-4 h-4" />

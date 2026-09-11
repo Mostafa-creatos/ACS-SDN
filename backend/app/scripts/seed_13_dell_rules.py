@@ -22,23 +22,28 @@ def seed_dell_rules():
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
-                name="TACACS Server Configuration", category="Security", severity="critical", match_type="regex",
-                template_pattern=r"tacacs-server host 10\.10\.10\.10", remediation_guide="Configure primary TACACS+ server for AAA.", is_active=True
+                name="DNS Name Servers", category="Security", severity="critical", match_type="contains",
+                template_pattern="ip name-server {fabric.expected_dns_servers}", remediation_guide="Add the fabric DNS resolver under ip name-server.", is_active=True
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
-                name="AAA Authentication", category="Security", severity="critical", match_type="contains",
-                template_pattern="aaa authentication login default group tacacs+ local", remediation_guide="Enable AAA authentication with TACACS+ fallback to local.", is_active=True
+                name="AAA Local Authentication", category="Security", severity="critical", match_type="contains",
+                template_pattern="aaa authentication login default local", remediation_guide="Enable AAA local login authentication on the device.", is_active=True
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
-                name="SSH Server Enable", category="Security", severity="critical", match_type="regex",
-                template_pattern=r"SSH Server:\s+Enabled", remediation_guide="Enable SSH server for secure management access.", is_active=True
+                name="SSH Server Enable", category="Security", severity="critical", match_type="contains",
+                template_pattern="ip ssh server enable", remediation_guide="Enable SSH server for secure management access.", is_active=True
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
-                name="Syslog Logging Server", category="Observability", severity="warning", match_type="regex",
-                template_pattern=r"logging server {fabric.expected_syslog_server}", remediation_guide="Point centralized logging at the fabric syslog collector.", is_active=True
+                name="Syslog Logging Server", category="Observability", severity="warning", match_type="contains",
+                template_pattern="logging host {fabric.expected_syslog_server}", remediation_guide="Point centralized logging at the fabric syslog collector.", is_active=True
+            ),
+            models.ComplianceRule(
+                rule_id=uuid.uuid4(),
+                name="LLDP Activation", category="Observability", severity="warning", match_type="contains",
+                template_pattern="lldp enable", remediation_guide="Enable LLDP globally and per-interface for neighbor discovery.", is_active=True
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
@@ -52,18 +57,28 @@ def seed_dell_rules():
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
+                name="Spanning-Tree RSTP Mode", category="Layer-2", severity="critical", match_type="contains",
+                template_pattern="spanning-tree mode rstp", remediation_guide="Configure Rapid Spanning Tree Protocol (RSTP) mode.", is_active=True
+            ),
+            models.ComplianceRule(
+                rule_id=uuid.uuid4(),
                 name="Errdisable BPDU Guard Recovery", category="Layer-2", severity="warning", match_type="contains",
                 template_pattern="errdisable recovery cause bpduguard", remediation_guide="Enable errdisable recovery for BPDU Guard violations.", is_active=True
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
-                name="SNMPv3 Group", category="Observability", severity="warning", match_type="contains",
-                template_pattern="snmp-server group READ_ONLY 3 auth read RESTRICTED_VIEW", remediation_guide="Configure SNMPv3 read-only group with restricted view.", is_active=True
+                name="VLT Domain 1 Configured", category="Redundancy", severity="critical", match_type="contains",
+                template_pattern="vlt-domain 1", remediation_guide="Configure Virtual Link Trunking (VLT) Domain 1.", is_active=True
             ),
             models.ComplianceRule(
                 rule_id=uuid.uuid4(),
-                name="Management ACL", category="Security", severity="critical", match_type="contains",
-                template_pattern="ip access-list MGMT-ACL", remediation_guide="Configure management access control list.", is_active=True
+                name="BGP Local ASN Match", category="Routing", severity="critical", match_type="contains",
+                template_pattern="router bgp {switch.local_bgp_asn}", remediation_guide="Ensure BGP router process uses assigned local ASN.", is_active=True
+            ),
+            models.ComplianceRule(
+                rule_id=uuid.uuid4(),
+                name="BGP Router ID", category="Routing", severity="warning", match_type="contains",
+                template_pattern="bgp router-id {switch.loopback_0_ip}", remediation_guide="Set BGP router ID to loopback 0 IP address.", is_active=True
             ),
         ]
 
