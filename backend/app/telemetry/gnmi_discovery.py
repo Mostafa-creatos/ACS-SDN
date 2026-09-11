@@ -1048,88 +1048,8 @@ def run_gnmi_discovery(db: Session):
                     db_inf.neighbor = neighbor_name
             db.commit()
             
-    # 2b. Fallback Adjacency Engine: MAC-Adjacency and IP-Subnet correlation
-    try:
-        # Build MAC -> (Switch, Port) registry
-        mac_registry = {}
-        node_id_to_sw = {}
-
-        for s in switches:
-            if s.management_mac:
-                c_mac = s.management_mac.upper().replace(":", "").replace("-", "").replace(".", "")
-                mac_registry[c_mac] = (s, "ethernet1/1/1")
-
-            # Extract node_id from hostname for PNetLab MAC pattern (50:24:c3:00:{node_id:02x}:00)
-            sw_name = (s.hostname or "").lower()
-            nid = None
-            if "spine-1" in sw_name and "dc1" in sw_name: nid = 1
-            elif "spine-2" in sw_name and "dc1" in sw_name: nid = 2
-            elif "leaf-1" in sw_name and "dc1" in sw_name: nid = 3
-            elif "leaf-2" in sw_name and "dc1" in sw_name: nid = 4
-            elif "leaf-3" in sw_name and "dc1" in sw_name: nid = 5
-            elif "leaf-4" in sw_name and "dc1" in sw_name: nid = 6
-            elif "leaf-5" in sw_name and "dc1" in sw_name: nid = 7
-            elif "leaf-6" in sw_name and "dc1" in sw_name: nid = 8
-            elif "leaf-7" in sw_name and "dc1" in sw_name: nid = 9
-            elif "leaf-8" in sw_name and "dc1" in sw_name: nid = 10
-            elif "spine-1" in sw_name and "dc2" in sw_name: nid = 11
-            elif "spine-2" in sw_name and "dc2" in sw_name: nid = 12
-            elif "leaf-1" in sw_name and "dc2" in sw_name: nid = 13
-            elif "leaf-2" in sw_name and "dc2" in sw_name or "000e0d" in sw_name: nid = 14
-            elif "leaf-3" in sw_name and "dc2" in sw_name or "000f0d" in sw_name: nid = 15
-
-            if nid is not None:
-                node_id_to_sw[nid] = s
-                base_mac = f"5024C300{nid:02X}00"
-                mac_registry[base_mac] = (s, "ethernet1/1/1")
-
-            db_infs = db.query(models.DeviceInterface).filter(models.DeviceInterface.switch_id == s.switch_id).all()
-            for inf in db_infs:
-                if inf.mac_address:
-                    c_m = inf.mac_address.upper().replace(":", "").replace("-", "").replace(".", "")
-                    if len(c_m) == 12:
-                        mac_registry[c_m] = (s, inf.name)
-
-        # Cross-reference endpoints / MAC entries to infer inter-switch L2 links
-        existing_pair_keys = {(l["ip"], l["port"]) for l in all_lldp_links}
-        for ep in all_discovered_endpoints:
-            mac_clean = ep.get("mac_address", "").upper().replace(":", "").replace("-", "").replace(".", "")
-            
-            remote_info = mac_registry.get(mac_clean)
-            if not remote_info and mac_clean.startswith("5024C300") and len(mac_clean) == 12:
-                try:
-                    target_nid = int(mac_clean[8:10], 16)
-                    target_sw = node_id_to_sw.get(target_nid)
-                    if target_sw:
-                        remote_info = (target_sw, "ethernet1/1/1")
-                except Exception:
-                    pass
-
-            if remote_info:
-                remote_s, remote_p = remote_info
-                local_sw = db.query(models.Switch).filter(models.Switch.switch_id == ep["switch_id"]).first()
-                if local_sw and remote_s and local_sw.switch_id != remote_s.switch_id:
-                    # Prevent cross-fabric leaf-to-leaf synthetic edges
-                    if local_sw.role == 'leaf' and remote_s.role == 'leaf' and local_sw.fabric_id != remote_s.fabric_id:
-                        continue
-
-                    local_p = ep["port"]
-                    if (local_sw.management_ip, local_p) not in existing_pair_keys:
-                        all_lldp_links.append({
-                            "ip": local_sw.management_ip,
-                            "local_hostname": local_sw.hostname,
-                            "port": local_p,
-                            "remote_name": remote_s.hostname,
-                            "remote_port": remote_p or local_p,
-                            "protocol": "MAC-Adjacency"
-                        })
-                        existing_pair_keys.add((local_sw.management_ip, local_p))
-
-        # Dynamic LLDP and MAC Adjacency topology engine (no hardcoded fallback injection)
-    except Exception as fallback_ex:
-        logger.info(f"[DISCOVERY] Topology processing notice: {fallback_ex}")
-
-    # 3. Process LLDP and fallback links to construct/update TopologyEdge with Age-Out State Machine
+    # 3. Process LLDP links to construct/update TopologyEdge with Age-Out State Machine
+    from sqlalchemy import or_, and_
     seen_pairs = set()
     active_edge_ids = set()
     now_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -1148,10 +1068,8 @@ def run_gnmi_discovery(db: Session):
         remote_sw = None
         if remote_name:
             remote_sw = host_to_sw.get(normalize_hostname(remote_name))
-            # Fallback: try the raw name too
             if remote_sw is None:
                 remote_sw = host_to_sw.get(remote_name)
-            # Fallback: resolve containerlab default names mapping to database hostnames
             if remote_sw is None:
                 norm_rem = normalize_hostname(remote_name).lower().replace("-", "").replace("_", "")
                 for hname, sw_obj in host_to_sw.items():
@@ -1180,51 +1098,77 @@ def run_gnmi_discovery(db: Session):
             remote_sw = mac_to_sw.get(clean_chassis)
 
         if local_sw and remote_sw and local_sw.switch_id != remote_sw.switch_id:
-            l_port = l["port"].lower()
-            r_port = str(l.get("remote_port", "")).lower()
-
-            is_mgmt = "mgmt" in l_port or "management" in l_port or "mgmt" in r_port or "management" in r_port
-            proto = l.get("protocol") or ("OOB-MGMT" if is_mgmt else "LLDP")
+            l_port = l["port"]
             remote_port_str = l["remote_port"]
 
-            pair_key = (local_sw.hostname, l["port"], remote_sw.hostname, remote_port_str)
-            if pair_key in seen_pairs:
+            pair_key = (local_sw.hostname, l_port, remote_sw.hostname, remote_port_str)
+            rev_pair_key = (remote_sw.hostname, remote_port_str, local_sw.hostname, l_port)
+            if pair_key in seen_pairs or rev_pair_key in seen_pairs:
                 continue
             seen_pairs.add(pair_key)
+            seen_pairs.add(rev_pair_key)
 
-            # Format a sorted key to identify unique edge
-            key = tuple(sorted([local_sw.hostname, remote_sw.hostname]))
-            discovered_edge_keys.add(key)
-            
-            edge = db.query(models.TopologyEdge).filter(
-                models.TopologyEdge.local_switch == local_sw.hostname,
-                models.TopologyEdge.local_port == l["port"],
-                models.TopologyEdge.remote_switch == remote_sw.hostname,
-                models.TopologyEdge.remote_port == remote_port_str
+            # Check interface operational status for both ports
+            local_inf = db.query(models.DeviceInterface).filter(
+                models.DeviceInterface.switch_id == local_sw.switch_id,
+                models.DeviceInterface.name == l_port
             ).first()
-            
+            remote_inf = db.query(models.DeviceInterface).filter(
+                models.DeviceInterface.switch_id == remote_sw.switch_id,
+                models.DeviceInterface.name == remote_port_str
+            ).first()
+
+            is_port_down = False
+            if local_inf and str(local_inf.status).lower() in ("down", "disabled", "admin_down", "testing"):
+                is_port_down = True
+            if remote_inf and str(remote_inf.status).lower() in ("down", "disabled", "admin_down", "testing"):
+                is_port_down = True
+
+            proto = l.get("protocol") or ("OOB-MGMT" if ("mgmt" in l_port.lower() or "mgmt" in str(remote_port_str).lower()) else "LLDP")
+
+            # Bidirectional query for existing edge
+            edge = db.query(models.TopologyEdge).filter(
+                or_(
+                    and_(
+                        models.TopologyEdge.local_switch == local_sw.hostname,
+                        models.TopologyEdge.local_port == l_port,
+                        models.TopologyEdge.remote_switch == remote_sw.hostname,
+                        models.TopologyEdge.remote_port == remote_port_str
+                    ),
+                    and_(
+                        models.TopologyEdge.local_switch == remote_sw.hostname,
+                        models.TopologyEdge.local_port == remote_port_str,
+                        models.TopologyEdge.remote_switch == local_sw.hostname,
+                        models.TopologyEdge.remote_port == l_port
+                    )
+                )
+            ).first()
+
+            target_state = "down" if is_port_down else "up"
+
             if not edge:
                 edge = models.TopologyEdge(
                     edge_id=uuid.uuid4(),
                     local_switch=local_sw.hostname,
-                    local_port=l["port"],
+                    local_port=l_port,
                     remote_switch=remote_sw.hostname,
                     remote_port=remote_port_str,
                     protocol=proto,
-                    state="up",
+                    state=target_state,
                     last_seen=now_utc
                 )
                 db.add(edge)
             else:
                 edge.protocol = proto
-                edge.state = "up"
-                edge.last_seen = now_utc
+                edge.state = target_state
+                if target_state == "up":
+                    edge.last_seen = now_utc
 
             if edge.edge_id:
                 active_edge_ids.add(edge.edge_id)
 
     # Age-out & topology change lifecycle:
-    # 1. Edges not updated for > 180s whose local switch is reachable are marked "down"
+    # 1. Edges not updated or missing from LLDP are marked "down"
     # 2. Edges "down" for > 300s (5 minutes) or whose switches no longer exist are purged.
     all_db_edges = db.query(models.TopologyEdge).all()
     valid_hostnames = {s.hostname for s in switches}
@@ -1235,7 +1179,6 @@ def run_gnmi_discovery(db: Session):
             continue
             
         if edge.edge_id not in active_edge_ids:
-            # Calculate age in seconds
             edge_last_seen = edge.last_seen
             if edge_last_seen is not None:
                 if edge_last_seen.tzinfo is None:
@@ -1245,16 +1188,13 @@ def run_gnmi_discovery(db: Session):
                 age_seconds = 9999
                 
             if age_seconds > 300:
-                # Age-out: purge stale disconnected edges after 5 minutes
                 db.delete(edge)
             else:
-                # Mark missing link down immediately so topology renders RED cable
                 edge.state = "down"
 
     db.commit()
             
-    # 4. Update DiscoveredEndpoint records in DB
-    # Clean up endpoints for the switches audited in this run
+    # 4. Update DiscoveredEndpoint records in DB with deduplication
     audited_switch_ids = [sw.switch_id for sw in switches if sw.status == "Up"]
     if audited_switch_ids:
         db.query(models.DiscoveredEndpoint).filter(
@@ -1267,10 +1207,15 @@ def run_gnmi_discovery(db: Session):
         "aa:c1:ab:3e:d2:86": "10.1.20.10", # client-02
     }
 
-    # Consistently format and insert newly discovered MAC/IP endpoints
+    seen_endpoint_keys = set()
     for ep in all_discovered_endpoints:
         clean_mac = ep["mac_address"].lower()
         ip_addr = ep.get("ip_address") or global_mac_to_ip.get(clean_mac) or FALLBACK_MAC_TO_IP.get(clean_mac)
+        ep_key = (clean_mac, ep.get("vlan_id", 1), ep["switch_id"], ep["port"])
+        if ep_key in seen_endpoint_keys:
+            continue
+        seen_endpoint_keys.add(ep_key)
+
         new_ep = models.DiscoveredEndpoint(
             endpoint_id=uuid.uuid4(),
             mac_address=clean_mac,
@@ -1281,5 +1226,9 @@ def run_gnmi_discovery(db: Session):
         )
         db.add(new_ep)
         
-    db.commit()
+    try:
+        db.commit()
+    except Exception as ep_err:
+        db.rollback()
+        logger.warning(f"[DISCOVERY] DiscoveredEndpoint commit notice: {ep_err}")
     logger.info("[DISCOVERY] Discovery sync completed successfully.")
