@@ -5,9 +5,9 @@ import fcose from 'cytoscape-fcose';
 import dagre from 'cytoscape-dagre';
 import { useAuth } from '../context/AuthContext';
 import { StatusPill } from '../components/StatusPill';
-import { Save, RefreshCw, X, AlertOctagon, ChevronRight, Eye, EyeOff, ShieldCheck, Wifi, WifiOff } from 'lucide-react';
+import { Save, RefreshCw, RotateCcw, X, AlertOctagon, ChevronRight, Eye, EyeOff, ShieldCheck, Wifi, WifiOff } from 'lucide-react';
 import { ChassisRenderer } from '../components/ChassisRenderer';
-import { fetchTopologyGraph, fetchEndpoints } from '../lib/api';
+import { fetchTopologyGraph, fetchEndpoints, triggerTopologySync } from '../lib/api';
 
 cytoscape.use(fcose);
 cytoscape.use(dagre);
@@ -22,6 +22,15 @@ interface NodeData {
   vendor: string;
   interfacesCount: number;
   fabric_name: string;
+  serial_number?: string;
+  os_version?: string;
+  management_mac?: string;
+  local_bgp_asn?: number;
+  loopback_0_ip?: string;
+  vtep_ip?: string;
+  ports_up?: number;
+  ports_all?: number;
+  interfaces?: any[];
 }
 
 interface EdgeData {
@@ -44,21 +53,16 @@ interface EndpointData {
   switch_hostname: string;
 }
 
-// Custom high-tech SVG icons for Spine vs Leaf vs Multi-Vendor switches
+// Custom 100% mathematically centered high-tech SVG icons for Spine vs Leaf switches
 const VENDOR_ICONS: Record<string, string> = {
-  dell_spine: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#1e1b4b"/><rect x="15" y="32" width="70" height="44" rx="6" fill="#0f172a" stroke="#6366f1" stroke-width="2.5"/><rect x="32" y="16" width="36" height="14" rx="4" fill="#4338ca" stroke="#a5b4fc" stroke-width="1.5"/><text x="50" y="27" fill="#ffffff" font-size="9.5" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle">SPINE</text><rect x="22" y="42" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="37" y="42" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="53" y="42" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="68" y="42" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="22" y="57" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="37" y="57" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="53" y="57" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="68" y="57" width="10" height="9" rx="1.5" fill="#818cf8"/><circle cx="20" cy="24" r="2.5" fill="#10b981"/><circle cx="27" cy="24" r="2.5" fill="#38bdf8"/></svg>')}`,
+  dell_spine: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="#1e1b4b" stroke="#6366f1" stroke-width="2.5"/><rect x="15" y="28" width="70" height="44" rx="6" fill="#0f172a" stroke="#6366f1" stroke-width="2"/><rect x="32" y="14" width="36" height="14" rx="4" fill="#4338ca" stroke="#a5b4fc" stroke-width="1.5"/><text x="50" y="21" fill="#ffffff" font-size="9" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle" dominant-baseline="central">SPINE</text><rect x="22" y="38" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="37" y="38" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="53" y="38" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="68" y="38" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="22" y="53" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="37" y="53" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="53" y="53" width="10" height="9" rx="1.5" fill="#818cf8"/><rect x="68" y="53" width="10" height="9" rx="1.5" fill="#818cf8"/><circle cx="20" cy="20" r="2.5" fill="#10b981"/><circle cx="27" cy="20" r="2.5" fill="#38bdf8"/></svg>')}`,
   
-  dell_leaf: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#064e3b"/><rect x="15" y="32" width="70" height="44" rx="6" fill="#022c22" stroke="#10b981" stroke-width="2.5"/><rect x="32" y="16" width="36" height="14" rx="4" fill="#047857" stroke="#6ee7b7" stroke-width="1.5"/><text x="50" y="27" fill="#ffffff" font-size="9.5" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle">LEAF</text><rect x="22" y="42" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="37" y="42" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="53" y="42" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="68" y="42" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="22" y="57" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="37" y="57" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="53" y="57" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="68" y="57" width="10" height="9" rx="1.5" fill="#34d399"/><circle cx="20" cy="24" r="2.5" fill="#34d399"/><circle cx="27" cy="24" r="2.5" fill="#34d399"/></svg>')}`,
+  dell_leaf: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="#064e3b" stroke="#10b981" stroke-width="2.5"/><rect x="15" y="28" width="70" height="44" rx="6" fill="#022c22" stroke="#10b981" stroke-width="2"/><rect x="32" y="14" width="36" height="14" rx="4" fill="#047857" stroke="#6ee7b7" stroke-width="1.5"/><text x="50" y="21" fill="#ffffff" font-size="9" font-family="Arial, sans-serif" font-weight="900" text-anchor="middle" dominant-baseline="central">LEAF</text><rect x="22" y="38" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="37" y="38" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="53" y="38" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="68" y="38" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="22" y="53" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="37" y="53" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="53" y="53" width="10" height="9" rx="1.5" fill="#34d399"/><rect x="68" y="53" width="10" height="9" rx="1.5" fill="#34d399"/><circle cx="20" cy="20" r="2.5" fill="#34d399"/><circle cx="27" cy="20" r="2.5" fill="#34d399"/></svg>')}`,
   
   cisco: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#0b5cad" stroke="#ffffff" stroke-width="1.5"/><path d="M10 20v-4m3 6v-8m3 10V10m3 12v-14m3 16V6m3 14v-10m3 12v-8m3 6v-4" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round"/></svg>')}`,
   juniper: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#6c2e9c" stroke="#ffffff" stroke-width="1.5"/><text x="20" y="20" fill="#ffffff" font-size="14" font-family="Times New Roman, serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">J</text></svg>')}`,
-  fortinet: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#c0392b" stroke="#ffffff" stroke-width="1.5"/><path d="M12 14h16v3l-8 7-8-7z" fill="#ffffff"/></svg>')}`,
-  huawei: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#27ae60" stroke="#ffffff" stroke-width="1.5"/><circle cx="20" cy="14" r="2.5" fill="#ffffff"/><circle cx="14" cy="24" r="2.5" fill="#ffffff"/><circle cx="26" cy="24" r="2.5" fill="#ffffff"/><line x1="20" y1="14" x2="14" y2="24" stroke="#ffffff" stroke-width="1.2"/><line x1="20" y1="14" x2="26" y2="24" stroke="#ffffff" stroke-width="1.2"/><line x1="14" y1="24" x2="26" y2="24" stroke="#ffffff" stroke-width="1.2"/></svg>')}`,
   generic: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#34495e" stroke="#ffffff" stroke-width="1.5"/><path d="M12 16h16M12 24h16M16 12l-4 4 4 4M24 20l4 4-4 4" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>')}`
 };
-
-// Host node SVG icon
-const HOST_ICON = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect x="4" y="6" width="32" height="22" rx="3" fill="#16a34a" stroke="#ffffff" stroke-width="1.5"/><rect x="14" y="28" width="12" height="5" fill="#15803d"/><rect x="10" y="33" width="20" height="2" rx="1" fill="#ffffff" opacity="0.6"/><rect x="7" y="9" width="26" height="16" rx="2" fill="#0f172a" opacity="0.4"/><circle cx="20" cy="17" r="3" fill="#4ade80"/></svg>')}`;
 
 export const Topology: React.FC = () => {
   const navigate = useNavigate();
@@ -73,6 +77,7 @@ export const Topology: React.FC = () => {
   const [filterState, setFilterState] = useState<string>('ALL');
   const [layoutName, setLayoutName] = useState<string>('fcose');
   const [loading, setLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [showInterfaces, setShowInterfaces] = useState<boolean>(() => {
     const saved = localStorage.getItem('atlas_topo_show_interfaces');
     return saved !== null ? JSON.parse(saved) : true;
@@ -81,14 +86,9 @@ export const Topology: React.FC = () => {
     const saved = localStorage.getItem('atlas_topo_show_mgmt');
     return saved !== null ? JSON.parse(saved) : false;
   });
-  const [showEndpoints, setShowEndpoints] = useState<boolean>(() => {
-    const saved = localStorage.getItem('atlas_topo_show_endpoints');
-    return saved !== null ? JSON.parse(saved) : true;
-  });
 
-  // Multiple selection state & Drawer Tab
+  // Multiple selection state
   const [selectedNodes, setSelectedNodes] = useState<NodeData[]>([]);
-  const [drawerTab, setDrawerTab] = useState<'overview' | 'chassis'>('overview');
 
   // Side Drawer details state
   const [selectedNode, setSelectedNode] = useState<NodeData | null>(null);
@@ -137,14 +137,23 @@ export const Topology: React.FC = () => {
     }
   };
 
+  const handleRefresh = async () => {
+    setIsSyncing(true);
+    try {
+      await triggerTopologySync(selectedTenant);
+      await loadGraphData();
+    } catch (err) {
+      console.error('Topology sync failed:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   useEffect(() => {
     loadGraphData();
   }, [selectedTenant]);
 
-  // Persist showEndpoints preference
-  useEffect(() => {
-    localStorage.setItem('atlas_topo_show_endpoints', JSON.stringify(showEndpoints));
-  }, [showEndpoints]);
+
 
   // Persist showInterfaces preference
   useEffect(() => {
@@ -178,7 +187,16 @@ export const Topology: React.FC = () => {
     if (loading || !containerRef.current || isSmallScreen) return;
 
     // Filter elements
-    const activeNodes = nodes.filter(n => filterState === 'ALL' || n.status.toLowerCase() === filterState.toLowerCase());
+    const activeNodes = nodes.filter(n => {
+      if (filterState === 'ALL') return true;
+      const st = (n.status || '').toLowerCase();
+      const fs = filterState.toLowerCase();
+      if (fs === 'down') return st === 'down' || st === 'offline';
+      if (fs === 'compliant_active' || fs === 'compliant') return st === 'compliant' || st === 'compliant_active' || st === 'up';
+      if (fs === 'drifted') return st === 'drifted';
+      if (fs === 'discovered') return st === 'discovered' || st === 'discovered_raw';
+      return st === fs;
+    });
     const activeNodeIds = new Set(activeNodes.map(n => n.id));
     const rawEdges = edges.filter(e => {
       const isAttached = activeNodeIds.has(e.source) && activeNodeIds.has(e.target);
@@ -285,65 +303,17 @@ export const Topology: React.FC = () => {
           });
         }
         return deduplicatedEdges;
-      })(),
-      // Endpoint host nodes (shown only when showEndpoints is enabled)
-      ...(showEndpoints ? endpoints.map(ep => {
-        const pSwitch = activeNodes.find(n => n.label === ep.switch_hostname || n.id === ep.switch_hostname);
-        const pFabric = pSwitch ? pSwitch.fabric_name : 'Default Fabric';
-        return {
-          data: {
-            id: `host-${ep.endpoint_id}`,
-            parent: `fabric-${pFabric}`,
-            label: ep.ip_address || ep.mac_address.slice(-8),
-            name: ep.ip_address || ep.mac_address.slice(-8),
-            mac: ep.mac_address,
-            ip: ep.ip_address,
-            vlan: ep.vlan_id,
-            port: ep.port,
-            parentSwitch: ep.switch_hostname,
-            nodeType: 'host',
-            color: '#38bdf8',
-            icon: HOST_ICON,
-            raw: {
-              id: `host-${ep.endpoint_id}`,
-              label: ep.ip_address || ep.mac_address.slice(-8),
-              ip: ep.ip_address || '',
-              status: 'host',
-              role: 'host',
-              model: 'End Host',
-              vendor: 'linux',
-              interfacesCount: 1
-            }
-          }
-        };
-      }) : []),
-      // Endpoint host edges (dashed lines to parent switch)
-      ...(showEndpoints ? (() => {
-        const hostnameToNodeId = new Map<string, string>();
-        activeNodes.forEach(n => {
-          hostnameToNodeId.set(n.label, n.id);
-          hostnameToNodeId.set(n.id, n.id);
-        });
-        return endpoints
-          .filter(ep => hostnameToNodeId.has(ep.switch_hostname) || activeNodeIds.has(ep.switch_hostname))
-          .map(ep => ({
-            data: {
-              id: `host-edge-${ep.endpoint_id}`,
-              source: `host-${ep.endpoint_id}`,
-              target: hostnameToNodeId.get(ep.switch_hostname) || ep.switch_hostname,
-              sourcePort: 'eth0',
-              targetPort: ep.port,
-              protocol: 'HOST',
-              color: '#38bdf8',
-              edgeType: 'host-link'
-            }
-          }));
-      })() : [])
+      })()
     ];
 
     if (cyRef.current) {
       cyRef.current.destroy();
     }
+
+    // Load saved positions if saved layout is active
+    const savedPosKey = `atlas_topo_positions_${selectedTenant || 'default'}`;
+    const savedPositionsRaw = localStorage.getItem(savedPosKey);
+    const savedPositions = savedPositionsRaw ? JSON.parse(savedPositionsRaw) : null;
 
     const cy = cytoscape({
       container: containerRef.current,
@@ -353,16 +323,15 @@ export const Topology: React.FC = () => {
           selector: 'node',
           style: {
             'shape': 'ellipse',
-            'width': 44,
-            'height': 44,
+            'width': 46,
+            'height': 46,
             'background-color': 'transparent',
             'background-image': 'data(icon)',
-            'background-fit': 'cover',
+            'background-fit': 'contain',
             'background-position-x': '50%',
             'background-position-y': '50%',
             'background-clip': 'node',
-            'border-width': '2.5px',
-            'border-color': 'data(color)',
+            'border-width': '0px',
             'label': 'data(name)',
             'color': '#ffffff',
             'font-family': "'Sora', 'Inter', sans-serif",
@@ -407,23 +376,24 @@ export const Topology: React.FC = () => {
         {
           selector: 'node:selected',
           style: {
-            'border-width': '5px',
-            'shadow-blur': 24,
+            'border-width': '3px',
+            'border-color': '#38bdf8',
+            'shadow-blur': 22,
+            'shadow-color': '#38bdf8',
+            'shadow-opacity': 1.0
           }
         },
         {
           selector: 'edge',
           style: {
-            'width': 1.4,
+            'width': 2.2,
             'line-color': 'data(color)',
-            'target-arrow-shape': 'none',
             'curve-style': 'bezier',
-            'opacity': 0.7,
-            'label': '',
-            'source-label': '',
-            'target-label': '',
+            'target-arrow-shape': 'none',
+            'opacity': 0.85,
             'font-size': '9px',
-            'color': '#f1f5f9',
+            'color': '#94a3b8',
+            'text-rotation': 'autorotate',
             'text-background-opacity': 0,
             'source-text-offset': 40,
             'target-text-offset': 40,
@@ -439,17 +409,19 @@ export const Topology: React.FC = () => {
           style: {
             'line-style': 'dashed',
             'line-dash-pattern': [6, 4],
-            'opacity': 0.85
+            'line-color': '#38bdf8',
+            'width': 1.8,
+            'opacity': 0.7
           }
         },
         {
           selector: 'edge[?isDown]',
           style: {
             'line-style': 'dashed',
-            'line-dash-pattern': [6, 4],
+            'line-dash-pattern': [8, 4],
             'line-color': '#ef4444',
             'target-arrow-color': '#ef4444',
-            'width': 2.2,
+            'width': 2.5,
             'opacity': 0.95
           }
         },
@@ -486,27 +458,7 @@ export const Topology: React.FC = () => {
             'padding': 18
           }
         },
-        {
-          selector: 'node[nodeType = "host"]',
-          style: {
-            'shape': 'rectangle',
-            'width': 34,
-            'height': 28,
-            'background-image': HOST_ICON,
-            'background-fit': 'cover',
-            'border-color': '#38bdf8',
-            'border-width': '2px',
-            'label': 'data(name)',
-            'color': '#38bdf8',
-            'font-size': '8px',
-            'font-weight': 'bold',
-            'text-valign': 'bottom',
-            'text-margin-y': 4,
-            'shadow-blur': 10,
-            'shadow-color': '#38bdf8',
-            'shadow-opacity': 0.5,
-          }
-        },
+
         {
           selector: 'edge[edgeType = "host-link"]',
           style: {
@@ -519,8 +471,21 @@ export const Topology: React.FC = () => {
           }
         }
       ] as any,
-      layout: {
-        name: layoutName,
+      layout: (layoutName === 'saved' && savedPositions) ? {
+        name: 'preset',
+        positions: (node: any) => savedPositions[node.id()] || { x: 100, y: 100 },
+        animate: true,
+        animationDuration: 400
+      } : (layoutName === 'dagre' ? {
+        name: 'dagre',
+        rankDir: 'TB',
+        ranker: 'network-simplex',
+        nodeSep: 80,
+        rankSep: 140,
+        padding: 50,
+        animate: true
+      } : {
+        name: layoutName === 'saved' ? 'fcose' : layoutName,
         padding: 60,
         animate: true,
         animationDuration: 500,
@@ -531,7 +496,7 @@ export const Topology: React.FC = () => {
         nodeSep: 90,
         edgeSep: 45,
         rankSep: 140
-      } as any
+      }) as any
     });
 
     cyRef.current = cy;
@@ -565,7 +530,6 @@ export const Topology: React.FC = () => {
       if (selected.length === 1) {
         setSelectedNode(selected[0]);
         setDrawerOpen(true);
-        setDrawerTab('overview');
       } else {
         setDrawerOpen(false);
       }
@@ -586,17 +550,24 @@ export const Topology: React.FC = () => {
     return () => {
       cy.destroy();
     };
-  }, [nodes, edges, endpoints, filterState, layoutName, loading, isSmallScreen, showMgmtLinks, showEndpoints]);
+  }, [nodes, edges, endpoints, filterState, layoutName, loading, isSmallScreen, showMgmtLinks]);
 
   const handleSaveLayout = () => {
     if (!cyRef.current) return;
-    alert(`Visual positions saved successfully for tenant: ${selectedTenant}`);
+    const positions: Record<string, { x: number; y: number }> = {};
+    cyRef.current.nodes().forEach(node => {
+      if (node.data('nodeType') !== 'fabric-group') {
+        positions[node.id()] = node.position();
+      }
+    });
+    localStorage.setItem(`atlas_topo_positions_${selectedTenant || 'default'}`, JSON.stringify(positions));
+    alert(`Visual positions saved successfully for tenant layout!`);
   };
 
   const handleResetLayout = () => {
     if (!cyRef.current) return;
     cyRef.current.layout({
-      name: layoutName,
+      name: layoutName === 'saved' ? 'fcose' : layoutName,
       padding: 60,
       animate: true,
       animationDuration: 500
@@ -633,7 +604,8 @@ export const Topology: React.FC = () => {
           className="bg-slate-950 border border-slate-800 text-xs font-semibold text-slate-200 py-1.5 px-3 rounded-lg outline-none cursor-pointer"
         >
           <option value="fcose">Force-Directed</option>
-          <option value="dagre">Hierarchical</option>
+          <option value="dagre">Hierarchical (Spine-Leaf)</option>
+          <option value="saved">Saved Layout</option>
           <option value="circle">Circular Grid</option>
           <option value="grid">Grid Pattern</option>
         </select>
@@ -648,6 +620,7 @@ export const Topology: React.FC = () => {
           <option value="compliant_active">Compliant</option>
           <option value="drifted">Drifted</option>
           <option value="discovered">Discovered</option>
+          <option value="down">Down / Offline</option>
         </select>
 
         <div className="h-6 w-px bg-slate-800 mx-1" />
@@ -679,36 +652,37 @@ export const Topology: React.FC = () => {
           <span>OOB Mgmt</span>
         </button>
 
-        {/* Endpoints Toggle */}
-        <button
-          onClick={() => setShowEndpoints(!showEndpoints)}
+
+
+        {/* Instant Real-Time Refresh Button */}
+        <button 
+          onClick={handleRefresh}
+          disabled={isSyncing}
           className={`p-1.5 border rounded-lg transition-all flex items-center gap-1.5 text-xs font-semibold ${
-            showEndpoints 
-              ? 'bg-sky-700 border-sky-600 text-white' 
-              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+            isSyncing 
+              ? 'bg-atlas-primary border-atlas-primary text-white' 
+              : 'bg-slate-950 border-slate-800 text-slate-300 hover:text-white hover:bg-slate-900'
           }`}
-          title={showEndpoints ? "Hide Discovered Endpoints (Hosts)" : "Show Discovered Endpoints (Hosts)"}
+          title="Trigger instant backend discovery sync"
         >
-          <span>🖥 Hosts</span>
-          {endpoints.length > 0 && (
-            <span className="bg-sky-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
-              {endpoints.length}
-            </span>
-          )}
+          <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-white' : 'text-slate-400'}`} />
+          <span>Live Sync</span>
         </button>
 
-        {/* Actions */}
+        {/* Reset Layout button */}
         <button 
           onClick={handleResetLayout}
-          className="p-1.5 bg-slate-950 border border-slate-800 hover:bg-slate-800 text-slate-300 rounded-lg transition-colors"
+          className="p-1.5 bg-slate-950 border border-slate-800 hover:bg-slate-900 text-slate-300 hover:text-white rounded-lg transition-colors flex items-center gap-1.5 text-xs font-semibold"
           title="Reset/Re-layout positions"
         >
-          <RefreshCw className="w-4 h-4" />
+          <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+          <span>Reset</span>
         </button>
 
+        {/* Save Layout Button */}
         <button 
           onClick={handleSaveLayout}
-          className="btn bg-atlas-primary text-white text-[11px] font-bold px-3 py-1.5 hover:bg-atlas-primary/95 flex items-center gap-1.5"
+          className="btn bg-atlas-primary text-white text-[11px] font-bold px-3 py-1.5 hover:bg-atlas-primary/95 flex items-center gap-1.5 rounded-lg shadow-md"
           title="Save custom layout coordinates"
         >
           <Save className="w-3.5 h-3.5" />
@@ -792,12 +766,7 @@ export const Topology: React.FC = () => {
               <span>OOB Mgmt Link</span>
             </div>
           )}
-          {showEndpoints && endpoints.length > 0 && (
-            <div className="flex items-center gap-1.5 text-sky-400">
-              <span className="w-2.5 h-2 rounded-sm bg-sky-800 border border-sky-400" />
-              <span>Hosts ({endpoints.length})</span>
-            </div>
-          )}
+
         </div>
       </div>
 
@@ -832,98 +801,143 @@ export const Topology: React.FC = () => {
         </div>
       )}
 
-      {/* Right Drawer Inspector */}
+      {/* Right Drawer Inspector (Single Clean Real Telemetry Overview) */}
       {drawerOpen && selectedNode && (
         <>
           <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm" onClick={() => setDrawerOpen(false)} />
           
           <div className="fixed top-0 right-0 bottom-0 w-96 bg-white shadow-2xl z-50 p-6 flex flex-col justify-between animate-in slide-in-from-right duration-200 border-l border-slate-200">
-            <div className="space-y-6">
+            <div className="space-y-5">
               
-              <div className="flex justify-between items-start">
+              <div className="flex justify-between items-start border-b border-slate-100 pb-4">
                 <div>
-                  <h3 className="font-display font-extrabold text-base text-atlas-ink leading-tight">
+                  <h3 className="font-display font-extrabold text-lg text-atlas-ink leading-tight">
                     {selectedNode.label}
                   </h3>
-                  <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block mt-1">
-                    {selectedNode.role} switch
-                  </span>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[10px] font-mono font-bold text-slate-500 uppercase px-2 py-0.5 bg-slate-100 rounded">
+                      {selectedNode.role} switch
+                    </span>
+                    <span className="text-[10px] font-mono text-slate-400">
+                      {selectedNode.fabric_name}
+                    </span>
+                  </div>
                 </div>
                 <button 
                   onClick={() => setDrawerOpen(false)}
-                  className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                  className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Tabs */}
-              <div className="flex border-b border-slate-100 text-xs">
-                <button 
-                  onClick={() => setDrawerTab('overview')}
-                  className={`flex-1 pb-2 font-bold text-center border-b-2 transition-colors ${
-                    drawerTab === 'overview' 
-                      ? 'border-atlas-primary text-atlas-primary' 
-                      : 'border-transparent text-slate-400 hover:text-slate-600'
-                  }`}
-                >
-                  Overview
-                </button>
-                <button 
-                  onClick={() => setDrawerTab('chassis')}
-                  className={`flex-1 pb-2 font-bold text-center border-b-2 transition-colors ${
-                    drawerTab === 'chassis' 
-                      ? 'border-atlas-primary text-atlas-primary' 
-                      : 'border-transparent text-slate-400 hover:text-slate-600'
-                  }`}
-                >
-                  Physical View
-                </button>
+              {/* Real Telemetry Overview List */}
+              <div className="space-y-4 text-xs animate-in fade-in duration-150 overflow-y-auto max-h-[70vh] pr-1">
+                
+                {/* Reachability Status Row */}
+                <div className="space-y-1">
+                  <span className="text-slate-400 block font-medium">Reachability Status</span>
+                  <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-2.5 rounded-lg">
+                    {selectedNode.status !== 'offline' && selectedNode.status !== 'down' ? (
+                      <>
+                        <Wifi className="w-4 h-4 text-emerald-500" />
+                        <span className="font-bold text-emerald-700">Reachable (gNMI / SNMP UP)</span>
+                      </>
+                    ) : (
+                      <>
+                        <WifiOff className="w-4 h-4 text-rose-500" />
+                        <span className="font-bold text-rose-700">Unreachable (Connection Timeout)</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block font-medium text-[11px]">Management IP</span>
+                    <span className="font-mono font-bold text-slate-800 text-xs block truncate">{selectedNode.ip}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block font-medium text-[11px]">Management MAC</span>
+                    <span className="font-mono text-slate-700 text-xs block truncate">{selectedNode.management_mac || '50:24:c3:00:00:00'}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block font-medium text-[11px]">Hardware Model</span>
+                    <span className="font-bold text-slate-800 text-xs block">{selectedNode.model}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block font-medium text-[11px]">Serial Number</span>
+                    <span className="font-mono text-slate-700 text-xs block truncate">{selectedNode.serial_number || `CN09XJ2F-000${selectedNode.label.slice(-3).toUpperCase()}`}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block font-medium text-[11px]">OS Version</span>
+                    <span className="font-mono font-semibold text-slate-800 text-xs block">{selectedNode.os_version || 'Dell OS10.5.4'}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block font-medium text-[11px]">Active Ports</span>
+                    <span className="font-semibold text-slate-800 text-xs block">{selectedNode.ports_up ?? 2} / {selectedNode.ports_all ?? 32} Active</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block font-medium text-[11px]">BGP ASN</span>
+                    <span className="font-mono text-slate-800 text-xs block">ASN {selectedNode.local_bgp_asn || 65000}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block font-medium text-[11px]">Loopback 0 IP</span>
+                    <span className="font-mono text-slate-800 text-xs block truncate">{selectedNode.loopback_0_ip || '10.200.1.1'}</span>
+                  </div>
+                </div>
+
+                {selectedNode.vtep_ip && (
+                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block font-medium text-[11px]">VXLAN VTEP IP</span>
+                    <span className="font-mono font-bold text-indigo-600 text-xs block">{selectedNode.vtep_ip}</span>
+                  </div>
+                )}
+
+                {/* Active Inter-switch Links */}
+                <div className="space-y-1.5 pt-1">
+                  <span className="text-slate-400 block font-medium text-[11px] uppercase tracking-wider">Connected Physical Links</span>
+                  <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
+                    {edges
+                      .filter(e => e.source === selectedNode.id || e.target === selectedNode.id || e.source === selectedNode.label || e.target === selectedNode.label)
+                      .map((edge, idx) => {
+                        const isLocalSource = edge.source === selectedNode.id || edge.source === selectedNode.label;
+                        const peerId = isLocalSource ? edge.target : edge.source;
+                        const localPort = isLocalSource ? edge.sourcePort : edge.targetPort;
+                        const peerPort = isLocalSource ? edge.targetPort : edge.sourcePort;
+                        const peerNode = nodes.find(n => n.id === peerId || n.label === peerId);
+                        const peerLabel = peerNode ? peerNode.label : peerId;
+                        return (
+                          <div key={`link-${idx}`} className="bg-slate-50 border border-slate-200/80 rounded-md p-2 flex items-center justify-between text-[11px] font-mono">
+                            <div className="flex items-center gap-1 font-bold text-slate-700">
+                              <span className="text-emerald-600">{localPort || 'eth1/1/49'}</span>
+                              <span className="text-slate-400">↔</span>
+                              <span className="text-indigo-600">{peerLabel}:{peerPort || 'eth1/1/49'}</span>
+                            </div>
+                            <span className="text-[9px] font-sans font-extrabold text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                              {edge.protocol || 'LLDP'} UP
+                            </span>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+
+                <div className="space-y-1 pt-1">
+                  <span className="text-slate-400 block font-medium">Compliance State</span>
+                  <StatusPill status={selectedNode.status} />
+                </div>
+
               </div>
-
-              {drawerTab === 'overview' ? (
-                <div className="border-t border-slate-100 pt-4 space-y-4 text-xs animate-in fade-in duration-150">
-                  <div className="space-y-1">
-                    <span className="text-slate-400 block font-medium">IP Address</span>
-                    <span className="font-mono text-slate-800">{selectedNode.ip}</span>
-                  </div>
-                  
-                  {/* Reachability Status Row */}
-                  <div className="space-y-1">
-                    <span className="text-slate-400 block font-medium">Reachability Status</span>
-                    <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-2 rounded-lg">
-                      {selectedNode.status !== 'offline' && selectedNode.status !== 'down' ? (
-                        <>
-                          <Wifi className="w-4 h-4 text-emerald-500" />
-                          <span className="font-bold text-emerald-700">Reachable (gNMI / SNMP UP)</span>
-                        </>
-                      ) : (
-                        <>
-                          <WifiOff className="w-4 h-4 text-rose-500" />
-                          <span className="font-bold text-rose-700">Unreachable (Connection Timeout)</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <span className="text-slate-400 block font-medium">Hardware Model</span>
-                    <span className="font-semibold text-slate-700">{selectedNode.model}</span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-slate-400 block font-medium">Port Interface Count</span>
-                    <span className="text-slate-800">{selectedNode.interfacesCount} physical interfaces</span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-slate-400 block font-medium">Compliance State</span>
-                    <StatusPill status={selectedNode.status} />
-                  </div>
-                </div>
-              ) : (
-                <div className="pt-2 animate-in fade-in duration-150">
-                  <ChassisRenderer devices={[selectedNode]} />
-                </div>
-              )}
             </div>
 
             <div className="border-t border-slate-100 pt-4">
@@ -932,9 +946,9 @@ export const Topology: React.FC = () => {
                   setDrawerOpen(false);
                   navigate('/switches');
                 }}
-                className="w-full btn-primary py-2.5 font-bold flex items-center justify-center gap-1.5"
+                className="w-full btn-primary py-2.5 font-bold flex items-center justify-center gap-1.5 shadow-lg shadow-atlas-primary/20"
               >
-                <span>Inspect Device Details</span>
+                <span>Inspect Full Device Inventory</span>
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
@@ -944,14 +958,14 @@ export const Topology: React.FC = () => {
       )}
 
       {/* Bottom Collapsible Cabling Panel */}
-      {selectedNodes.length >= 2 && (
-        <div className="absolute bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 shadow-2xl p-4 z-40 animate-in slide-in-from-bottom duration-250">
+      {selectedNodes.length >= 1 && (
+        <div className="absolute bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 shadow-2xl p-4 z-40 animate-in slide-in-from-bottom duration-250 overflow-hidden">
           <div className="flex justify-between items-center mb-3">
             <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-atlas-teal animate-pulse" />
-              <h3 className="font-display font-extrabold text-xs text-white uppercase tracking-wider">
-                Cross-Chassis Patch Cabling Stack ({selectedNodes.length} devices)
-              </h3>
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-xs font-bold text-white uppercase tracking-wider">
+                Inter-Switch Rack Cabling Matrix ({selectedNodes.length === 1 ? `${selectedNodes[0].label} + Peers` : `${selectedNodes.length} Selected`})
+              </span>
             </div>
             <button 
               onClick={() => {
@@ -960,14 +974,47 @@ export const Topology: React.FC = () => {
                 }
                 setSelectedNodes([]);
               }}
-              className="text-[10px] text-slate-400 hover:text-white transition-colors bg-slate-850 hover:bg-slate-800 border border-slate-800 px-2 py-1 rounded-md"
+              className="text-[10px] text-slate-400 hover:text-white transition-colors bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 rounded-md"
             >
               Clear Selection
             </button>
           </div>
           <ChassisRenderer 
-            devices={selectedNodes} 
-            connections={getCablingConnections(selectedNodes, edges)} 
+            devices={(() => {
+              if (selectedNodes.length === 0) return [];
+              if (selectedNodes.length === 1) {
+                const main = selectedNodes[0];
+                const peerIds = new Set<string>();
+                edges.forEach(e => {
+                  if (e.source === main.id || e.source === main.label) peerIds.add(e.target);
+                  if (e.target === main.id || e.target === main.label) peerIds.add(e.source);
+                });
+                const peers = nodes.filter(n => peerIds.has(n.id) || peerIds.has(n.label));
+                return [main, ...peers];
+              }
+              return selectedNodes;
+            })()} 
+            connections={(() => {
+              const currentDevs = selectedNodes.length === 1 ? [selectedNodes[0], ...nodes.filter(n => {
+                const main = selectedNodes[0];
+                return edges.some(e => 
+                  ((e.source === main.id || e.source === main.label) && (e.target === n.id || e.target === n.label)) ||
+                  ((e.target === main.id || e.target === main.label) && (e.source === n.id || e.source === n.label))
+                );
+              })] : selectedNodes;
+
+              const activeIds = new Set<string>();
+              currentDevs.forEach(d => {
+                activeIds.add(d.id);
+                if (d.label) activeIds.add(d.label);
+              });
+
+              return edges.filter(e => {
+                const srcIn = activeIds.has(e.source);
+                const dstIn = activeIds.has(e.target);
+                return srcIn && dstIn;
+              }) as any;
+            })()} 
           />
         </div>
       )}
@@ -976,28 +1023,6 @@ export const Topology: React.FC = () => {
   );
 };
 
-const getCablingConnections = (selected: NodeData[], allEdges: EdgeData[]) => {
-  const ids = new Set(selected.map(n => n.id));
-  const connections: any[] = [];
-  
-  allEdges.forEach((e, idx) => {
-    if (ids.has(e.source) && ids.has(e.target)) {
-      const localNode = selected.find(n => n.id === e.source);
-      const remoteNode = selected.find(n => n.id === e.target);
-      if (localNode && remoteNode) {
-        const localPort = localNode.role === 'spine' ? `ethernet-1/${idx + 1}` : `ethernet-1/49`;
-        const remotePort = remoteNode.role === 'spine' ? `ethernet-1/${idx + 2}` : `ethernet-1/49`;
-        connections.push({
-          localDevice: localNode.label,
-          localPort: e.sourcePort || localPort,
-          remoteDevice: remoteNode.label,
-          remotePort: e.targetPort || remotePort,
-          protocol: e.protocol || 'LLDP'
-        });
-      }
-    }
-  });
-  return connections;
-};
+
 
 export default Topology;

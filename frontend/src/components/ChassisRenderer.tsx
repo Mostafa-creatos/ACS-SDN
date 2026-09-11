@@ -61,6 +61,8 @@ const getPortCoords = (model: string, portIndex: number) => {
 };
 
 export const ChassisRenderer: React.FC<ChassisRendererProps> = ({ devices, connections = [] }) => {
+  const [colsCount, setColsCount] = useState<number>(devices.length > 4 ? 2 : 1);
+
   const [hoveredPort, setHoveredPort] = useState<{
     device: string;
     portName: string;
@@ -103,23 +105,31 @@ export const ChassisRenderer: React.FC<ChassisRendererProps> = ({ devices, conne
     // Only show ports that have real LLDP connections
     const list: DeviceInterface[] = [];
     for (const conn of connections) {
-      if (conn.localDevice === device.label) {
+      const srcName = conn.localDevice || (conn as any).source;
+      const dstName = conn.remoteDevice || (conn as any).target;
+      const srcPort = conn.localPort || (conn as any).sourcePort || 'ethernet1/1/49';
+      const dstPort = conn.remotePort || (conn as any).targetPort || 'ethernet1/1/49';
+
+      const matchesLocal = device.label === srcName || device.id === srcName;
+      const matchesRemote = device.label === dstName || device.id === dstName;
+
+      if (matchesLocal) {
         list.push({
-          name: conn.localPort,
+          name: srcPort,
           status: 'up',
-          speed: parsePortIndex(conn.localPort) > 48 ? '100Gbps' : '25Gbps',
-          peerDevice: conn.remoteDevice,
-          peerPort: conn.remotePort,
-          opticType: parsePortIndex(conn.localPort) > 48 ? 'QSFP28-SR4' : 'SFP28-SR'
+          speed: parsePortIndex(srcPort) > 48 ? '100Gbps' : '25Gbps',
+          peerDevice: dstName,
+          peerPort: dstPort,
+          opticType: parsePortIndex(srcPort) > 48 ? 'QSFP28-SR4' : 'SFP28-SR'
         });
-      } else if (conn.remoteDevice === device.label) {
+      } else if (matchesRemote) {
         list.push({
-          name: conn.remotePort,
+          name: dstPort,
           status: 'up',
-          speed: parsePortIndex(conn.remotePort) > 48 ? '100Gbps' : '25Gbps',
-          peerDevice: conn.localDevice,
-          peerPort: conn.localPort,
-          opticType: parsePortIndex(conn.remotePort) > 48 ? 'QSFP28-SR4' : 'SFP28-SR'
+          speed: parsePortIndex(dstPort) > 48 ? '100Gbps' : '25Gbps',
+          peerDevice: srcName,
+          peerPort: srcPort,
+          opticType: parsePortIndex(dstPort) > 48 ? 'QSFP28-SR4' : 'SFP28-SR'
         });
       }
     }
@@ -127,37 +137,93 @@ export const ChassisRenderer: React.FC<ChassisRendererProps> = ({ devices, conne
   };
 
   const isMultiView = devices.length >= 2;
-  const switchSpacing = 160;
-  const canvasHeight = isMultiView ? devices.length * switchSpacing : 90;
+  const cols = colsCount || 1;
+  const colSpacing = 800;
+  const rowSpacing = 130;
+  const rows = Math.ceil(devices.length / cols);
+
+  const totalWidth = cols * colSpacing;
+  const totalHeight = rows * rowSpacing + 30;
 
   // Resolve absolute coordinates of a port on the SVG canvas
   const getAbsolutePortCoords = (deviceIndex: number, portIndex: number) => {
     const dev = devices[deviceIndex];
+    if (!dev) return null;
     const coords = getPortCoords(dev.model, portIndex);
     if (!coords) return null;
     
-    const yOffset = isMultiView ? 15 + deviceIndex * switchSpacing : 15;
+    const c = deviceIndex % cols;
+    const r = Math.floor(deviceIndex / cols);
+
+    const xOffset = c * colSpacing;
+    const yOffset = r * rowSpacing + 15;
+
     return {
-      x: coords.x + coords.width / 2,
+      x: xOffset + coords.x + coords.width / 2,
       y: yOffset + coords.y + coords.height / 2,
       type: coords.type
     };
   };
 
   return (
-    <div className="relative w-full overflow-x-auto select-none bg-slate-950/40 p-4 border border-slate-800/40 rounded-xl">
+    <div className="relative w-full overflow-hidden select-none bg-slate-950/80 p-3 border border-slate-800/80 rounded-xl shadow-inner space-y-2">
+      {/* Grid Controls Header */}
+      <div className="flex justify-between items-center px-2">
+        <div className="flex items-center gap-3 text-[10px] text-slate-400 font-mono">
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-400" /> UP & Connected</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-sky-400" /> UP (Unconnected)</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-rose-500" /> Down</span>
+        </div>
+
+        {devices.length > 2 && (
+          <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-1 rounded-lg text-[10px] font-bold text-slate-400">
+            <span className="px-1 text-slate-500">Columns:</span>
+            {[1, 2, 3].map(colNum => (
+              <button
+                key={colNum}
+                onClick={() => setColsCount(colNum)}
+                className={`px-2 py-0.5 rounded transition-all ${
+                  colsCount === colNum
+                    ? 'bg-atlas-primary text-white shadow-sm'
+                    : 'hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                {colNum} {colNum === 1 ? 'Col' : 'Cols'}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       <svg 
-        width="820" 
-        height={canvasHeight} 
-        className="mx-auto overflow-visible"
+        viewBox={`0 0 ${totalWidth} ${totalHeight}`} 
+        className="w-full h-auto max-h-[350px] mx-auto block overflow-hidden"
       >
         {/* Draw Switches */}
         {devices.map((dev, devIdx) => {
-          const yOffset = isMultiView ? 15 + devIdx * switchSpacing : 15;
+          const c = devIdx % cols;
+          const r = Math.floor(devIdx / cols);
+
+          const xOffset = c * colSpacing;
+          const yOffset = r * rowSpacing + 15;
+
           const interfaces = getDeviceInterfaces(dev);
+          const interfaceMap = new Map<string, DeviceInterface>();
+          for (const itf of interfaces) {
+            interfaceMap.set(itf.name.toLowerCase(), itf);
+          }
+
+          // Build full 32 physical ports list (1..24 SFP + 49..52 QSFP)
+          const allPortIndices: { index: number; name: string }[] = [];
+          for (let p = 1; p <= 24; p++) {
+            allPortIndices.push({ index: p, name: `ethernet1/1/${p}` });
+          }
+          for (let p = 49; p <= 52; p++) {
+            allPortIndices.push({ index: p, name: `ethernet1/1/${p}` });
+          }
 
           return (
-            <g key={dev.id} transform={`translate(0, ${yOffset})`}>
+            <g key={dev.id} transform={`translate(${xOffset}, ${yOffset})`}>
               {/* Outer Rack Ear Brackets */}
               <rect x="2" y="2" width="16" height="52" fill="#334155" rx="2" />
               <circle cx="10" cy="12" r="3.5" fill="#0f172a" stroke="#475569" strokeWidth="1" />
@@ -173,7 +239,7 @@ export const ChassisRenderer: React.FC<ChassisRendererProps> = ({ devices, conne
               <rect x="24" y="8" width="8" height="40" fill="#0f172a" rx="1" />
               <line x1="28" y1="12" x2="28" y2="44" stroke="#334155" strokeWidth="1.5" strokeDasharray="2 2" />
 
-              {/* Brand Label */}
+              {/* Brand Label Left */}
               <text x="38" y="23" fill="#94a3b8" fontSize="8" fontFamily="Sora, sans-serif" fontWeight="bold">
                 ATLAS
               </text>
@@ -181,10 +247,18 @@ export const ChassisRenderer: React.FC<ChassisRendererProps> = ({ devices, conne
                 {dev.role.toUpperCase()}
               </text>
 
+              {/* Right Faceplate Hostname Label */}
+              <text x="752" y="22" fill="#f8fafc" fontSize="10" fontFamily="Sora, sans-serif" fontWeight="bold" textAnchor="end">
+                {dev.label}
+              </text>
+              <text x="752" y="34" fill="#38bdf8" fontSize="7" fontFamily="monospace" textAnchor="end">
+                {dev.ip || '172.20.20.1'}
+              </text>
+
               {/* Status LEDs */}
               <g transform="translate(68, 14)">
                 {/* System Active LED */}
-                <circle cx="0" cy="0" r="2.5" fill={dev.status === 'compliant_active' ? '#14b8a6' : '#f43f5e'} />
+                <circle cx="0" cy="0" r="2.5" fill={dev.status === 'compliant_active' || dev.status === 'compliant' ? '#14b8a6' : '#f43f5e'} />
                 {/* Power supply LED */}
                 <circle cx="0" cy="8" r="2.5" fill="#14b8a6" />
                 {/* Temp LED */}
@@ -194,40 +268,56 @@ export const ChassisRenderer: React.FC<ChassisRendererProps> = ({ devices, conne
                 <text x="5" y="18" fill="#64748b" fontSize="5" fontFamily="monospace">TMP</text>
               </g>
 
-              {/* Draw Ports */}
-              {interfaces.map((itf) => {
-                const portIndex = parsePortIndex(itf.name);
+              {/* Draw All Physical Ports */}
+              {allPortIndices.map(({ index: portIndex, name: defaultPortName }) => {
                 const coords = getPortCoords(dev.model, portIndex);
                 if (!coords) return null;
 
-                let portFill = '#0f172a'; // Black default
-                let portStroke = '#475569'; // Silver metal rim
-                let ledFill = '#64748b'; // Gray LED
+                // Match interface if registered
+                const matchedItf = interfaceMap.get(defaultPortName.toLowerCase()) || 
+                  Array.from(interfaceMap.values()).find(i => parsePortIndex(i.name) === portIndex);
 
-                if (itf.status === 'up') {
-                  ledFill = '#14b8a6'; // Active Teal
+                const status = matchedItf ? matchedItf.status : 'unused';
+                const portName = matchedItf ? matchedItf.name : defaultPortName;
+                const speed = matchedItf ? matchedItf.speed : (portIndex > 48 ? '100Gbps' : '25Gbps');
+                const peer = matchedItf && matchedItf.peerDevice ? `${matchedItf.peerDevice} [${matchedItf.peerPort}]` : undefined;
+                const optic = matchedItf ? matchedItf.opticType : (portIndex > 48 ? 'QSFP28-SR4' : 'SFP28-SR');
+
+                const isUp = status === 'up';
+                const hasPeer = Boolean(peer && peer.trim().length > 0);
+
+                let portFill = '#0f172a'; // Black default
+                let portStroke = '#334155'; // Dark rim default
+                let ledFill = '#334155'; // Dark LED default
+
+                if (isUp && hasPeer) {
+                  ledFill = '#10b981'; // Active Green (Connected LLDP peer)
                   portFill = '#0c2420'; // Soft teal glow inside
-                  portStroke = '#14b8a6';
-                } else if (itf.status === 'down') {
-                  ledFill = '#f43f5e'; // Warning Coral
-                  portFill = '#2d1410'; // Soft coral glow
-                  portStroke = '#f43f5e';
+                  portStroke = '#10b981';
+                } else if (isUp && !hasPeer) {
+                  ledFill = '#38bdf8'; // Active Blue (UP but standalone / unconnected)
+                  portFill = '#082f49'; // Soft blue glow
+                  portStroke = '#38bdf8';
+                } else if (status === 'down' || status === 'shutdown') {
+                  ledFill = '#ef4444'; // Warning Red
+                  portFill = '#2d1410'; // Soft red glow
+                  portStroke = '#ef4444';
                 }
 
                 return (
                   <g 
-                    key={itf.name}
+                    key={`port-${dev.id}-${portIndex}`}
                     onMouseEnter={(e) => {
                       const svgElement = e.currentTarget.ownerSVGElement;
                       if (svgElement) {
                         const rect = svgElement.getBoundingClientRect();
                         setHoveredPort({
                           device: dev.label,
-                          portName: itf.name,
-                          status: itf.status,
-                          speed: itf.speed,
-                          peer: itf.peerDevice ? `${itf.peerDevice} [${itf.peerPort}]` : undefined,
-                          optic: itf.opticType,
+                          portName,
+                          status: status === 'unused' ? 'UNPOPULATED' : status,
+                          speed,
+                          peer,
+                          optic,
                           x: e.clientX - rect.left,
                           y: e.clientY - rect.top - 70
                         });
@@ -254,7 +344,7 @@ export const ChassisRenderer: React.FC<ChassisRendererProps> = ({ devices, conne
                       y1={coords.y + coords.height - 3} 
                       x2={coords.x + coords.width - 2} 
                       y2={coords.y + coords.height - 3} 
-                      stroke={itf.status === 'up' ? '#14b8a6' : '#334155'} 
+                      stroke={isUp ? (hasPeer ? '#10b981' : '#38bdf8') : (status === 'down' ? '#ef4444' : '#334155')} 
                       strokeWidth="1" 
                     />
 
@@ -264,7 +354,7 @@ export const ChassisRenderer: React.FC<ChassisRendererProps> = ({ devices, conne
                       cy={coords.y - 3} 
                       r="1.5" 
                       fill={ledFill} 
-                      className={itf.status === 'up' ? 'animate-pulse' : ''}
+                      className={isUp ? 'animate-pulse' : ''}
                     />
 
                     {/* Miniature port label text */}
@@ -282,14 +372,19 @@ export const ChassisRenderer: React.FC<ChassisRendererProps> = ({ devices, conne
 
         {/* Draw Inter-switch Bezier Patch Cables */}
         {isMultiView && connections.map((conn, connIdx) => {
+          const srcName = conn.localDevice || (conn as any).source;
+          const dstName = conn.remoteDevice || (conn as any).target;
+          const srcPortStr = conn.localPort || (conn as any).sourcePort || 'ethernet1/1/49';
+          const dstPortStr = conn.remotePort || (conn as any).targetPort || 'ethernet1/1/49';
+
           // Find device indices
-          const localDevIdx = devices.findIndex(d => d.label === conn.localDevice);
-          const remoteDevIdx = devices.findIndex(d => d.label === conn.remoteDevice);
+          const localDevIdx = devices.findIndex(d => d.label === srcName || d.id === srcName);
+          const remoteDevIdx = devices.findIndex(d => d.label === dstName || d.id === dstName);
 
           if (localDevIdx === -1 || remoteDevIdx === -1) return null;
 
-          const localPortIdx = parsePortIndex(conn.localPort);
-          const remotePortIdx = parsePortIndex(conn.remotePort);
+          const localPortIdx = parsePortIndex(srcPortStr);
+          const remotePortIdx = parsePortIndex(dstPortStr);
 
           const start = getAbsolutePortCoords(localDevIdx, localPortIdx);
           const end = getAbsolutePortCoords(remoteDevIdx, remotePortIdx);

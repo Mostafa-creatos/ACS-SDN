@@ -55,7 +55,7 @@ export const AuditLogsPage: React.FC = () => {
   // Pagination
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const pageSize = 50;
+  const pageSize = 15;
 
   // Selected Log Drawer
   const [selectedLog, setSelectedLog] = useState<AuditLogEntry | null>(null);

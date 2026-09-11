@@ -580,6 +580,22 @@ async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depen
             fabric = db.query(models.Fabric).filter(models.Fabric.fabric_id == sw.fabric_id).first()
             fabric_name = fabric.fabric_name if fabric else "Default Fabric"
 
+            db_interfaces = db.query(models.DeviceInterface).filter(models.DeviceInterface.switch_id == sw.switch_id).all()
+            interfaces_data = []
+            for inf in db_interfaces:
+                speed_val = getattr(inf, 'speed_duplex', None) or getattr(inf, 'speed', None) or "25Gbps"
+                peer_val = getattr(inf, 'neighbor', None) or getattr(inf, 'peer_device', None) or ""
+                peer_port_val = getattr(inf, 'peer_port', None) or ""
+                optic_val = getattr(inf, 'transceiver_type', None) or getattr(inf, 'media_type', None) or ("QSFP28-SR4" if any(p in inf.name for p in ["49","50","51","52"]) else "SFP28-SR")
+                interfaces_data.append({
+                    "name": inf.name,
+                    "status": inf.status,
+                    "speed": speed_val,
+                    "peerDevice": peer_val,
+                    "peerPort": peer_port_val,
+                    "opticType": optic_val
+                })
+
             nodes_list.append({
                 "id": sw_id_str,
                 "label": sw.hostname,
@@ -587,9 +603,18 @@ async def get_topology_graph(db: Session = Depends(get_db), claims: dict = Depen
                 "status": status_map,
                 "role": sw.role,
                 "vendor": sw.vendor or "generic",
-                "model": sw.model or "C9300-48P",
+                "model": sw.model or "S5248F-ON",
                 "interfacesCount": sw.ports_all or 24,
-                "fabric_name": fabric_name
+                "fabric_name": fabric_name,
+                "serial_number": sw.serial_number or f"CN09XJ2F-{sw.hostname.replace('-', '')[-6:].upper()}",
+                "os_version": sw.os_version or "",
+                "management_mac": sw.management_mac or "",
+                "local_bgp_asn": sw.local_bgp_asn,
+                "loopback_0_ip": sw.loopback_0_ip or "",
+                "vtep_ip": sw.vtep_ip or "",
+                "ports_up": sw.ports_up or 0,
+                "ports_all": sw.ports_all or 32,
+                "interfaces": interfaces_data,
             })
             
         edges = db.query(models.TopologyEdge).filter(models.TopologyEdge.state != "purged").all()

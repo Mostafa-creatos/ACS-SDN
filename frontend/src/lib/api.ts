@@ -635,6 +635,12 @@ export const fetchTopologyGraph = async (tenantId?: string | null) => {
     return res.json();
 };
 
+export const triggerTopologySync = async (tenantId?: string | null) => {
+    const res = await apiRequest('/api/v5/admin/sync-gnmi', { method: 'POST', tenantId });
+    if (!res.ok) return null;
+    return res.json();
+};
+
 export const fetchEndpoints = async (tenantId?: string | null) => {
     const res = await apiRequest('/api/v5/visibility/endpoints', { tenantId });
     if (!res.ok) return null;

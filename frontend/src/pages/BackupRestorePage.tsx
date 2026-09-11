@@ -20,7 +20,9 @@ import {
   Copy,
   Check,
   Search,
-  Loader2
+  Loader2,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 
 interface Snapshot {
@@ -61,6 +63,8 @@ export const BackupRestorePage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'snapshots' | 'schedules'>('snapshots');
   const [loading, setLoading] = useState(true);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [snapshotsPage, setSnapshotsPage] = useState(1);
+  const snapshotsPerPage = 15;
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [switches, setSwitches] = useState<SwitchItem[]>([]);
   const [fabrics, setFabrics] = useState<FabricItem[]>([]);
@@ -446,8 +450,9 @@ export const BackupRestorePage: React.FC = () => {
                       No configuration snapshots found in registry database. Select a device above to snapshot config manually.
                     </td>
                   </tr>
-                ) : (
-                  snapshots.map((snap) => (
+                ) : (() => {
+                  const currentSnapshotsSlice = snapshots.slice((snapshotsPage - 1) * snapshotsPerPage, snapshotsPage * snapshotsPerPage);
+                  return currentSnapshotsSlice.map((snap) => (
                     <tr key={snap.backup_id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/40 transition-colors">
                       <td className="py-3 px-4 text-slate-600 font-medium">
                         {new Date(snap.created_at).toLocaleString()}
@@ -507,11 +512,40 @@ export const BackupRestorePage: React.FC = () => {
                         )}
                       </td>
                     </tr>
-                  ))
-                )}
+                  ));
+                })()}
               </tbody>
             </table>
           </div>
+          {snapshots.length > snapshotsPerPage && (() => {
+            const totalSnapshotsPages = Math.ceil(snapshots.length / snapshotsPerPage) || 1;
+            return (
+              <div className="flex items-center justify-between p-4 border-t border-slate-100 text-xs bg-slate-50/30">
+                <div className="text-slate-400">
+                  Showing <span className="font-bold text-slate-600">{(snapshotsPage - 1) * snapshotsPerPage + 1}</span> to <span className="font-bold text-slate-600">{Math.min(snapshotsPage * snapshotsPerPage, snapshots.length)}</span> of <span className="font-bold text-slate-600">{snapshots.length}</span> snapshots
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSnapshotsPage(p => Math.max(p - 1, 1))}
+                    disabled={snapshotsPage === 1}
+                    className="btn-secondary py-1 px-2.5 text-xs flex items-center gap-1 disabled:opacity-40"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" /> Previous
+                  </button>
+                  <span className="font-bold text-slate-600 text-xs px-2">
+                    Page {snapshotsPage} of {totalSnapshotsPages}
+                  </span>
+                  <button
+                    onClick={() => setSnapshotsPage(p => Math.min(p + 1, totalSnapshotsPages))}
+                    disabled={snapshotsPage === totalSnapshotsPages}
+                    className="btn-secondary py-1 px-2.5 text-xs flex items-center gap-1 disabled:opacity-40"
+                  >
+                    Next <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </Card>
       ) : (
         
