@@ -172,8 +172,12 @@ def build_remediation_config(switch: models.Switch, rule_name: str, context: dic
             return "class-map type control-plane match-any COPP_CLASS\n match protocol ssh\npolicy-map type control-plane COPP_POLICY\n class COPP_CLASS\n control-plane\n service-policy in type control-plane COPP_POLICY\n"
         if "acl" in name and "management" in name:
             return "ip access-list MGMT-ACL\n permit ip 10.0.0.0/8 any\n deny ip any any\n"
+        if "router id" in name or "router-id" in name:
+            loopback_ip = context.get('switch.loopback_0_ip') or getattr(switch, 'loopback_0_ip', '') or ''
+            local_asn = context.get('switch.local_bgp_asn', getattr(switch, 'local_bgp_asn', 65000))
+            return f"router bgp {local_asn}\n router-id {loopback_ip}\n exit\n"
         if "bgp" in name:
-            return f"router bgp {context.get('switch.local_bgp_asn', switch.local_bgp_asn)}\n exit\n"
+            return f"router bgp {context.get('switch.local_bgp_asn', getattr(switch, 'local_bgp_asn', 65000))}\n exit\n"
         if "vlt" in name:
             return "vlt-domain 1\n exit\n"
         if "snmp" in name:
@@ -450,10 +454,13 @@ def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID =
             is_compliant = False
             if sw.vendor in ["dell_os10", "dell"] and expected_str == "lldp enable":
                 # On Dell OS10, LLDP is enabled by default. It is compliant unless disabled explicitly.
-                is_compliant = "disable" not in config.lower() and "no protocol lldp" not in config.lower()
+                is_compliant = "no lldp enable" not in config.lower() and "lldp disable" not in config.lower() and "no protocol lldp" not in config.lower()
+            elif sw.vendor in ["dell_os10", "dell"] and ("router-id" in rule.name.lower() or "router id" in rule.name.lower()):
+                clean_ip = expected_str.replace("bgp router-id", "").replace("router-id", "").strip()
+                is_compliant = f"router-id {clean_ip}" in config.lower() or expected_str.lower() in config.lower()
             elif sw.vendor in ["dell_os10", "dell"] and ("ssh" in rule.name.lower() or "ssh" in expected_str.lower()):
                 # On Dell OS10, SSH server is enabled by default unless explicitly disabled
-                is_compliant = "no ip ssh" not in config.lower() and "ssh server disable" not in config.lower()
+                is_compliant = "no ip ssh" not in config.lower() and "ip ssh server disable" not in config.lower()
             elif sw.vendor in ["dell_os10", "dell"] and "logging host" in expected_str:
                 adapted_dell = expected_str.replace("logging host", "logging server")
                 pattern = re.compile(r'^\s*' + re.escape(adapted_dell) + r'\s*$', re.MULTILINE | re.IGNORECASE)
