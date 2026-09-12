@@ -34,6 +34,7 @@ def _build_dell_baseline_commands(hostname: str, is_fallback: bool = False, fabr
     """Return the Dell baseline config as blocks of console commands using Fabric variables."""
     ntp_ip = fabric.expected_ntp_server_ip if (fabric and getattr(fabric, 'expected_ntp_server_ip', None)) else "172.20.20.1"
     syslog_ip = fabric.expected_syslog_server_ip if (fabric and getattr(fabric, 'expected_syslog_server_ip', None)) else "34.32.194.240"
+    dns_ip = fabric.expected_dns_servers if (fabric and getattr(fabric, 'expected_dns_servers', None)) else "8.8.8.8"
     
     commands = [
         [f"hostname {hostname}"],
@@ -53,7 +54,10 @@ def _build_dell_baseline_commands(hostname: str, is_fallback: bool = False, fabr
         ["ip ssh server enable"],
         ["clock timezone standard-timezone Zulu"],
         [f"ntp server {ntp_ip}"],
+        [f"ip name-server {dns_ip}"],
         [f"logging server {syslog_ip}"],
+        ["lldp enable"],
+        ["spanning-tree mode rstp"],
         ["snmp-server view RESTRICTED_VIEW 1.3.6.1 included"],
         ["snmp-server group READ_ONLY 3 auth read RESTRICTED_VIEW"],
         ["snmp-server user sdnadmin READ_ONLY 3 auth sha sdnAuthPass123"],
