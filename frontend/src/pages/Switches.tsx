@@ -306,7 +306,13 @@ export const Switches: React.FC = () => {
   // ── Out-of-Band Console Drift Diff renderer ─────────────────────────
   const renderDriftSummaryAndDiff = (sw: DellSwitchDetails) => {
     const snaps = localSnapshots[sw.switch_id] || [];
-    const baselineSnap = snaps.find(s => s.is_baseline) || snaps[0];
+    if (!localSnapshots[sw.switch_id]) {
+      fetchSnapshots(sw.switch_id);
+    }
+    const baselineSnap = snaps.find(s => s.is_baseline)
+      || snaps.find(s => s.taken_by === 'system_config_push')
+      || snaps.find(s => s.taken_by?.includes('baseline'))
+      || (snaps.length > 0 ? snaps[snaps.length - 1] : undefined);
     if (!baselineSnap || !sw.running_config) return null;
 
     const normalize = (cfg: string) =>
@@ -895,7 +901,7 @@ export const Switches: React.FC = () => {
                             {/* ── Compliance ── */}
                             {activeTab === 'compliance' && (
                               <div className="space-y-3">
-                                {sw.lifecycle_status?.toLowerCase().includes('drift') && renderDriftSummaryAndDiff(sw)}
+                                {renderDriftSummaryAndDiff(sw)}
                                 {(() => {
                                   const findings = complianceFindings[sw.switch_id] || [];
                                   if (findings.length === 0) {
