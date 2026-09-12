@@ -243,16 +243,35 @@ def discover_dell_switch(sw, db: Session):
             sw.running_config = running_config
             # Only update compliance lifecycle status if switch is already managed (not discovered_raw)
             if sw.lifecycle_status != "discovered_raw":
+                latest_run = db.query(models.ComplianceRun).filter(
+                    models.ComplianceRun.status == "completed"
+                ).order_by(models.ComplianceRun.started_at.desc()).first()
+
+                has_open_findings = False
+                if latest_run:
+                    open_count = db.query(models.ComplianceFinding).filter(
+                        models.ComplianceFinding.compliance_run_id == latest_run.run_id,
+                        models.ComplianceFinding.switch_id == sw.switch_id,
+                        models.ComplianceFinding.remediation_status.in_(["open", "pending", "failed"])
+                    ).count()
+                    if open_count > 0:
+                        has_open_findings = True
+
                 latest_snap = db.query(models.ConfigSnapshot).filter(
                     models.ConfigSnapshot.switch_id == sw.switch_id,
                     models.ConfigSnapshot.is_baseline == True
                 ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
+                
                 if not latest_snap:
                     latest_snap = db.query(models.ConfigSnapshot).filter(
                         models.ConfigSnapshot.switch_id == sw.switch_id
                     ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
-                
-                if latest_snap:
+                    if latest_snap and not has_open_findings:
+                        latest_snap.is_baseline = True
+
+                if has_open_findings:
+                    sw.lifecycle_status = "configuration_drifted"
+                elif latest_snap:
                     if normalize_cfg(running_config) != normalize_cfg(latest_snap.raw_config):
                         sw.lifecycle_status = "configuration_drifted"
                     else:

@@ -542,6 +542,24 @@ def run_compliance_check(db: Session, run_id: str = None, fabric_id: uuid.UUID =
                     db.add(finding)
                     findings_list.append(finding)
 
+        # Sync switch lifecycle_status and baseline snapshot based on audit findings
+        if sw.lifecycle_status != "discovered_raw":
+            sw_open_findings = [f for f in findings_list if f.switch_id == sw.switch_id and f.remediation_status in ("open", "pending", "failed")]
+            if len(sw_open_findings) == 0:
+                sw.lifecycle_status = "compliant_active"
+                sw.configuration_drift_category = None
+                db.query(models.ConfigSnapshot).filter(
+                    models.ConfigSnapshot.switch_id == sw.switch_id,
+                    models.ConfigSnapshot.is_baseline == True
+                ).update({"is_baseline": False})
+                latest_snap = db.query(models.ConfigSnapshot).filter(
+                    models.ConfigSnapshot.switch_id == sw.switch_id
+                ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
+                if latest_snap:
+                    latest_snap.is_baseline = True
+            else:
+                sw.lifecycle_status = "configuration_drifted"
+
     cached_hostnames = [sw.hostname for sw in switches if sw.switch_id in cached_switch_ids]
     summary_data = {
         "switches_audited": len(switches) - len(unreachable_switches),
@@ -798,15 +816,18 @@ def apply_remediation(self, finding_id_str: str):
         db.rollback()
         error_msg = str(e)[:2000]
         try:
-            finding = db.query(models.ComplianceFinding).filter(
+            from ..db import SessionLocal
+            err_db = SessionLocal()
+            finding = err_db.query(models.ComplianceFinding).filter(
                 models.ComplianceFinding.finding_id == uuid.UUID(finding_id_str)
             ).first()
             if finding:
                 finding.remediation_status = "failed"
                 finding.remediation_error = error_msg
-                db.commit()
-        except Exception:
-            db.rollback()
+                err_db.commit()
+            err_db.close()
+        except Exception as err2:
+            logger.error(f"[REMEDIATION ERROR HANDLER] Fallback DB update error: {err2}")
         return {"status": "FAILED", "error": error_msg}
     finally:
         db.close()
