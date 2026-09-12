@@ -16,7 +16,7 @@ import {
   Search, Filter, RotateCw, ChevronDown, ChevronUp,
   CheckCircle2, Hash, Network,
   Plus, Edit3, Trash2, Camera, RotateCcw, Check,
-  AlertCircle, ListFilter, ShieldCheck
+  AlertCircle, ListFilter, ShieldCheck, AlertTriangle
 } from 'lucide-react';
 
 interface ConfigSnapshot {
@@ -299,6 +299,94 @@ export const Switches: React.FC = () => {
           <span>Red: Removals · Green: Additions</span>
         </div>
         <div className="py-2">{rows}</div>
+      </div>
+    );
+  };
+
+  // ── Out-of-Band Console Drift Diff renderer ─────────────────────────
+  const renderDriftSummaryAndDiff = (sw: DellSwitchDetails) => {
+    const snaps = localSnapshots[sw.switch_id] || [];
+    const baselineSnap = snaps.find(s => s.is_baseline) || snaps[0];
+    if (!baselineSnap || !sw.running_config) return null;
+
+    const normalize = (cfg: string) =>
+      cfg.replace(/\r/g, '').split('\n').map(l => l.trimEnd()).filter(l => l.length > 0 && !l.trimStart().startsWith('!'));
+
+    const lines1 = normalize(baselineSnap.raw_config);
+    const lines2 = normalize(sw.running_config);
+
+    const N = lines1.length; const M = lines2.length;
+    const dp: number[][] = Array(N + 1).fill(0).map(() => Array(M + 1).fill(0));
+    for (let i = 1; i <= N; i++) for (let j = 1; j <= M; j++)
+      dp[i][j] = lines1[i-1] === lines2[j-1] ? dp[i-1][j-1]+1 : Math.max(dp[i-1][j], dp[i][j-1]);
+
+    const rows: React.ReactNode[] = [];
+    let i = N; let j = M; let k = 0;
+    let addCount = 0;
+    let removeCount = 0;
+
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && lines1[i-1] === lines2[j-1]) {
+        rows.unshift(<div key={`u${k++}`} className="py-0.5 px-3 hover:bg-slate-800 font-mono text-[11px] text-slate-400 whitespace-pre">{`  ${lines1[i-1]}`}</div>); i--; j--;
+      } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+        addCount++;
+        rows.unshift(<div key={`a${k++}`} className="py-0.5 px-3 bg-emerald-950/40 text-emerald-400 font-mono text-[11px] whitespace-pre border-l-2 border-emerald-500">{`+ ${lines2[j-1]}`}</div>); j--;
+      } else {
+        removeCount++;
+        rows.unshift(<div key={`r${k++}`} className="py-0.5 px-3 bg-rose-950/40 text-rose-400 font-mono text-[11px] whitespace-pre border-l-2 border-rose-500">{`- ${lines1[i-1]}`}</div>); i--;
+      }
+    }
+
+    if (addCount === 0 && removeCount === 0) return null;
+
+    return (
+      <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/30 overflow-hidden shadow-sm">
+        <div className="p-4 bg-amber-500/10 border-b border-amber-200/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="text-xs font-bold text-amber-900">Out-of-Band Console Configuration Drift Detected</h4>
+              <p className="text-[11px] text-amber-700 mt-0.5">Live running configuration differs from active Golden Baseline snapshot.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="px-2.5 py-1 rounded-md bg-emerald-100 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
+              +{addCount} Addition{addCount !== 1 ? 's' : ''} (Console)
+            </span>
+            <span className="px-2.5 py-1 rounded-md bg-rose-100 border border-rose-200 text-rose-800 text-[11px] font-bold">
+              -{removeCount} Removal{removeCount !== 1 ? 's' : ''} (Missing)
+            </span>
+            <span className="px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-600 text-[10px] font-semibold">
+              Baseline: {new Date(baselineSnap.taken_at).toLocaleString()}
+            </span>
+          </div>
+        </div>
+
+        <div className="p-3 bg-slate-900 border-b border-slate-800 font-mono text-[10px]">
+          <div className="text-slate-400 mb-2 font-sans text-[11px] font-bold flex justify-between">
+            <span>Direct Console Diff View</span>
+            <span>+ Green: Added via console · - Red: Removed from baseline</span>
+          </div>
+          <div className="overflow-x-auto max-h-64 overflow-y-auto rounded-lg border border-slate-800 py-1 bg-slate-950">
+            {rows}
+          </div>
+        </div>
+
+        <div className="p-3 bg-white flex flex-col sm:flex-row gap-2 justify-end">
+          <button
+            onClick={() => handleRollback(baselineSnap.snapshot_id)}
+            className="btn-danger text-xs py-2 px-3.5 flex items-center justify-center gap-2 font-semibold"
+          >
+            <RotateCcw className="w-3.5 h-3.5" /> Rollback to Golden Baseline
+          </button>
+          <button
+            onClick={handleAcceptDrift}
+            disabled={acceptingDrift}
+            className="btn-secondary border-emerald-500/30 text-emerald-700 hover:bg-emerald-50 text-xs py-2 px-3.5 flex items-center justify-center gap-2 font-semibold"
+          >
+            <Check className="w-3.5 h-3.5" /> {acceptingDrift ? 'Accepting...' : 'Accept Console Drift as Baseline'}
+          </button>
+        </div>
       </div>
     );
   };
@@ -807,6 +895,7 @@ export const Switches: React.FC = () => {
                             {/* ── Compliance ── */}
                             {activeTab === 'compliance' && (
                               <div className="space-y-3">
+                                {sw.lifecycle_status?.toLowerCase().includes('drift') && renderDriftSummaryAndDiff(sw)}
                                 {(() => {
                                   const findings = complianceFindings[sw.switch_id] || [];
                                   if (findings.length === 0) {
