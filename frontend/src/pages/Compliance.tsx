@@ -305,11 +305,9 @@ export const Compliance: React.FC = () => {
   // Remediation state
   const [remediating, setRemediating] = useState<Set<string>>(new Set());
 
-  // Audit modal
-  const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
+  // Audit scan state
   const [auditProgress, setAuditProgress]       = useState(0);
   const [auditMessage, setAuditMessage]         = useState('');
-  const [auditCompleted, setAuditCompleted]     = useState(false);
 
   // Historic report modal state
   const [selectedRunId, setSelectedRunId]       = useState<string | null>(null);
@@ -395,11 +393,11 @@ export const Compliance: React.FC = () => {
     return () => { if (refreshTimer.current) clearInterval(refreshTimer.current); };
   }, [data, page, loadData]);
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
+  const [isScanning, setIsScanning] = useState(false);
+
   const handleRunAudit = async () => {
-    setIsAuditModalOpen(true);
+    setIsScanning(true);
     setAuditProgress(10);
-    setAuditCompleted(false);
     setAuditMessage('Initializing golden config scanner…');
 
     let currentProgress = 10;
@@ -429,15 +427,17 @@ export const Compliance: React.FC = () => {
 
       clearInterval(interval);
       setAuditProgress(100);
-      setAuditCompleted(true);
       setAuditMessage('Golden configuration audit completed!');
       await loadHistory();
       setPage(1);
     } catch (e: any) {
       clearInterval(interval);
       setAuditProgress(100);
-      setAuditCompleted(true);
       setAuditMessage(`Audit failed: ${e.message || 'Server error'}`);
+    } finally {
+      setTimeout(() => {
+        setIsScanning(false);
+      }, 3500);
     }
   };
 
@@ -617,9 +617,24 @@ export const Compliance: React.FC = () => {
               <span className="text-[10px] text-slate-400 mt-1 uppercase font-semibold">Compliance</span>
             </div>
           </div>
-          <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${isHealthy ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-            {isHealthy ? 'System Compliant' : 'Drift Alert Active'}
-          </span>
+          {isScanning || data?.status === 'running' ? (
+            <div className="w-full mt-2 space-y-1.5 px-2">
+              <div className="flex items-center justify-between text-[11px] font-semibold text-atlas-primary">
+                <span className="flex items-center gap-1.5 truncate max-w-[80%]">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0 text-atlas-primary" />
+                  <span className="truncate">{auditMessage || 'Scanning fabric switches…'}</span>
+                </span>
+                <span className="font-bold">{auditProgress}%</span>
+              </div>
+              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                <div className="bg-atlas-primary h-full transition-all duration-300" style={{ width: `${auditProgress}%` }} />
+              </div>
+            </div>
+          ) : (
+            <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${isHealthy ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+              {isHealthy ? 'System Compliant' : 'Drift Alert Active'}
+            </span>
+          )}
         </Card>
 
         {/* Summary Stats */}
@@ -925,30 +940,7 @@ export const Compliance: React.FC = () => {
         </Card>
       )}
 
-      {/* ── Audit Progress Modal ────────────────────────────────────────────── */}
-      {isAuditModalOpen && (
-        <>
-          <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm" />
-          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white rounded-xl shadow-2xl z-50 p-6 border text-center space-y-4">
-            <h3 className="text-base font-bold font-display text-atlas-ink">Fabric Configuration Scan</h3>
-            <div className="flex justify-center py-2">
-              <RefreshCw className={`w-10 h-10 text-atlas-primary ${!auditCompleted ? 'animate-spin' : ''}`} />
-            </div>
-            <div className="space-y-1 text-xs">
-              <div className="font-semibold text-slate-700">{auditMessage}</div>
-              {!auditCompleted && <div className="text-[10px] text-slate-400">Running compliance scan across fabric switches…</div>}
-            </div>
-            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-              <div className="bg-atlas-primary h-full transition-all duration-300" style={{ width: `${auditProgress}%` }} />
-            </div>
-            {auditCompleted && (
-              <button onClick={() => setIsAuditModalOpen(false)} className="btn-primary w-full py-2 font-bold">
-                Close &amp; View Findings
-              </button>
-            )}
-          </div>
-        </>
-      )}
+
 
       {/* ── Historical Report Detail Modal ───────────────────────────────────── */}
       {selectedRunId && (
