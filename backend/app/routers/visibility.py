@@ -67,6 +67,7 @@ def list_snapshots(switch_id: Optional[str] = None, db: Session = Depends(get_db
             "taken_at": s.taken_at.isoformat(),
             "config_hash": s.config_hash,
             "taken_by": s.taken_by,
+            "is_baseline": bool(s.is_baseline),
             "raw_config": s.raw_config
         })
     return res
