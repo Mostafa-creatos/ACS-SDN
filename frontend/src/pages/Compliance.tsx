@@ -325,17 +325,19 @@ export const Compliance: React.FC = () => {
   // ── Load compliance data (paginated) ──────────────────────────────────────
   const loadData = useCallback(async (p = 1) => {
     try {
-      const params = new URLSearchParams({ page: String(p), page_size: '100' });
+      const params = new URLSearchParams({ page: String(p), page_size: '1000' });
       if (severityFilter) params.set('severity', severityFilter);
       if (switchFilter)   params.set('switch_id', switchFilter);
       if (statusFilter)   params.set('status', statusFilter);
 
       const json = await fetchComplianceLatest(params, selectedTenant);
-      if (!json) { setError('API unavailable'); return; }
+      if (!json) { setError('API unavailable'); return null; }
       setData(json);
       setError('');
+      return json;
     } catch {
       setError('Failed to load compliance data');
+      return null;
     }
   }, [selectedTenant, severityFilter, switchFilter, statusFilter]);
 
@@ -386,7 +388,7 @@ export const Compliance: React.FC = () => {
     const hasPending = (data?.findings || []).some(f => f.remediation_status === 'pending');
     const isRunning = data?.status === 'running';
     if (hasPending || isRunning) {
-      refreshTimer.current = setInterval(() => loadData(page), isRunning ? 2000 : 15000);
+      refreshTimer.current = setInterval(() => loadData(page), 2000);
     } else {
       if (refreshTimer.current) clearInterval(refreshTimer.current);
     }
@@ -400,21 +402,37 @@ export const Compliance: React.FC = () => {
     setAuditCompleted(false);
     setAuditMessage('Initializing golden config scanner…');
 
-    const interval = setInterval(() => setAuditProgress(p => p >= 85 ? p : p + 5), 400);
+    let currentProgress = 10;
+    const interval = setInterval(() => {
+      currentProgress = currentProgress >= 85 ? currentProgress : currentProgress + 3;
+      setAuditProgress(currentProgress);
+    }, 500);
+
     try {
       setAuditMessage('Scanning running configs across fabric switches…');
       const res = await runComplianceAudit(selectedTenant);
-      clearInterval(interval);
-      if (res.ok) {
-        setAuditProgress(100);
-        setAuditCompleted(true);
-        setAuditMessage('Golden configuration audit completed!');
-        await loadData(1);
-        await loadHistory();
-        setPage(1);
-      } else {
-        throw new Error(res.errorText || '');
+      if (!res.ok) {
+        throw new Error(res.errorText || 'Server error');
       }
+
+      // Poll latest compliance data until the Celery task completes
+      let isDone = false;
+      let attempts = 0;
+      while (!isDone && attempts < 60) {
+        await new Promise(r => setTimeout(r, 2000));
+        attempts++;
+        const latestData = await loadData(1);
+        if (latestData && latestData.status !== 'running') {
+          isDone = true;
+        }
+      }
+
+      clearInterval(interval);
+      setAuditProgress(100);
+      setAuditCompleted(true);
+      setAuditMessage('Golden configuration audit completed!');
+      await loadHistory();
+      setPage(1);
     } catch (e: any) {
       clearInterval(interval);
       setAuditProgress(100);

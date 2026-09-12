@@ -6,7 +6,7 @@ import { useDashboard } from '../hooks/useDashboard';
 import { DashboardHeader } from '../components/dashboard/DashboardHeader';
 import { WidgetSkeleton } from '../components/dashboard/WidgetSkeleton';
 import { WidgetError } from '../components/dashboard/WidgetError';
-import { runComplianceAudit } from '../lib/api';
+import { runComplianceAudit, fetchComplianceLatest } from '../lib/api';
 import { toast } from 'sonner';
 import { 
   ResponsiveContainer, 
@@ -83,31 +83,40 @@ export const Dashboard: React.FC = () => {
   const handleRunAudit = () => {
     setAuditRunning(true);
     setAuditStep(1);
-    toast.info('Compliance audit started');
+    toast.info('Compliance audit started across fabric switches');
 
-    const triggerAudit = async () => {
+    const executeAudit = async () => {
       try {
-        await runComplianceAudit(selectedTenant);
+        const res = await runComplianceAudit(selectedTenant);
+        if (!res.ok) {
+          toast.error('Failed to trigger compliance audit');
+          setAuditRunning(false);
+          return;
+        }
+
+        // Poll latest compliance data until the Celery task completes
+        let isDone = false;
+        let attempts = 0;
+        setAuditStep(2);
+        while (!isDone && attempts < 60) {
+          await new Promise(r => setTimeout(r, 2000));
+          attempts++;
+          const latest = await fetchComplianceLatest(new URLSearchParams({ page: '1', page_size: '1' }), selectedTenant);
+          if (latest && latest.status !== 'running') {
+            isDone = true;
+          }
+        }
+        setAuditStep(3);
+        toast.success('Compliance audit completed successfully!');
+        await handleRefresh();
       } catch (e) {
         console.error("Failed to run audit on backend:", e);
         toast.error('Failed to trigger compliance audit');
+      } finally {
+        setAuditRunning(false);
       }
     };
-    triggerAudit();
-
-    const stepInterval = setInterval(() => {
-      setAuditStep(prev => {
-        if (prev >= 3) {
-          clearInterval(stepInterval);
-          setTimeout(() => {
-            setAuditRunning(false);
-            handleRefresh();
-          }, 1000);
-          return 3;
-        }
-        return prev + 1;
-      });
-    }, 1200);
+    executeAudit();
   };
 
   if (isLoading) {

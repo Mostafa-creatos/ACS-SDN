@@ -805,6 +805,25 @@ def apply_remediation(self, finding_id_str: str):
             except Exception as e:
                 logger.warning(f"[REMEDIATION] Failed to refresh running config snapshot post remediation: {e}")
 
+            # If all findings on this switch are remediated, mark switch compliant & promote baseline
+            remaining_findings = db.query(models.ComplianceFinding).filter(
+                models.ComplianceFinding.compliance_run_id == finding.compliance_run_id,
+                models.ComplianceFinding.switch_id == switch.switch_id,
+                models.ComplianceFinding.remediation_status.in_(["open", "pending", "failed"])
+            ).all()
+            if len(remaining_findings) == 0 and switch.lifecycle_status != "discovered_raw":
+                switch.lifecycle_status = "compliant_active"
+                switch.configuration_drift_category = None
+                db.query(models.ConfigSnapshot).filter(
+                    models.ConfigSnapshot.switch_id == switch.switch_id,
+                    models.ConfigSnapshot.is_baseline == True
+                ).update({"is_baseline": False})
+                latest_snap = db.query(models.ConfigSnapshot).filter(
+                    models.ConfigSnapshot.switch_id == switch.switch_id
+                ).order_by(models.ConfigSnapshot.taken_at.desc()).first()
+                if latest_snap:
+                    latest_snap.is_baseline = True
+
         db.commit()
 
         return {

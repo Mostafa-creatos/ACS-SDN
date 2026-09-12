@@ -229,11 +229,7 @@ def get_latest_compliance(
     claims: dict = Depends(require_permission("compliance:run"))
 ):
     import json
-    run = db.query(models.ComplianceRun).filter(
-        models.ComplianceRun.status == "completed"
-    ).order_by(models.ComplianceRun.started_at.desc()).first()
-    if not run:
-        run = db.query(models.ComplianceRun).order_by(models.ComplianceRun.started_at.desc()).first()
+    run = db.query(models.ComplianceRun).order_by(models.ComplianceRun.started_at.desc()).first()
     if not run:
         return {"status": "NO_RUNS_EVALUATED"}
 
