@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request, status, HTTPException
+from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 from app.db import get_db
@@ -35,7 +35,8 @@ async def get_ztp_boot_script(request: Request):
         "        s.close()\n"
         "    except Exception: pass\n\n"
         "    # 2. Real chassis MAC address\n"
-        "    for path in glob.glob(\"/sys/class/net/*/address\"):\n"
+        "    mac_candidates = [\"/sys/class/net/eth0/address\", \"/sys/class/net/ma1/address\"] + glob.glob(\"/sys/class/net/*/address\")\n"
+        "    for path in mac_candidates:\n"
         "        if \"lo\" not in path and \"docker\" not in path and \"veth\" not in path:\n"
         "            try:\n"
         "                with open(path) as f:\n"
@@ -521,3 +522,49 @@ async def remove_ztp_record(
     db.commit()
 
     return {"status": "REMOVED", "discovery_id": discovery_id}
+
+
+def _perform_pnet_scan_and_trigger():
+    """Background task to trigger ZTP discovery across PNetLab switch console ports."""
+    import socket
+    import telnetlib
+    import time
+
+    pnet_host = "128.105.145.2"
+    for port in range(30001, 30021):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2)
+            res = s.connect_ex((pnet_host, port))
+            s.close()
+            if res != 0:
+                continue
+
+            tn = telnetlib.Telnet(pnet_host, port, timeout=5)
+            tn.write(b"\r\n")
+            time.sleep(0.5)
+            buf = tn.read_very_eager().decode("utf-8", errors="ignore")
+            if "#" in buf or ">" in buf:
+                tn.write(b"system bash\r\n")
+                time.sleep(0.5)
+
+            leaf_idx = port - 30000
+            cmd = f"echo admin | sudo -S ip addr add 172.20.20.{170+leaf_idx}/24 dev eth0 2>/dev/null; echo admin | sudo -S ip route add default via 172.20.20.1 dev eth0 2>/dev/null; curl -k -s http://34.32.194.240:8080/boot.py | python3\n"
+            tn.write(cmd.encode("utf-8"))
+            time.sleep(2)
+            tn.close()
+            logger.info(f"[ZTP SCAN] Scanned and triggered ZTP boot.py on {pnet_host}:{port}")
+        except Exception as e:
+            logger.debug(f"[ZTP SCAN] Port {port} scan skip: {e}")
+
+
+@router.post("/scan", status_code=status.HTTP_200_OK)
+async def scan_and_trigger_ztp(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(require_permission("inventory:read"))
+):
+    """Triggers an on-demand scan of PNetLab switches to send the ZTP boot.py signal."""
+    background_tasks.add_task(_perform_pnet_scan_and_trigger)
+    return {"status": "SCAN_INITIATED", "message": "PNetLab ZTP discovery scan initiated in background."}
+

@@ -148,6 +148,13 @@ export const Switches: React.FC = () => {
     }
   }, [selectedTenant]);
 
+  useEffect(() => {
+    if (expandedId) {
+      if (!localSnapshots[expandedId]) fetchSnapshots(expandedId);
+      if (!complianceFindings[expandedId]) fetchCompliance(expandedId);
+    }
+  }, [expandedId, localSnapshots, complianceFindings, fetchSnapshots, fetchCompliance]);
+
   // ── Expand row ───────────────────────────────────────────────────────────────
   const toggleExpand = (id: string) => {
     if (expandedId === id) {
@@ -305,18 +312,25 @@ export const Switches: React.FC = () => {
 
   // ── Out-of-Band Console Drift Diff renderer ─────────────────────────
   const renderDriftSummaryAndDiff = (sw: DellSwitchDetails) => {
-    const snaps = localSnapshots[sw.switch_id] || [];
-    if (!localSnapshots[sw.switch_id]) {
-      fetchSnapshots(sw.switch_id);
+    if (snapshotLoading && !localSnapshots[sw.switch_id] && sw.lifecycle_status?.toLowerCase().includes('drift')) {
+      return (
+        <div className="mb-4 p-4 rounded-xl border border-amber-200 bg-amber-50/50 flex items-center gap-3 text-amber-800 text-xs font-medium animate-pulse">
+          <RotateCw className="w-4 h-4 animate-spin text-amber-600" />
+          <span>Analyzing console drift against Golden Baseline snapshot...</span>
+        </div>
+      );
     }
+
+    const snaps = localSnapshots[sw.switch_id] || [];
     const baselineSnap = snaps.find(s => s.is_baseline)
       || snaps.find(s => s.taken_by === 'system_config_push')
       || snaps.find(s => s.taken_by?.includes('baseline'))
       || (snaps.length > 0 ? snaps[snaps.length - 1] : undefined);
+
     if (!baselineSnap || !sw.running_config) return null;
 
     const normalize = (cfg: string) =>
-      cfg.replace(/\r/g, '').split('\n').map(l => l.trimEnd()).filter(l => l.length > 0 && !l.trimStart().startsWith('!'));
+      (cfg || '').replace(/\r/g, '').split('\n').map(l => l.trimEnd()).filter(l => l.length > 0 && !l.trimStart().startsWith('!'));
 
     const lines1 = normalize(baselineSnap.raw_config);
     const lines2 = normalize(sw.running_config);

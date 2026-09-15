@@ -4,7 +4,7 @@ import { Card } from '../components/Card';
 import { useAuth } from '../context/AuthContext';
 import {
   fetchDiscoveryPool, fetchFabricsQuiet, fetchDiscoveryStatus,
-  retryDiscovery, assignDiscoveryFabric, removeDiscovery
+  retryDiscovery, assignDiscoveryFabric, removeDiscovery, triggerZtpScan
 } from '../lib/api';
 import {
   Server,
@@ -91,6 +91,8 @@ export const ZtpConsolePage: React.FC = () => {
 
   const isPlatformAdmin = user?.role === 'Platform Admin' || user?.role === 'platform_admin';
 
+  const [scanning, setScanning] = useState(false);
+
   const fetchRecords = useCallback(async () => {
     try {
       setRecords(await fetchDiscoveryPool(selectedTenant));
@@ -100,6 +102,18 @@ export const ZtpConsolePage: React.FC = () => {
       setLoading(false);
     }
   }, [selectedTenant]);
+
+  const handleRefresh = async () => {
+    setScanning(true);
+    try {
+      await triggerZtpScan(selectedTenant);
+    } catch (e) {
+      console.error('ZTP Scan error:', e);
+    } finally {
+      await fetchRecords();
+      setScanning(false);
+    }
+  };
 
   const loadFabrics = useCallback(async () => {
     try {
@@ -205,11 +219,12 @@ export const ZtpConsolePage: React.FC = () => {
           <p className="text-xs text-slate-400 mt-1">Zero-Touch Provisioning Discovery and Baseline Onboarding</p>
         </div>
         <button
-          onClick={fetchRecords}
+          onClick={handleRefresh}
+          disabled={scanning}
           className="btn-secondary flex items-center gap-2"
         >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+          <RefreshCw className={`w-4 h-4 ${scanning || loading ? 'animate-spin' : ''}`} />
+          {scanning ? 'Scanning...' : 'Refresh'}
         </button>
       </div>
 

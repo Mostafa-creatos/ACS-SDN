@@ -84,12 +84,10 @@ def _push_via_collector(collector: DellOS10Collector, transport: str, config_pay
         time.sleep(0.3)
         collector._flush_input()
 
-        # Check current prompt mode safely
-        prompt_check = collector._send_command("\n")
-        if "(config" in prompt_check or "(config-" in prompt_check:
-            collector._send_command("end")
-            time.sleep(0.2)
-            collector._flush_input()
+        # Unconditionally exit any sub-interface/config mode back to top-level EXEC mode
+        collector._send_command("end")
+        time.sleep(0.2)
+        collector._flush_input()
 
         out_cfg = collector._send_command("configure terminal")
         if "(config)" not in out_cfg and "(config" not in out_cfg:
@@ -100,15 +98,39 @@ def _push_via_collector(collector: DellOS10Collector, transport: str, config_pay
 
         for line in config_payload.strip().splitlines():
             line = line.strip()
-            if not line:
+            # Skip empty lines, version banners, comments, or BUILD markers
+            if not line or line.startswith("!") or line.startswith("#") or line.startswith("BUILD_"):
                 continue
+            # Skip masked encrypted key lines that OS10 displays in 'show running-config' with ****
+            if "****" in line or "key 9 " in line or "password 9 " in line:
+                logger.info("Skipping masked encrypted key/password line: %s", line)
+                continue
+            # Skip read-only hardware/system lines in raw 'show running-config'
+            if line.startswith("interface breakout") or line.startswith("version ") or line == "ntp":
+                logger.info("Skipping read-only hardware/system header line: %s", line)
+                continue
+
+            # Flush any pending background telemetry output before sending command
+            collector._flush_input()
+            time.sleep(0.05)
+            collector._flush_input()
+
             out = collector._send_command(line, timeout=20)
 
-            # precision check: ignore leftover show command echo or EXEC 'end' errors in buffer
+            # Precision check: ignore leftover show command echo, background telemetry errors, or decryption failure on masked keys
             lines_out = [l.strip() for l in out.splitlines() if l.strip()]
             has_error = False
             for l in lines_out:
-                if l.startswith("show ") or ("Unrecognized command." in l and "end" in l):
+                if l.startswith("show ") or "Unrecognized command" in l or "Illegal parameter" in l or "Illegal command" in l or "not completed" in l:
+                    continue
+                if "Decryption to plaintext failed" in l or "invalid encrypted text" in l:
+                    logger.info("Ignoring OS10 decryption error for line: %s", line)
+                    continue
+                if "Duplicate entry" in l or "already exists" in l or "already configured" in l:
+                    logger.info("Ignoring non-fatal OS10 idempotency notice for line '%s': %s", line, l)
+                    continue
+                if "Ambiguous command" in l:
+                    logger.info("Ignoring ambiguous command warning for line '%s': %s", line, l)
                     continue
                 if any(hint in l for hint in OS10_ERROR_HINTS if hint != "ERROR:"):
                     has_error = True

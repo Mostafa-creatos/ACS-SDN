@@ -536,6 +536,11 @@ export const removeDiscovery = async (discoveryId: string, tenantId?: string | n
     await apiRequest(`/api/v5/discovery/pool/${discoveryId}`, { method: 'DELETE', tenantId });
 };
 
+export const triggerZtpScan = async (tenantId?: string | null): Promise<void> => {
+    await apiRequest('/api/v5/discovery/scan', { method: 'POST', tenantId });
+};
+
+
 // ── Visibility (STP / telemetry / celery / audit) ────────────────────────────
 export const fetchStpStatus = async (tenantId?: string | null) => {
     const res = await apiRequest('/api/v5/visibility/stp', { tenantId });

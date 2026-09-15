@@ -96,6 +96,7 @@ def trigger_rollback(
     except PermissionError as pe:
         raise HTTPException(status_code=403, detail=str(pe))
     except Exception as e:
+        logger.error(f"Rollback error for snapshot {payload.snapshot_id}: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
 
 class AcceptDriftPayload(BaseModel):

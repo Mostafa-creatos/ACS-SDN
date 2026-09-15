@@ -83,6 +83,11 @@ PNET_HOSTNAME_MAP = {
     "DC2-Leaf-1": 30013,
     "DC2-Leaf-2": 30014,
     "DC2-Leaf-3": 30015,
+    "DC2-Leaf-4": 30016,
+    "DC2-Leaf-5": 30017,
+    "DC2-Leaf-6": 30018,
+    "DC2-Leaf-7": 30019,
+    "DC2-Leaf-8": 30020,
 }
 
 def resolve_console_target(switch, db=None, default_port: int = 5000):
