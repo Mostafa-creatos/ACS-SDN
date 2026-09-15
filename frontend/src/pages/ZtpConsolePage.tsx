@@ -107,6 +107,10 @@ export const ZtpConsolePage: React.FC = () => {
     setScanning(true);
     try {
       await triggerZtpScan(selectedTenant);
+      for (let i = 0; i < 5; i++) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        await fetchRecords();
+      }
     } catch (e) {
       console.error('ZTP Scan error:', e);
     } finally {
