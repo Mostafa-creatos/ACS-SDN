@@ -143,14 +143,7 @@ The frontend single-page application is built with **React 18**, **TypeScript**,
 | **Emulation Sandbox** | PNetLab (20× Dell OS10 S5248F-ON virtual switches) |
 
 ---
-
-## 📖 Deep-Dive Documentation
-
-For a complete technical writeup on the architecture, compliance rules, and blast-radius rollback protection, see:
-- 📄 [z_docs/MEDIUM_BLOG_POST.md](z_docs/MEDIUM_BLOG_POST.md) — *Detailed Technical Article & Engineering Breakdown*
-
----
-
 <div align="center">
-  <sub>Engineered with ❤️ for Atlas Cloud Services (ACS)</sub>
+  <sub>Engineered by Mostafa Faouzi for Atlas Cloud Services (ACS)</sub>
 </div>
+
