@@ -16,6 +16,10 @@ env/
 # Logs
 *.log
 
+# Deploy / credentials scripts
+sync_and_launch.ps1
+
 # OS / editor
 .DS_Store
 Thumbs.db
+
