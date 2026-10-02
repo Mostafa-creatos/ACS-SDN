@@ -18,6 +18,7 @@ env/
 
 # Deploy / credentials scripts
 sync_and_launch.ps1
+AGENTS.md
 
 # Legacy / scratch folders
 .claude/
@@ -27,5 +28,6 @@ scratch/
 # OS / editor
 .DS_Store
 Thumbs.db
+
 
 
